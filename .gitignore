@@ -1,0 +1,44 @@
+# ── Python ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Testing / linting cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Secrets (12-Factor F3) ─────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# ── IDE ────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Dữ liệu lớn (mount làm Docker volume) ──────
+backend/ml_models/*.joblib
+backend/static/hillshade.png
+backend/static/hillshade_bounds.json
+
+# ── Database files ─────────────────────────────
+backend/db/
+*.sqlite
+*.sqlite3
+
+# ── Logs ───────────────────────────────────────
+*.log
+logs/
