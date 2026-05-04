@@ -68,6 +68,8 @@ export default function HealthPage() {
     }
   }, []);
 
+  // Initial load — load() là useCallback stable, gọi 1 lần on mount
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   return (

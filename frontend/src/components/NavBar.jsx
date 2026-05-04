@@ -63,19 +63,6 @@ const wrapStyle = {
   display: "flex", alignItems: "center", gap: 8,
 };
 
-const brandStyle = {
-  display: "flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 8,
-  background: "rgba(124,58,237,0.6)",
-  color: "#fff", fontSize: 13, fontWeight: 600,
-  minHeight: 38,
-  border: "1px solid rgba(255,255,255,0.15)",
-  backdropFilter: "blur(8px)",
-  boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
-  whiteSpace: "nowrap",
-  flexShrink: 0,
-};
-
 const navStyle = {
   display: "flex", alignItems: "center", gap: 4,
   padding: "6px 10px",

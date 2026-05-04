@@ -262,8 +262,6 @@ function buildGrid(points, cellSizeM) {
     else cells.set(key, { row, col, sum: intensity, count: 1 });
   }
  
-  const maxCount = Math.max(...Array.from(cells.values()).map(c => c.count), 1);
- 
   return Array.from(cells.values()).map(({ row, col, sum, count }) => {
     const lat0 = minLat + row * cellLat;
     const lng0 = minLng + col * cellLng;
@@ -298,6 +296,8 @@ export default function HeatmapLayer({ points = [] }) {
     const map = mapRef.getMap();
     const onZoom = () => setZoom(Math.round(map.getZoom()));
     map.on("zoom", onZoom);
+    // Sync zoom ngay khi map sẵn sàng — intentional init
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setZoom(Math.round(map.getZoom()));
     return () => map.off("zoom", onZoom);
   }, [mapRef]);

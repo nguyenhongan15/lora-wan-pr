@@ -83,6 +83,13 @@ export default function SimulatorPage() {
 
   const [toast, setToast] = useState(null);
 
+  // Khai báo TRƯỚC useEffect dùng nó để tránh TDZ.
+  const refreshHistory = useCallback(() => {
+    api.listOptimizationRuns(FULL_SLUG, { limit: 20 })
+      .then(arr => setHistory(Array.isArray(arr) ? arr : []))
+      .catch(e => console.warn("[history]", e.message));
+  }, []);
+
   // ─── Lazy load AOI + candidates + history khi switch sang optimize ──
   useEffect(() => {
     if (tab !== "optimize") return;
@@ -100,12 +107,6 @@ export default function SimulatorPage() {
     }
     refreshHistory();
   }, [tab]);  // eslint-disable-line react-hooks/exhaustive-deps
-
-  const refreshHistory = useCallback(() => {
-    api.listOptimizationRuns(FULL_SLUG, { limit: 20 })
-      .then(arr => setHistory(Array.isArray(arr) ? arr : []))
-      .catch(e => console.warn("[history]", e.message));
-  }, []);
 
   // ─── Simulate handlers (cũ) ────────────────────────────────
   const handleSimRun = useCallback(async () => {

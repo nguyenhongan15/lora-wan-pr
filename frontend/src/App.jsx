@@ -36,19 +36,6 @@ function normalizeFeature(f) {
   };
 }
 
-function bboxOf(points, padPct = 0.10) {
-  if (!points.length) return null;
-  let minLat = +Infinity, maxLat = -Infinity, minLng = +Infinity, maxLng = -Infinity;
-  for (const [lat, lng] of points) {
-    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
-    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
-  }
-  const dLat = (maxLat - minLat) * padPct || 0.005;
-  const dLng = (maxLng - minLng) * padPct || 0.005;
-  return { minLat: minLat - dLat, maxLat: maxLat + dLat,
-           minLng: minLng - dLng, maxLng: maxLng + dLng };
-}
-
 export default function App() {
   const [mode, setMode]                   = useState("scatter");
   const [campaignId, setCampaignId]       = useState(DEFAULT_CAMPAIGN);
@@ -115,8 +102,29 @@ export default function App() {
       });
   }, []);
 
+  // Khai báo TRƯỚC useEffect dùng nó để tránh TDZ.
+  const loadMlGrid = useCallback((cid) => {
+    api.getPredictionGrid(cid)
+      .then(geojson => {
+        const feats = geojson?.features ?? [];
+        setMlPoints(feats.map(f => {
+          const [lng, lat] = f.geometry.coordinates;
+          return [lat, lng, f.properties.intensity ?? rssiToIntensity(f.properties.rssi ?? -100)];
+        }));
+        setUncertaintyPoints(feats.map(f => {
+          const [lng, lat] = f.geometry.coordinates;
+          return [lat, lng, f.properties.uncertainty ?? 0];
+        }));
+      })
+      .catch(err => {
+        console.warn("[prediction-grid]", err.message);
+      });
+  }, []);
+
   useEffect(() => {
     if (!campaignId) return;
+    // Reset rssiConfig khi đổi campaign — intentional pattern
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRssiConfig(null);
 
     Promise.all([
@@ -155,25 +163,7 @@ export default function App() {
         console.warn("[prediction-status]", err.message);
         setGridStatus(null);
       });
-  }, [campaignId]);
-
-  const loadMlGrid = useCallback((cid) => {
-    api.getPredictionGrid(cid)
-      .then(geojson => {
-        const feats = geojson?.features ?? [];
-        setMlPoints(feats.map(f => {
-          const [lng, lat] = f.geometry.coordinates;
-          return [lat, lng, f.properties.intensity ?? rssiToIntensity(f.properties.rssi ?? -100)];
-        }));
-        setUncertaintyPoints(feats.map(f => {
-          const [lng, lat] = f.geometry.coordinates;
-          return [lat, lng, f.properties.uncertainty ?? 0];
-        }));
-      })
-      .catch(err => {
-        console.warn("[prediction-grid]", err.message);
-      });
-  }, []);
+  }, [campaignId, loadMlGrid]);
 
   const handleRunML = useCallback(async () => {
     setMlRunning(true);

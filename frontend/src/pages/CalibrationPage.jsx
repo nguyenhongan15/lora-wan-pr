@@ -25,6 +25,8 @@ export default function CalibrationPage() {
   }, []);
 
   useEffect(() => {
+    // Reset metrics khi đổi campaign — intentional pattern
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!campaignId) { setMetrics(null); return; }
     api.getCalibrationMetrics(campaignId)
       .then(setMetrics)

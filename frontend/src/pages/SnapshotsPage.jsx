@@ -32,6 +32,8 @@ export default function SnapshotsPage() {
     finally     { setLoading(false); }
   }, [campaignId]);
 
+  // Reload khi campaignId thay đổi (load là useCallback phụ thuộc campaignId)
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   const handleRestore = async (id) => {
