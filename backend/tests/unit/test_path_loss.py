@@ -16,6 +16,7 @@ import pytest
 from services.path_loss import (
     PATH_LOSS_EXPONENT,
     PL_AT_1M_DB,
+    Transmitter,
     predict_combined_rssi,
     predict_rssi_at,
 )
@@ -50,8 +51,8 @@ def test_predict_rssi_at_zero_distance_returns_finite_value_not_log_zero_error()
 
 def test_predict_rssi_at_known_distance_matches_log_distance_formula():
     # Arrange — kiểm chứng công thức tại d=100m, urban
-    # PL = 40 + 10*3.5*log10(100) = 40 + 70 = 110
-    # RSSI = 14 + 8 - 110 = -88
+    # PL    = 40 + 10*3.5*log10(100) = 40 + 70 = 110
+    # RSSI  = tx_power(14) + tx_gain(8) + rx_gain(2) - 110 = -86
     tx_lat, tx_lng = 0.0, 0.0
     # Tạo rx cách tx ~100m về phía bắc (1° lat ≈ 111km → 100m ≈ 0.0009°)
     rx_lats = np.array([0.000899])
@@ -60,15 +61,15 @@ def test_predict_rssi_at_known_distance_matches_log_distance_formula():
     # Act
     rssi = predict_rssi_at(tx_lat, tx_lng, rx_lats, rx_lngs, environment="urban")
 
-    # Assert — sai số ±0.5 dB do haversine xấp xỉ
-    assert abs(rssi[0] - (-88.0)) < 1.0
+    # Assert — sai số ±1 dB do haversine xấp xỉ
+    assert abs(rssi[0] - (-86.0)) < 1.0
 
 
 def test_predict_combined_rssi_multiple_transmitters_returns_max_per_cell():
     # Arrange — 2 tx, 1 điểm rx gần tx2 hơn
     transmitters = [
-        {"lat": 0.0,    "lng": 0.0},      # xa
-        {"lat": 0.001,  "lng": 0.0},      # gần
+        Transmitter(lat=0.0,   lng=0.0),     # xa
+        Transmitter(lat=0.001, lng=0.0),     # gần
     ]
     rx_lats = np.array([0.0011])
     rx_lngs = np.array([0.0])
