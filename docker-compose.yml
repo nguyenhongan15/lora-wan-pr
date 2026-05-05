@@ -2,42 +2,66 @@
 # LoRa Coverage Platform — local dev stack
 # v1 production: cùng file này chạy trên 1 VPS Hetzner CPX31.
 # Valkey commented out (TRIGGERED — chỉ enable khi traffic > ngưỡng).
+#
+# Chạy:  docker compose up -d
+#   → db (lora-wan-db) → migrate (chạy alembic 1 lần) → api-service
 # ──────────────────────────────────────────────────────────────────────
 
 services:
   db:
     # Image gộp PostGIS 3.5 + TimescaleDB 2.17 trên Postgres 17.
     image: timescale/timescaledb-ha:pg17-ts2.17-all
-    container_name: lora-db
+    container_name: lora-wan-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-lora}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_USER: ${POSTGRES_USER:-lora_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lora_pass_2024}
       POSTGRES_DB: ${POSTGRES_DB:-lora_coverage}
     ports:
       - "5432:5432"
     volumes:
-      - db-data:/home/postgres/pgdata/data
+      - lora-wan-db-data:/home/postgres/pgdata/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lora} -d ${POSTGRES_DB:-lora_coverage}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lora_user} -d ${POSTGRES_DB:-lora_coverage}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrate:
+    # Dùng lại image của api-service (đã có alembic + deps). Mount thư mục
+    # migrations từ host vì image runtime không copy nó vào.
+    build:
+      context: ./services/api-service
+      dockerfile: Dockerfile
+    container_name: lora-wan-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
+    volumes:
+      - ./migrations:/app/migrations:ro
+    working_dir: /app
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["alembic", "-c", "migrations/alembic.ini", "upgrade", "head"]
+    restart: "no"
 
   api-service:
     build:
       context: ./services/api-service
       dockerfile: Dockerfile
-    container_name: lora-api
+    container_name: lora-wan-api
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora}:${POSTGRES_PASSWORD:-change_me_in_production}@db:5432/${POSTGRES_DB:-lora_coverage}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-loglike-v0.1.0}
     ports:
       - "8000:8000"
@@ -54,11 +78,14 @@ services:
   # ── Valkey (TRIGGERED — uncomment khi cần) ──────────────────────────
   # cache:
   #   image: valkey/valkey:8-alpine
-  #   container_name: lora-cache
+  #   container_name: lora-wan-cache
   #   restart: unless-stopped
   #   ports:
   #     - "6379:6379"
   #   command: ["valkey-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
 
 volumes:
-  db-data:
+  lora-wan-db-data:
+    # Tên cố định (không prefix project) → reuse volume cũ nếu đã tồn tại,
+    # tự tạo mới khi clone fresh.
+    name: lora-wan-db-data
