@@ -83,8 +83,7 @@ logs/
 *.tmp
 *.bak
 
-# Claude Code local state
-  .claude/
-
-# U-work 
+# ── Personal / local config (không commit) ─────────────────
+.claude/
 .u-work/
+.core-logic\skills
