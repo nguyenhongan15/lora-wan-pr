@@ -47,14 +47,56 @@ OpenAPI docs: http://localhost:8000/docs
 
 ## Test
 
-```bash
-# Unit (no DB)
-uv run pytest tests/unit -v
+Test layout mirror production (theo `core-logic/main-logic/unit-test-guide.md`):
 
-# Integration (cần DATABASE_URL + migrations đã apply)
-DATABASE_URL=postgresql+psycopg://lora:lora_test_pw@localhost:5432/lora_coverage \
-  uv run pytest tests/integration -v
 ```
+tests/
+  factories.py          # Value-object builders (defaults valid + boring)
+  conftest.py           # Shared fixtures + load_dotenv(.env.test)
+  fakes/                # In-memory implementations cho Protocol
+  domain/               # Invariant tests (pure)
+  application/          # Service tests (fakes, không DB)
+  unit/                 # Pure-math: path_loss, Result type
+  integration/          # Hit DB thật (lora_coverage_test)
+```
+
+### Setup test DB (một lần khi clone repo)
+
+DB test dùng user/password RIÊNG (`lora_test_user` / `test_only_no_secrets`)
+tách khỏi DB dev — credential này committed vào `.env.test` an toàn vì
+chỉ access được DB test rỗng.
+
+```bash
+# DB container lên (xem README repo root)
+docker compose up -d db
+
+# Tạo role test + DB test (cần SUPERUSER để CREATE EXTENSION postgis/timescaledb)
+docker exec lora-wan-db psql -U lora_user -d postgres -c \
+  "CREATE ROLE lora_test_user LOGIN SUPERUSER PASSWORD 'test_only_no_secrets';"
+docker exec lora-wan-db psql -U lora_user -d postgres -c \
+  "CREATE DATABASE lora_coverage_test OWNER lora_test_user;"
+
+# Apply migrations + seed gateways vào DB test
+DATABASE_URL=postgresql+psycopg://lora_test_user:test_only_no_secrets@localhost:5432/lora_coverage_test \
+  uv run alembic -c ../../migrations/alembic.ini upgrade head
+docker exec -i lora-wan-db psql -U lora_test_user -d lora_coverage_test \
+  < ../../migrations/seeds/seed_gateways.sql
+```
+
+### Chạy tests
+
+```bash
+# Toàn bộ — conftest tự load .env.test ở repo root
+uv run pytest
+
+# Subset
+uv run pytest tests/domain tests/application   # nhanh, no I/O
+uv run pytest tests/integration -v             # cần DB test sẵn sàng
+```
+
+`.env.test` được commit vào git. Credential `lora_test_user:test_only_no_secrets`
+là local-only và chỉ dùng cho DB test — KHÔNG bao giờ tái sử dụng cho DB
+dev hay staging/production.
 
 ## Hard invariants (CI enforced)
 

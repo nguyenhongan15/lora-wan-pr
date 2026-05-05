@@ -3,13 +3,23 @@
 Theo unit-test-guide.md §2 Principle 2 — pull complexity vào fixtures.
 Mọi default ở đây là valid + boring để test bodies chỉ đề cập field
 liên quan tới behavior đang test.
+
+Side effect: load `.env.test` ở repo root TRƯỚC khi bất cứ test nào
+import code application. DB integration tests đọc DATABASE_URL từ env;
+nếu thiếu thì test self-skip (xem tests/integration/test_predict_endpoint.py).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+# Repo root: services/api-service/tests/conftest.py → 3 levels up.
+_ENV_TEST = Path(__file__).resolve().parents[3] / ".env.test"
+load_dotenv(_ENV_TEST, override=False)
 
 from lora_coverage_api.domain.coverage import Gateway, Prediction, Target
 from lora_coverage_api.domain.survey import SurveyBatch, SurveyRecord

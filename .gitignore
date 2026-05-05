@@ -85,5 +85,5 @@ logs/
 
 # ── Personal / local config (không commit) ─────────────────
 .claude/
-.u-work/
-.core-logic\skills
+u-work/
+core-logic/skills/
