@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *.so
+*.egg-info/
+.eggs/
+build/
+dist/
 
 # Virtual environments
 venv/
@@ -13,7 +17,26 @@ env/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+
+# ── Node ───────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.parcel-cache
+.next/
+.nuxt/
+.cache/
+.turbo/
+
+# ── Vite / React build output ──────────────────
+**/dist/
+**/.vite/
 
 # ── Secrets (12-Factor F3) ─────────────────────
 .env
@@ -21,6 +44,7 @@ htmlcov/
 .env.*.local
 *.env
 !.env.example
+!.env.template
 
 # ── IDE ────────────────────────────────────────
 .vscode/
@@ -29,16 +53,38 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# ── Dữ liệu lớn (mount làm Docker volume) ──────
-backend/ml_models/*.joblib
-backend/static/hillshade.png
-backend/static/hillshade_bounds.json
+# ── Dữ liệu lớn (không commit) ─────────────────
+# DEM tiles: kích thước ~25MB/file, lấy từ NASA SRTM, không cần lưu git
+services/ml-service/data/dem/*.hgt
+services/ml-service/data/dem/*.tif
+
+# ML model artifacts: lưu trên S3/R2, key prefix có model_version
+services/ml-service/models/*.onnx
+services/ml-service/models/*.joblib
+services/ml-service/models/*.pkl
+
+# Tile cache (worker output)
+services/tile-server/cache/
 
 # ── Database files ─────────────────────────────
-backend/db/
 *.sqlite
 *.sqlite3
+*.db
 
 # ── Logs ───────────────────────────────────────
 *.log
 logs/
+
+# ── Legacy code (đã archive, không cần index) ──
+# legacy/  ← uncomment nếu muốn loại khỏi git index sau này
+
+# ── OS / misc ──────────────────────────────────
+*.pid
+*.tmp
+*.bak
+
+# Claude Code local state
+  .claude/
+
+# U-work 
+.u-work/

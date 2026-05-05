@@ -1,0 +1,1 @@
+"""SDK placeholder — chưa implement."""

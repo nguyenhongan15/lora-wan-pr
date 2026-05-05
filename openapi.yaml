@@ -1,0 +1,389 @@
+openapi: 3.1.0
+info:
+  title: LoRa Coverage Platform API
+  version: 0.2.0
+  description: |
+    Public REST API cho LoRa network coverage querying, gateway directory &
+    survey ingestion.
+
+    Theo các skill rule:
+      - REST level 2+ (Richardson)
+      - URI: kebab-case, plural nouns, no trailing slash
+      - Errors: RFC 7807 Problem Details (`application/problem+json`)
+      - Versioning: URI path (`/api/v1`)
+  contact:
+    name: LoRa Coverage Project
+    url: https://github.com/  # placeholder
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.en.html
+
+servers:
+  - url: http://localhost:8000
+    description: Local dev
+  - url: https://api.example.com
+    description: Production (placeholder)
+
+tags:
+  - name: coverage
+    description: Predict & query LoRa coverage
+  - name: gateways
+    description: Gateway directory (admin)
+  - name: survey
+    description: Survey upload & ingest
+  - name: health
+    description: Health & readiness probes
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200":
+          description: Process alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe (dependencies OK)
+      operationId: readyz
+      responses:
+        "200":
+          description: Ready to serve
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+        "503":
+          description: Not ready
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /api/v1/coverage/predict:
+    post:
+      tags: [coverage]
+      summary: Predict coverage (RSSI/SNR + status + confidence) tại 1 điểm
+      operationId: predictCoverage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PredictRequest" }
+      responses:
+        "200":
+          description: Prediction OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Prediction" }
+        "404":
+          description: Không có gateway nào trong vùng phủ ước lượng
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "422":
+          description: Validation error
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /api/v1/gateways:
+    get:
+      tags: [gateways]
+      summary: List gateways (optional bbox filter)
+      operationId: listGateways
+      parameters:
+        - { in: query, name: min_lon, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { in: query, name: min_lat, schema: { type: number, minimum: -90,  maximum: 90  } }
+        - { in: query, name: max_lon, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { in: query, name: max_lat, schema: { type: number, minimum: -90,  maximum: 90  } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 5000, default: 500 } }
+      responses:
+        "200":
+          description: List gateway
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GatewayList" }
+        "422":
+          description: bbox không đủ 4 tham số
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+    post:
+      tags: [gateways]
+      summary: Create gateway
+      operationId: createGateway
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GatewayCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Gateway" }
+        "409":
+          description: Conflict (duplicate code, CHECK violation)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /api/v1/gateways/{gateway_id}:
+    parameters:
+      - in: path
+        name: gateway_id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [gateways]
+      summary: Get gateway by id
+      operationId: getGateway
+      responses:
+        "200":
+          description: Gateway
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Gateway" }
+        "404":
+          description: Not found
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+    patch:
+      tags: [gateways]
+      summary: Patch gateway (whitelist fields only)
+      operationId: patchGateway
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GatewayPatch" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Gateway" }
+        "404":
+          description: Not found
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /api/v1/survey/upload:
+    post:
+      tags: [survey]
+      summary: Upload batch survey records (quarantined → manual promote)
+      operationId: uploadSurvey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SurveyUploadRequest" }
+      responses:
+        "202":
+          description: Accepted (quarantined)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SurveyUploadResponse" }
+        "422":
+          description: Validation error (whole batch rejected)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /api/v1/survey/training:
+    get:
+      tags: [survey]
+      summary: List promoted survey points (cho map visualization)
+      operationId: listTrainingPoints
+      parameters:
+        - { in: query, name: min_lon, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { in: query, name: min_lat, schema: { type: number, minimum: -90,  maximum: 90  } }
+        - { in: query, name: max_lon, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { in: query, name: max_lat, schema: { type: number, minimum: -90,  maximum: 90  } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 5000, default: 1000 } }
+      responses:
+        "200":
+          description: List training points
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SurveyTrainingList" }
+        "422":
+          description: bbox không đủ 4 tham số
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+
+    PredictRequest:
+      type: object
+      required: [latitude, longitude, spreading_factor]
+      additionalProperties: false
+      properties:
+        latitude:  { type: number, format: double, minimum: -90,  maximum: 90,  example: 16.0544 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180, example: 108.2022 }
+        spreading_factor: { type: integer, enum: [7, 8, 9, 10, 11, 12], example: 7 }
+        frequency_mhz: { type: number, format: double, default: 868.0, example: 868.0 }
+
+    Prediction:
+      type: object
+      additionalProperties: false
+      required: [rssi_dbm, snr_db, coverage_status, serving_gateway_id, confidence, model_version]
+      properties:
+        rssi_dbm: { type: number, format: double, example: -105.4 }
+        snr_db: { type: number, format: double, example: 2.1 }
+        coverage_status: { type: string, enum: [strong, marginal, weak, no_coverage] }
+        serving_gateway_id: { type: string, format: uuid, nullable: true }
+        confidence:
+          type: object
+          required: [score, method]
+          properties:
+            score: { type: number, minimum: 0, maximum: 1 }
+            method: { type: string, enum: [empirical, residual, ensemble, bayesian] }
+        model_version: { type: string, example: "stage1-loglike-v0.1.0" }
+
+    Gateway:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - name
+        - latitude
+        - longitude
+        - altitude_m
+        - antenna_height_m
+        - antenna_gain_dbi
+        - tx_power_dbm
+        - frequency_mhz
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, example: "DAD-003" }
+        name: { type: string, example: "Cầu Rồng (trung tâm)" }
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+        altitude_m: { type: number, format: double }
+        antenna_height_m: { type: number, format: double }
+        antenna_gain_dbi: { type: number, format: double }
+        tx_power_dbm: { type: number, format: double }
+        frequency_mhz: { type: number, format: double, enum: [433.0, 868.0, 915.0, 923.0] }
+
+    GatewayList:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Gateway" } }
+        total: { type: integer }
+
+    GatewayCreate:
+      type: object
+      additionalProperties: false
+      required: [code, name, latitude, longitude]
+      properties:
+        code: { type: string, minLength: 3, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+        altitude_m: { type: number, format: double, default: 0 }
+        antenna_height_m: { type: number, format: double, minimum: 0, default: 10 }
+        antenna_gain_dbi: { type: number, format: double, default: 2.0 }
+        tx_power_dbm: { type: number, format: double, minimum: -10, maximum: 30, default: 14 }
+        frequency_mhz: { type: number, format: double, enum: [433.0, 868.0, 915.0, 923.0], default: 868.0 }
+
+    GatewayPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        altitude_m: { type: number, format: double }
+        antenna_height_m: { type: number, format: double, minimum: 0 }
+        antenna_gain_dbi: { type: number, format: double }
+        tx_power_dbm: { type: number, format: double, minimum: -10, maximum: 30 }
+        is_public: { type: boolean }
+
+    SurveyRecord:
+      type: object
+      additionalProperties: false
+      required: [timestamp, latitude, longitude, rssi_dbm, snr_db, spreading_factor]
+      properties:
+        timestamp: { type: string, format: date-time }
+        latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+        rssi_dbm: { type: number, format: double, minimum: -150, maximum: -30 }
+        snr_db: { type: number, format: double, minimum: -30, maximum: 30 }
+        spreading_factor: { type: integer, minimum: 7, maximum: 12 }
+        frequency_mhz: { type: number, format: double, default: 868.0 }
+        device_id: { type: string, maxLength: 128, nullable: true }
+        serving_gateway_id: { type: string, format: uuid, nullable: true }
+
+    SurveyUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [uploader_id, records]
+      properties:
+        uploader_id: { type: string, format: uuid }
+        records:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items: { $ref: "#/components/schemas/SurveyRecord" }
+
+    SurveyUploadResponse:
+      type: object
+      additionalProperties: false
+      required: [batch_id, status, accepted_count, rejected_count, estimated_review_hours]
+      properties:
+        batch_id: { type: string, format: uuid }
+        status: { type: string, enum: [quarantined, rejected] }
+        accepted_count: { type: integer }
+        rejected_count: { type: integer }
+        estimated_review_hours: { type: integer }
+
+    SurveyTrainingPoint:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude, rssi_dbm, snr_db, spreading_factor]
+      properties:
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+        rssi_dbm: { type: number, format: double }
+        snr_db: { type: number, format: double }
+        spreading_factor: { type: integer }
+        serving_gateway_id: { type: string, format: uuid, nullable: true }
+
+    SurveyTrainingList:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/SurveyTrainingPoint" } }
+        total: { type: integer }
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        traceId: { type: string }

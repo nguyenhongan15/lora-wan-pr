@@ -7,44 +7,96 @@ on:
     branches: [main]
 
 jobs:
-  backend:
+  api-service:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: services/api-service
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg17
+        env:
+          POSTGRES_USER: lora
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: lora_coverage
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lora"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install uv
+        run: pip install uv
 
-      - name: Run tests
-        run: pytest tests/unit 
+      - name: Install deps
+        run: uv sync --all-extras
 
-  frontend:
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: import-linter (5-layer separation)
+        working-directory: .
+        run: |
+          uv pip install --system import-linter
+          lint-imports --config .importlinter
+
+      - name: No leaky strings in application/
+        working-directory: .
+        run: |
+          if grep -rEn 'postgres|redis|valkey|s3|stage_4|GiST|BRIN' \
+              services/api-service/src/lora_coverage_api/application/ \
+              services/api-service/src/lora_coverage_api/domain/; then
+            echo "::error::application/ or domain/ leaked storage-tier strings"
+            exit 1
+          fi
+
+      - name: Alembic upgrade
+        working-directory: .
+        env:
+          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
+        run: uv run --project services/api-service alembic -c migrations/alembic.ini upgrade head
+
+      - name: Pytest
+        env:
+          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
+        run: uv run pytest -v
+
+  web-app:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: apps/web-app
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
+      - name: Install
+        working-directory: .
         run: npm install
 
       - name: Lint
         run: npm run lint
+
+      - name: JSDoc check (tsc --checkJs)
+        run: npm run jsdoc-check
 
       - name: Build
         run: npm run build

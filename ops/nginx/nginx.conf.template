@@ -1,0 +1,90 @@
+# Nginx reverse proxy template cho v1 production (Hetzner CPX31).
+# - TLS terminator (Let's Encrypt qua certbot)
+# - Reverse proxy /api → api-service:8000
+# - Static frontend → /var/www/lora-web/
+# - Strict CORS, security headers, rate limit hint (api-service tự enforce slowapi)
+
+worker_processes auto;
+events { worker_connections 4096; }
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    server_tokens off;
+    client_max_body_size 25m;       # survey upload limit; adjust if cần
+
+    # ── Logging ──────────────────────────────────────────────────────
+    log_format json_combined escape=json
+        '{'
+            '"time":"$time_iso8601",'
+            '"remote_addr":"$remote_addr",'
+            '"method":"$request_method",'
+            '"uri":"$request_uri",'
+            '"status":$status,'
+            '"bytes":$body_bytes_sent,'
+            '"referer":"$http_referer",'
+            '"ua":"$http_user_agent",'
+            '"trace_id":"$http_x_trace_id"'
+        '}';
+    access_log /var/log/nginx/access.json json_combined;
+
+    # ── Gzip ──────────────────────────────────────────────────────────
+    gzip on;
+    gzip_types application/json text/css application/javascript;
+
+    # ── Upstream ──────────────────────────────────────────────────────
+    upstream api_service { server api-service:8000; }
+
+    # ── HTTPS server ──────────────────────────────────────────────────
+    server {
+        listen 443 ssl http2;
+        server_name __DOMAIN__;
+
+        ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+
+        # Security headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://__DOMAIN__" always;
+
+        # Static frontend
+        root /var/www/lora-web;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # API reverse proxy
+        location /api/ {
+            proxy_pass http://api_service;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Trace-Id $http_x_trace_id;
+            proxy_read_timeout 30s;
+        }
+
+        # Health probes (no log, no cache)
+        location ~ ^/(healthz|readyz)$ {
+            access_log off;
+            proxy_pass http://api_service;
+        }
+    }
+
+    # ── HTTP → HTTPS redirect ─────────────────────────────────────────
+    server {
+        listen 80;
+        server_name __DOMAIN__;
+        location /.well-known/acme-challenge/ { root /var/www/certbot; }
+        location / { return 301 https://$host$request_uri; }
+    }
+}

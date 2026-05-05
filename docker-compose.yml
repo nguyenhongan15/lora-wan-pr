@@ -1,48 +1,64 @@
+# ──────────────────────────────────────────────────────────────────────
+# LoRa Coverage Platform — local dev stack
+# v1 production: cùng file này chạy trên 1 VPS Hetzner CPX31.
+# Valkey commented out (TRIGGERED — chỉ enable khi traffic > ngưỡng).
+# ──────────────────────────────────────────────────────────────────────
+
 services:
-  postgres:
-    image: postgis/postgis:16-3.4
-    container_name: lora_postgres
+  db:
+    # Image gộp PostGIS 3.5 + TimescaleDB 2.17 trên Postgres 17.
+    image: timescale/timescaledb-ha:pg17-ts2.17-all
+    container_name: lora-db
     restart: unless-stopped
-    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_DB: ${POSTGRES_DB:-lora_coverage}
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d   # auto-run khi tạo mới
+      - db-data:/home/postgres/pgdata/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lora} -d ${POSTGRES_DB:-lora_coverage}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: lora_pgadmin
+  api-service:
+    build:
+      context: ./services/api-service
+      dockerfile: Dockerfile
+    container_name: lora-api
     restart: unless-stopped
-    env_file: .env
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
-    ports:
-      - "5050:80"
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    
-  api:
-    build: ./backend
-    container_name: lora_api
-    restart: unless-stopped
-    env_file: .env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora}:${POSTGRES_PASSWORD:-change_me_in_production}@db:5432/${POSTGRES_DB:-lora_coverage}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-loglike-v0.1.0}
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app          # hot-reload: sửa code không cần rebuild
-      - ./DEM:/DEM
-    depends_on:
-      postgres:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
+  # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
+  # Production: build static rồi serve qua Nginx.
+
+  # ── Valkey (TRIGGERED — uncomment khi cần) ──────────────────────────
+  # cache:
+  #   image: valkey/valkey:8-alpine
+  #   container_name: lora-cache
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   command: ["valkey-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
 
 volumes:
-  pgdata:
+  db-data:

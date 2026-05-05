@@ -1,0 +1,21 @@
+{
+  "name": "lora-coverage",
+  "version": "0.2.0",
+  "private": true,
+  "description": "LoRa Coverage Mapping Platform — npm workspace root",
+  "workspaces": [
+    "apps/*",
+    "packages/sdk-js",
+    "packages/api-types"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web-app run dev",
+    "build:web": "npm --workspace apps/web-app run build",
+    "lint": "npm --workspace apps/web-app run lint",
+    "jsdoc-check": "npm --workspace apps/web-app run jsdoc-check"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}
