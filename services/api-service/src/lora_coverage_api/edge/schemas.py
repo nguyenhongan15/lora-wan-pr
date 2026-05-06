@@ -173,7 +173,7 @@ class ResolvedAddressResponse(BaseModel):
     latitude: float
     longitude: float
     display_name: str
-    provider: Literal["postgres", "nominatim", "vietmap", "goong", "google"]
+    provider: Literal["cache", "nominatim", "vietmap", "goong", "google"]
     confidence: float = Field(..., ge=0, le=1)
 
 

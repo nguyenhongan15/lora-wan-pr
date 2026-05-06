@@ -1,6 +1,5 @@
-"""Application layer — business logic + repository protocols.
+"""Application layer.
 
-CHỈ phụ thuộc domain. KHÔNG import infrastructure (enforced by import-linter).
-KHÔNG mention chuỗi infra: "postgres", "redis", "valkey", "s3", "stage_4",
-"GiST", "BRIN" (enforced by CI grep).
+Layer này KHÔNG được mention bất kỳ storage-tier identifier nào
+(danh sách cấm được enforce bởi CI grep — xem .github/workflows/).
 """

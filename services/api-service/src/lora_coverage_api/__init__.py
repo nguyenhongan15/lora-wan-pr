@@ -9,8 +9,8 @@
 Quy tắc bất biến:
   - application/ KHÔNG import infrastructure/.
   - domain/ KHÔNG import bất cứ thứ gì khác trong package này.
-  - application/ KHÔNG mention "postgres", "redis", "valkey", "s3",
-    "stage_4", "GiST", "BRIN" (CI grep).
+  - application/ KHÔNG được mention bất kỳ storage-tier identifier nào
+  (xem CI grep rule trong .github/workflows/ci.yml).
 """
 
 __version__ = "0.1.0"

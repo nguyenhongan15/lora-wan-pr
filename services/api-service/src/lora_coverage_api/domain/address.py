@@ -23,7 +23,7 @@ VN_LON_MIN, VN_LON_MAX = 102.0, 118.0
 class GeocodingProvider(StrEnum):
     """Tier trong cascade. Chuỗi giá trị KHÔNG đổi (lưu vào address.canonical)."""
 
-    POSTGRES = "postgres"  # cache nội bộ trong address.canonical
+    CACHE = "cache"  # cache nội bộ trong address.canonical
     NOMINATIM = "nominatim"  # OSM, free, rate-limited
     VIETMAP = "vietmap"  # paid, ưu tiên VN — defer
     GOONG = "goong"  # paid, alt — defer

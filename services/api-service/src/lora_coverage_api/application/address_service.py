@@ -22,7 +22,7 @@ class GeocodingClient(Protocol):
     provider lỗi (rate-limit, timeout, 5xx).
     """
 
-    provider: GeocodingProvider
+    provider=GeocodingProvider.CACHE,
 
     def search(self, query: str) -> AddressLookupResult | None: ...
 
@@ -73,7 +73,7 @@ class AddressResolutionService:
                 latitude=lat,
                 longitude=lng,
                 display_name=f"{lat:.5f}, {lng:.5f}",
-                provider=GeocodingProvider.POSTGRES,
+                provider=GeocodingProvider.CACHE,
                 confidence=1.0,
             )
             if not direct_hit.is_in_vietnam:

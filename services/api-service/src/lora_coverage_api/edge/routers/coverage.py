@@ -262,7 +262,7 @@ def _process_batch_item(
             latitude=lat,
             longitude=lng,
             display_name=item.label or f"{lat:.5f}, {lng:.5f}",
-            provider="postgres",
+            provider="cache",
             confidence=1.0,
         )
     else:
