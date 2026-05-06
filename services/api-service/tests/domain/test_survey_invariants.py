@@ -5,7 +5,7 @@ Mọi range check là hard invariant — pytest.raises là đúng.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,7 +19,7 @@ from lora_coverage_api.domain.survey import (
 
 from ..factories import make_survey_record
 
-_TS = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_TS = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def test_survey_record_accepts_defaults_from_factory():
@@ -44,9 +44,7 @@ def test_survey_record_rejects_longitude_when_outside_geographic_range(
         make_survey_record(longitude=bad_lng)
 
 
-@pytest.mark.parametrize(
-    "bad_rssi", [RSSI_MIN_DBM - 0.1, RSSI_MAX_DBM + 0.1, -200.0, 0.0]
-)
+@pytest.mark.parametrize("bad_rssi", [RSSI_MIN_DBM - 0.1, RSSI_MAX_DBM + 0.1, -200.0, 0.0])
 def test_survey_record_rejects_rssi_when_outside_lora_dynamic_range(
     bad_rssi: float,
 ):
@@ -62,9 +60,7 @@ def test_survey_record_accepts_rssi_at_boundaries():
     assert rec_max.rssi_dbm == RSSI_MAX_DBM
 
 
-@pytest.mark.parametrize(
-    "bad_snr", [SNR_MIN_DB - 0.1, SNR_MAX_DB + 0.1, -100.0, 100.0]
-)
+@pytest.mark.parametrize("bad_snr", [SNR_MIN_DB - 0.1, SNR_MAX_DB + 0.1, -100.0, 100.0])
 def test_survey_record_rejects_snr_when_outside_physical_range(bad_snr: float):
     with pytest.raises(ValueError, match="snr_db"):
         make_survey_record(snr_db=bad_snr)

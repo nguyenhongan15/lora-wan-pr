@@ -43,9 +43,15 @@ def _etag_for(g: Gateway) -> str:
     Không track delete vì gateway hiện không hỗ trợ DELETE.
     """
     payload = "|".join(
-        str(v) for v in (
-            g.id, g.name, g.altitude_m, g.antenna_height_m,
-            g.antenna_gain_dbi, g.tx_power_dbm, g.frequency_mhz,
+        str(v)
+        for v in (
+            g.id,
+            g.name,
+            g.altitude_m,
+            g.antenna_height_m,
+            g.antenna_gain_dbi,
+            g.tx_power_dbm,
+            g.frequency_mhz,
         )
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]

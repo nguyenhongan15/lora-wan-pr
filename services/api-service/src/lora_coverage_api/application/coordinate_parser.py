@@ -20,9 +20,7 @@ from __future__ import annotations
 import re
 
 # Decimal: hai số float liền nhau, phân tách bằng "," hoặc whitespace.
-_DECIMAL_PAIR_RE = re.compile(
-    r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$"
-)
+_DECIMAL_PAIR_RE = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
 
 # DMS: bắt nhóm "deg [min [sec]] hemisphere" — hemisphere bắt buộc để phân biệt
 # lat (N/S) khỏi lng (E/W). Cho phép unicode degree/prime hoặc ký tự ASCII.

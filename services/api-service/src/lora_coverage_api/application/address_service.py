@@ -1,25 +1,3 @@
-"""AddressResolutionService — F2 geocoding cascade.
-
-Theo business-logic.md §geocoding:
-    Postgres canonical (free, fast) → Nominatim (free, rate-limited) →
-    VietMap → Goong → Google (last resort, sponsor only — defer)
-
-Service KHÔNG biết về HTTP — chỉ phụ thuộc 2 protocol:
-    AddressCache (read/write address.canonical)
-    GeocodingClient (HTTP call thực sự, ở infrastructure) — cùng shape cho
-    Nominatim / VietMap / Goong.
-
-Cascade rule:
-    1. parse_coordinates → trả luôn nếu input là tọa độ (decimal/DMS).
-    2. Hit cache → trả luôn (giữ provider gốc của lần promote đầu).
-    3. Miss → gọi nominatim. Nếu hit + in_vietnam → cache + trả.
-    4. Nominatim NOT_FOUND hoặc Unavailable → thử lần lượt fallbacks
-       (VietMap → Goong). First hit + in_vietnam → cache + trả.
-    5. Out-of-region: KHÔNG cache (tránh poison cache khi user phân vân toạ độ).
-    6. Tất cả tier đều không có data → NOT_FOUND.
-       Tất cả tier đều Unavailable → PROVIDER_UNAVAILABLE.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -40,21 +18,20 @@ class GeocodingClient(Protocol):
     """Generic HTTP geocoder.
 
     Mọi tier (Nominatim, VietMap, Goong) đều implement shape này.
-    Trả None nếu không tìm thấy; raise GeocodingProviderUnavailable nếu
+    Trả None nếu không tìm thấy; raise GeocodingProviderUnavailableError nếu
     provider lỗi (rate-limit, timeout, 5xx).
     """
 
     provider: GeocodingProvider
 
-    def search(self, query: str) -> AddressLookupResult | None:
-        ...
+    def search(self, query: str) -> AddressLookupResult | None: ...
 
 
 # Back-compat alias — tests/fakes/address.py vẫn import name này.
 NominatimClient = GeocodingClient
 
 
-class GeocodingProviderUnavailable(Exception):
+class GeocodingProviderUnavailableError(Exception):
     """Provider trả 5xx / timeout / rate-limit. Service map về Err.
 
     Mọi geocoding client (Nominatim/VietMap/Goong) raise đúng exception này
@@ -63,7 +40,7 @@ class GeocodingProviderUnavailable(Exception):
 
 
 # Back-compat alias.
-NominatimUnavailable = GeocodingProviderUnavailable
+NominatimUnavailable = GeocodingProviderUnavailableError
 
 
 class AddressResolutionService:
@@ -85,32 +62,28 @@ class AddressResolutionService:
         self._nominatim = nominatim
         self._fallbacks = tuple(fallbacks)
 
-    def lookup(
-        self, address: Address
-    ) -> Result[AddressLookupResult, AddressLookupError]:
-        # ── Tier 0: tọa độ trực tiếp (decimal/DMS) ───────────────────────
-        # Vì đây là input rõ ràng nhất — không cần đi cascade geocoding.
+    def lookup(self, address: Address) -> Result[AddressLookupResult, AddressLookupError]:
+        # ── Direct hit: tọa độ trực tiếp (decimal/DMS) ───────────────────
+        # Parse trực tiếp từ input — KHÔNG phải kết quả cascade geocoding.
         # Vẫn áp invariant is_in_vietnam.
         coords = parse_coordinates(address.raw)
         if coords is not None:
             lat, lng = coords
-            hit = AddressLookupResult(
+            direct_hit = AddressLookupResult(
                 latitude=lat,
                 longitude=lng,
                 display_name=f"{lat:.5f}, {lng:.5f}",
                 provider=GeocodingProvider.POSTGRES,
                 confidence=1.0,
             )
-            if not hit.is_in_vietnam:
+            if not direct_hit.is_in_vietnam:
                 return Err(
                     AddressLookupError(
                         code=AddressLookupErrorCode.OUT_OF_REGION,
-                        message=(
-                            f"Toạ độ ngoài lãnh thổ VN: {lat:.4f},{lng:.4f}"
-                        ),
+                        message=(f"Toạ độ ngoài lãnh thổ VN: {lat:.4f},{lng:.4f}"),
                     )
                 )
-            return Ok(hit)
+            return Ok(direct_hit)
 
         key = address.normalized
         if not key:
@@ -138,7 +111,7 @@ class AddressResolutionService:
         for client in tiers:
             try:
                 hit = client.search(address.raw)
-            except GeocodingProviderUnavailable as e:
+            except GeocodingProviderUnavailableError as e:
                 logger.warning(
                     "geocoder.unavailable",
                     provider=getattr(client, "provider", "?"),

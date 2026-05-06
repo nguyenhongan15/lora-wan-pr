@@ -48,6 +48,8 @@ class NominatimHttpClient:
     User-Agent identifiable, bias countrycodes=vn.
     """
 
+    provider = GeocodingProvider.NOMINATIM
+
     def __init__(
         self,
         base_url: str = _DEFAULT_BASE_URL,
@@ -71,9 +73,7 @@ class NominatimHttpClient:
         url = f"{self._base_url}/search"
 
         try:
-            resp = httpx.get(
-                url, params=params, headers=self._headers, timeout=self._timeout
-            )
+            resp = httpx.get(url, params=params, headers=self._headers, timeout=self._timeout)
         except httpx.HTTPError as e:
             raise NominatimUnavailable(f"network error: {e}") from e
 

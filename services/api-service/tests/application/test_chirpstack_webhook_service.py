@@ -27,10 +27,7 @@ def _uplink(dedup: str = "dedup-A", rx_count: int = 1, **over: Any) -> dict[str,
             "modulation": {"lora": {"spreadingFactor": 10}},
         },
         "object": {"gnss_latitude": 16.0741, "gnss_longitude": 108.1525},
-        "rxInfo": [
-            {"gatewayId": f"gw{i}", "rssi": -100 - i, "snr": -3}
-            for i in range(rx_count)
-        ],
+        "rxInfo": [{"gatewayId": f"gw{i}", "rssi": -100 - i, "snr": -3} for i in range(rx_count)],
         "time": "2025-12-18T07:04:28.923090+00:00",
     }
     base.update(over)

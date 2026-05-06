@@ -16,8 +16,6 @@ layers =
     lora_coverage_api.edge
     lora_coverage_api.application
     lora_coverage_api.domain
-containers =
-    lora_coverage_api
 
 [importlinter:contract:application-no-infra]
 name = application MUST NOT import infrastructure

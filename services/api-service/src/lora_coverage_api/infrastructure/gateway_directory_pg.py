@@ -76,16 +76,20 @@ class PgGatewayDirectory:
             """
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(
-                sql,
-                {
-                    "lat": target.latitude,
-                    "lon": target.longitude,
-                    "freq": target.frequency_mhz,
-                    "radius_m": max_distance_km * 1000.0,
-                    "lim": limit,
-                },
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    sql,
+                    {
+                        "lat": target.latitude,
+                        "lon": target.longitude,
+                        "freq": target.frequency_mhz,
+                        "radius_m": max_distance_km * 1000.0,
+                        "lim": limit,
+                    },
+                )
+                .mappings()
+                .all()
+            )
         return [_row_to_gateway(dict(r)) for r in rows]
 
     def list_gateways(
@@ -106,9 +110,7 @@ class PgGatewayDirectory:
             clauses.append(
                 "ST_Intersects(location, ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)::geography)"
             )
-            params.update(
-                min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat
-            )
+            params.update(min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
 
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         sql = text(
@@ -155,21 +157,25 @@ class PgGatewayDirectory:
             """
         )
         with self._engine.begin() as conn:
-            row = conn.execute(
-                sql,
-                {
-                    "code": gateway.code,
-                    "name": gateway.name,
-                    "lat": gateway.latitude,
-                    "lon": gateway.longitude,
-                    "altitude_m": gateway.altitude_m,
-                    "antenna_height_m": gateway.antenna_height_m,
-                    "antenna_gain_dbi": gateway.antenna_gain_dbi,
-                    "tx_power_dbm": gateway.tx_power_dbm,
-                    "frequency_mhz": gateway.frequency_mhz,
-                    "owner_org": None,
-                },
-            ).mappings().first()
+            row = (
+                conn.execute(
+                    sql,
+                    {
+                        "code": gateway.code,
+                        "name": gateway.name,
+                        "lat": gateway.latitude,
+                        "lon": gateway.longitude,
+                        "altitude_m": gateway.altitude_m,
+                        "antenna_height_m": gateway.antenna_height_m,
+                        "antenna_gain_dbi": gateway.antenna_gain_dbi,
+                        "tx_power_dbm": gateway.tx_power_dbm,
+                        "frequency_mhz": gateway.frequency_mhz,
+                        "owner_org": None,
+                    },
+                )
+                .mappings()
+                .first()
+            )
         if row is None:
             raise RuntimeError("INSERT RETURNING did not return id")
         return Gateway(
@@ -185,9 +191,7 @@ class PgGatewayDirectory:
             frequency_mhz=gateway.frequency_mhz,
         )
 
-    def update(
-        self, gateway_id: GatewayId, patch: dict[str, object]
-    ) -> Gateway | None:
+    def update(self, gateway_id: GatewayId, patch: dict[str, object]) -> Gateway | None:
         # Whitelist: chỉ cho update các cột an toàn.
         clean = {k: v for k, v in patch.items() if k in _UPDATABLE_COLUMNS}
         if not clean:

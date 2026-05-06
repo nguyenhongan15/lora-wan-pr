@@ -111,9 +111,7 @@ async def metrics_middleware(
         elapsed = time.perf_counter() - start
         path = _route_pattern(request)
         HTTP_REQUESTS_TOTAL.labels(request.method, path, "500").inc()
-        HTTP_REQUEST_DURATION_SECONDS.labels(
-            request.method, path, "500"
-        ).observe(elapsed)
+        HTTP_REQUEST_DURATION_SECONDS.labels(request.method, path, "500").observe(elapsed)
         HTTP_REQUESTS_IN_FLIGHT.dec()
         raise
 

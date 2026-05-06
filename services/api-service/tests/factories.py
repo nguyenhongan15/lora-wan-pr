@@ -7,8 +7,7 @@ Theo unit-test-guide.md §2 Principle 2: pull complexity vào fixtures/factories
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from datetime import UTC, datetime
 
 from lora_coverage_api.domain.coverage import (
     Confidence,
@@ -40,7 +39,7 @@ def make_gateway_id(seed: int = 1) -> GatewayId:
 
 def make_gateway(
     *,
-    id: GatewayId | None = None,
+    gateway_id: GatewayId | None = None,
     code: str = "DAD-001",
     name: str = "Test Gateway Đà Nẵng",
     latitude: float = DA_NANG_LAT,
@@ -52,7 +51,7 @@ def make_gateway(
     frequency_mhz: float = 868.0,
 ) -> Gateway:
     return Gateway(
-        id=id or make_gateway_id(),
+        id=gateway_id or make_gateway_id(),
         code=code,
         name=name,
         latitude=latitude,
@@ -115,7 +114,7 @@ def make_survey_record(
     serving_gateway_id: GatewayId | None = None,
 ) -> SurveyRecord:
     return SurveyRecord(
-        timestamp=timestamp or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        timestamp=timestamp or datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
         latitude=latitude,
         longitude=longitude,
         rssi_dbm=rssi_dbm,

@@ -14,7 +14,6 @@ from lora_coverage_api.domain.coverage import (
     Target,
 )
 
-
 # ── Confidence.score ─────────────────────────────────────────────────────
 
 
@@ -34,7 +33,7 @@ def test_confidence_accepts_score_at_one():
 def test_confidence_rejects_score_outside_unit_interval_when_out_of_range(
     invalid_score: float,
 ):
-    with pytest.raises(ValueError, match="Confidence.score"):
+    with pytest.raises(ValueError, match=r"Confidence\.score"):
         Confidence(score=invalid_score, method=ConfidenceMethod.EMPIRICAL)
 
 

@@ -35,7 +35,12 @@ extend-exclude = ["legacy", "migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
-ignore = ["E501"]  # line-length handled by formatter
+ignore = ["E501", "RUF001", "RUF003",]  # line-length handled by formatter
+[tool.ruff.lint.per-file-ignores]
+# FastAPI Depends() trong default argument là pattern chính thức của framework
+"services/api-service/src/lora_coverage_api/edge/routers/*.py" = ["B008"]
+# conftest phải load_dotenv() trước khi import modules đọc env vars
+"services/api-service/tests/conftest.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

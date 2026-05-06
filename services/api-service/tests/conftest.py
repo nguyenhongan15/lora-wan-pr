@@ -11,7 +11,6 @@ nếu thiếu thì test self-skip (xem tests/integration/test_predict_endpoint.p
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest

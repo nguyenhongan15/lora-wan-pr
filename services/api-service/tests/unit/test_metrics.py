@@ -15,9 +15,7 @@ from lora_coverage_api.edge.metrics import metrics_endpoint, metrics_middleware
 def _app_with_metrics() -> FastAPI:
     app = FastAPI()
     app.middleware("http")(metrics_middleware)
-    app.add_api_route(
-        "/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False
-    )
+    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
 
     @app.get("/ping")
     def _ping() -> dict[str, str]:
@@ -58,9 +56,7 @@ def test_metrics_uses_route_pattern_not_raw_path() -> None:
     """
     app = FastAPI()
     app.middleware("http")(metrics_middleware)
-    app.add_api_route(
-        "/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False
-    )
+    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
 
     @app.get("/items/{item_id}")
     def _get_item(item_id: int) -> dict[str, int]:

@@ -135,9 +135,9 @@ def test_clip_out_of_range_rssi() -> None:
     r = chirpstack_uplink_to_survey_records(
         _uplink(
             rxInfo=[
-                {"rssi": -200, "snr": 0},        # quá thấp
-                {"rssi": -56, "snr": 8},          # ok
-                {"rssi": -10, "snr": 0},          # quá cao
+                {"rssi": -200, "snr": 0},  # quá thấp
+                {"rssi": -56, "snr": 8},  # ok
+                {"rssi": -10, "snr": 0},  # quá cao
             ]
         )
     )

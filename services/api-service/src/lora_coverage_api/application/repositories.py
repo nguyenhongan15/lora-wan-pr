@@ -42,8 +42,7 @@ class GatewayDirectory(Protocol):
         """List gateways, optional filter theo bbox (min_lon, min_lat, max_lon, max_lat)."""
         ...
 
-    def get_by_id(self, gateway_id: GatewayId) -> Gateway | None:
-        ...
+    def get_by_id(self, gateway_id: GatewayId) -> Gateway | None: ...
 
     def create(self, gateway: Gateway) -> Gateway:
         """Insert mới. Trả gateway đã có id từ DB."""
@@ -55,8 +54,7 @@ class GatewayDirectory(Protocol):
 
 
 class CoverageQuery(Protocol):
-    def predict(self, target: Target) -> Result[Prediction, PredictionUnavailable]:
-        ...
+    def predict(self, target: Target) -> Result[Prediction, PredictionUnavailable]: ...
 
 
 class SurveyIngest(Protocol):
@@ -73,9 +71,7 @@ class SurveyIngest(Protocol):
         """
         ...
 
-    def write_quarantine_idempotent(
-        self, batch: SurveyBatch, record_ids: Sequence[UUID]
-    ) -> int:
+    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
         """Như `write_quarantine` nhưng ID do caller cung cấp + ON CONFLICT
         DO NOTHING ở (timestamp, id).
 
@@ -134,8 +130,7 @@ class AddressCache(Protocol):
     thuộc cache, không phụ thuộc cả service.
     """
 
-    def get(self, normalized_query: str) -> AddressLookupResult | None:
-        ...
+    def get(self, normalized_query: str) -> AddressLookupResult | None: ...
 
     def put(self, normalized_query: str, hit: AddressLookupResult) -> None:
         """Idempotent upsert. KHÔNG raise nếu key đã tồn tại."""

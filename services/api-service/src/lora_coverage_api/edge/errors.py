@@ -11,9 +11,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 def _trace_id_of(request: Request) -> str:
-    return getattr(request.state, "trace_id", None) or request.headers.get(
-        "x-trace-id"
-    ) or str(uuid.uuid4())
+    return (
+        getattr(request.state, "trace_id", None)
+        or request.headers.get("x-trace-id")
+        or str(uuid.uuid4())
+    )
 
 
 def register_error_handlers(app: FastAPI) -> None:

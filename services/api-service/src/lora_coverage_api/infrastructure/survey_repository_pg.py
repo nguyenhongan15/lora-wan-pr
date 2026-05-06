@@ -62,20 +62,14 @@ class PgSurveyRepository:
             conn.execute(self._INSERT_SQL, rows)
         return batch.batch_id
 
-    def write_quarantine_idempotent(
-        self, batch: SurveyBatch, record_ids: Sequence[UUID]
-    ) -> int:
+    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
-                f"record_ids size ({len(record_ids)}) != records "
-                f"({len(batch.records)})"
+                f"record_ids size ({len(record_ids)}) != records ({len(batch.records)})"
             )
         if not batch.records:
             return 0
-        rows = [
-            self._row(batch, rid, r)
-            for rid, r in zip(record_ids, batch.records, strict=True)
-        ]
+        rows = [self._row(batch, rid, r) for rid, r in zip(record_ids, batch.records, strict=True)]
         with self._engine.begin() as conn:
             result = conn.execute(self._INSERT_SQL, rows)
         # executemany với ON CONFLICT DO NOTHING: rowcount = số row thực sự
@@ -106,9 +100,7 @@ class PgSurveyRepository:
                 "ST_Intersects(location::geometry, "
                 "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326))"
             )
-            params.update(
-                min_lon=bbox[0], min_lat=bbox[1], max_lon=bbox[2], max_lat=bbox[3]
-            )
+            params.update(min_lon=bbox[0], min_lat=bbox[1], max_lon=bbox[2], max_lat=bbox[3])
         if device_id is not None:
             where.append("device_id = :device_id")
             params["device_id"] = device_id

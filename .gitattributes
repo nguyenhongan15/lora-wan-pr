@@ -1,0 +1,41 @@
+﻿# .gitattributes - enforce consistent line endings cross-platform
+# Repo always stores LF; working dir converts per-OS.
+
+# Auto-detect text files, normalize to LF in repo
+* text=auto eol=lf
+
+# Python and config files (LF)
+*.py text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Web frontend
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+# Windows-specific (CRLF needed for native execution)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files (Git won't touch)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary

@@ -24,7 +24,7 @@ from ..domain.coverage import (
 )
 
 # ── Constants (LoRa EU868 conservative defaults) ─────────────────────────
-NOISE_FLOOR_DBM_125KHZ = -117.0   # -174 + 10·log10(125e3) + NF(6dB)
+NOISE_FLOOR_DBM_125KHZ = -117.0  # -174 + 10·log10(125e3) + NF(6dB)
 SF_SNR_LIMITS_DB: dict[int, float] = {
     7: -7.5,
     8: -10.0,
@@ -88,8 +88,7 @@ class PathLossModel(Protocol):
 
     model_version: str
 
-    def predict(self, target: Target, gateway: Gateway) -> Prediction:
-        ...
+    def predict(self, target: Target, gateway: Gateway) -> Prediction: ...
 
 
 class Stage1LogDistanceModel:
@@ -100,9 +99,7 @@ class Stage1LogDistanceModel:
         self._exponent = PATH_LOSS_EXPONENT_SUBURBAN
 
     def predict(self, target: Target, gateway: Gateway) -> Prediction:
-        d_km = _haversine_km(
-            target.latitude, target.longitude, gateway.latitude, gateway.longitude
-        )
+        d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
         # Tránh chia cho 0 ở khoảng cách cực gần
         d_km_eff = max(d_km, 0.001)
 
@@ -116,11 +113,7 @@ class Stage1LogDistanceModel:
         )
         pl_db = pl_fs_db + excess
 
-        rssi_dbm = (
-            gateway.tx_power_dbm
-            + gateway.antenna_gain_dbi
-            - pl_db
-        )
+        rssi_dbm = gateway.tx_power_dbm + gateway.antenna_gain_dbi - pl_db
         snr_db = rssi_dbm - NOISE_FLOOR_DBM_125KHZ
 
         status = _classify(rssi_dbm, snr_db, target.spreading_factor)

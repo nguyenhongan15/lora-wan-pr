@@ -99,7 +99,10 @@ class GatewayCreateRequest(BaseModel):
     antenna_height_m: float = Field(default=10.0, ge=0)
     antenna_gain_dbi: float = Field(default=2.0)
     tx_power_dbm: float = Field(default=14.0, ge=-10, le=30)
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0
+    # mypy: Python's Literal[...] không chính thức hỗ trợ float, nhưng
+    # Pydantic v2 validate đúng runtime + sinh OpenAPI enum đúng.
+    # Tham khảo: https://docs.pydantic.dev/latest/concepts/types/#literal
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
 
 
 class GatewayPatchRequest(BaseModel):
@@ -152,11 +155,16 @@ class WebhookIngestResponse(BaseModel):
 class AddressLookupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    address: str = Field(..., min_length=1, max_length=500, examples=[
-        "Số 1 Lý Thường Kiệt, Hải Châu, Đà Nẵng",
-    ])
+    address: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        examples=[
+            "Số 1 Lý Thường Kiệt, Hải Châu, Đà Nẵng",
+        ],
+    )
     spreading_factor: int = Field(default=7, ge=7, le=12)
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
 
 
 class ResolvedAddressResponse(BaseModel):
@@ -195,7 +203,7 @@ class CoverageBatchRequest(BaseModel):
 
     items: list[CoverageBatchItem] = Field(..., min_length=1, max_length=500)
     spreading_factor: int = Field(default=7, ge=7, le=12)
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
 
 
 class CoverageBatchItemResult(BaseModel):

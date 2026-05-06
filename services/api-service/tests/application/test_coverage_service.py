@@ -16,9 +16,7 @@ from ..fakes.path_loss import FakePathLossModel
 
 
 def test_predict_returns_err_no_gateway_nearby_when_directory_empty():
-    service = CoverageQueryService(
-        directory=FakeGatewayDirectory(), model=FakePathLossModel()
-    )
+    service = CoverageQueryService(directory=FakeGatewayDirectory(), model=FakePathLossModel())
 
     result = service.predict(make_target())
 
@@ -28,9 +26,7 @@ def test_predict_returns_err_no_gateway_nearby_when_directory_empty():
 
 def test_predict_returns_ok_prediction_when_one_gateway_in_range():
     gw = make_gateway()
-    service = CoverageQueryService(
-        directory=FakeGatewayDirectory([gw]), model=FakePathLossModel()
-    )
+    service = CoverageQueryService(directory=FakeGatewayDirectory([gw]), model=FakePathLossModel())
 
     result = service.predict(make_target())
 
@@ -70,9 +66,7 @@ def test_predict_returns_err_when_only_gateways_are_outside_30km():
 
 def test_predict_carries_model_version_from_path_loss_model():
     gw = make_gateway()
-    service = CoverageQueryService(
-        directory=FakeGatewayDirectory([gw]), model=FakePathLossModel()
-    )
+    service = CoverageQueryService(directory=FakeGatewayDirectory([gw]), model=FakePathLossModel())
 
     result = service.predict(make_target())
 

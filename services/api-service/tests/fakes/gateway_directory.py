@@ -35,9 +35,7 @@ class FakeGatewayDirectory:
     ) -> Sequence[Gateway]:
         scored = [
             (
-                _haversine_km(
-                    target.latitude, target.longitude, gw.latitude, gw.longitude
-                ),
+                _haversine_km(target.latitude, target.longitude, gw.latitude, gw.longitude),
                 gw,
             )
             for gw in self._store.values()
@@ -58,8 +56,7 @@ class FakeGatewayDirectory:
             items = [
                 gw
                 for gw in items
-                if min_lon <= gw.longitude <= max_lon
-                and min_lat <= gw.latitude <= max_lat
+                if min_lon <= gw.longitude <= max_lon and min_lat <= gw.latitude <= max_lat
             ]
         return items[:limit]
 
@@ -70,9 +67,7 @@ class FakeGatewayDirectory:
         self._store[gateway.id] = gateway
         return gateway
 
-    def update(
-        self, gateway_id: GatewayId, patch: dict[str, object]
-    ) -> Gateway | None:
+    def update(self, gateway_id: GatewayId, patch: dict[str, object]) -> Gateway | None:
         existing = self._store.get(gateway_id)
         if existing is None:
             return None

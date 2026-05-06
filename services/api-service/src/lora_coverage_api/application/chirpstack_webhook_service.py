@@ -14,12 +14,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from ..domain.survey import SurveyBatch, UploaderId
 from .chirpstack_adapter import (
     AdapterResult,
     chirpstack_uplink_to_survey_records,
 )
 from .repositories import SurveyIngest
-from ..domain.survey import SurveyBatch, UploaderId
 
 # Namespace cố định để uuid5 deterministic giữa các lần restart.
 # UUID này KHÔNG bí mật, nó chỉ là salt cho hash đầu vào.
@@ -30,9 +30,9 @@ _DEDUP_NS = uuid.UUID("9c5b2d3e-1f08-4f2c-9e80-bda9c1e5a401")
 class WebhookIngestReceipt:
     """Trả về cho ChirpStack network server (đặt trong response 202)."""
 
-    accepted_count: int   # số record adapter coi là hợp lệ
-    inserted_count: int   # số record THỰC SỰ insert (sau dedup)
-    rejected_count: int   # số rxInfo bị adapter loại
+    accepted_count: int  # số record adapter coi là hợp lệ
+    inserted_count: int  # số record THỰC SỰ insert (sau dedup)
+    rejected_count: int  # số rxInfo bị adapter loại
     rejected_reasons: list[str]
 
 
@@ -71,10 +71,7 @@ class ChirpstackWebhookService:
         else:
             # rx_index map theo thứ tự records adapter trả ra. Adapter giữ
             # thứ tự rxInfo gốc (đã có test bao phủ).
-            ids = [
-                _record_id(dedup_id, i)
-                for i in range(len(adapter_result.records))
-            ]
+            ids = [_record_id(dedup_id, i) for i in range(len(adapter_result.records))]
 
         batch = SurveyBatch(uploader_id=uploader_id, records=adapter_result.records)
         inserted = self._repo.write_quarantine_idempotent(batch, ids)

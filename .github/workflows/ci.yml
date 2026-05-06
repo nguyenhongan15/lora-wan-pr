@@ -30,15 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          # Lock file ở ROOT (uv workspace có 1 lock duy nhất).
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install uv
-        run: pip install uv
-
+      # Sync ở ROOT để kéo về cả dev groups của workspace
+      # (ruff, mypy, import-linter, pytest, ...).
+      # `--all-extras` giữ tương thích nếu sau này có optional deps;
+      # `--all-groups` là phần thiết yếu để CI có ruff/mypy/...
       - name: Install deps
-        run: uv sync --all-extras
+        working-directory: .
+        run: uv sync --all-extras --all-groups
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -46,14 +56,17 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      # Mypy phải chạy từ ROOT để dùng đúng [tool.mypy] strict config
+      # (mypy không tự leo lên parent tìm config như ruff).
       - name: Mypy
-        run: uv run mypy src
+        working-directory: .
+        run: uv run mypy services/api-service/src
 
+      # import-linter đã có trong dev group root sau khi sync,
+      # không cần pip install thêm.
       - name: import-linter (5-layer separation)
         working-directory: .
-        run: |
-          uv pip install --system import-linter
-          lint-imports --config .importlinter
+        run: uv run lint-imports --config .importlinter
 
       - name: No leaky strings in application/
         working-directory: .
@@ -69,9 +82,12 @@ jobs:
         working-directory: .
         env:
           DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
-        run: uv run --project services/api-service alembic -c migrations/alembic.ini upgrade head
+        run: uv run alembic -c migrations/alembic.ini upgrade head
 
+      # Pytest chạy từ ROOT để testpaths trong [tool.pytest.ini_options]
+      # ("services/api-service/tests", ...) resolve đúng path.
       - name: Pytest
+        working-directory: .
         env:
           DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
         run: uv run pytest -v

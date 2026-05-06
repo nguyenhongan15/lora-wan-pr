@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import httpx
 
-from ..application.address_service import GeocodingProviderUnavailable
+from ..application.address_service import GeocodingProviderUnavailableError
 from ..domain.address import AddressLookupResult, GeocodingProvider
 
 _DEFAULT_BASE_URL = "https://maps.vietmap.vn"
@@ -56,27 +56,23 @@ class VietmapHttpClient:
         try:
             resp = httpx.get(url, params=params, timeout=self._timeout)
         except httpx.HTTPError as e:
-            raise GeocodingProviderUnavailable(f"vietmap network: {e}") from e
+            raise GeocodingProviderUnavailableError(f"vietmap network: {e}") from e
 
         if resp.status_code == 429:
-            raise GeocodingProviderUnavailable("vietmap rate-limited (429)")
+            raise GeocodingProviderUnavailableError("vietmap rate-limited (429)")
         if resp.status_code >= 500:
-            raise GeocodingProviderUnavailable(f"vietmap 5xx: {resp.status_code}")
+            raise GeocodingProviderUnavailableError(f"vietmap 5xx: {resp.status_code}")
         if resp.status_code == 401 or resp.status_code == 403:
             # Sai key → coi là Unavailable cho service biết rớt sang tier kế.
             # Không trả NOT_FOUND vì sẽ làm hỏng cascade khi VietMap mất key.
-            raise GeocodingProviderUnavailable(
-                f"vietmap auth failed ({resp.status_code})"
-            )
+            raise GeocodingProviderUnavailableError(f"vietmap auth failed ({resp.status_code})")
         if resp.status_code != 200:
-            raise GeocodingProviderUnavailable(
-                f"vietmap unexpected status {resp.status_code}"
-            )
+            raise GeocodingProviderUnavailableError(f"vietmap unexpected status {resp.status_code}")
 
         try:
             data = resp.json()
         except ValueError as e:
-            raise GeocodingProviderUnavailable(f"vietmap non-json: {e}") from e
+            raise GeocodingProviderUnavailableError(f"vietmap non-json: {e}") from e
 
         if not isinstance(data, list) or not data:
             return None
@@ -95,17 +91,15 @@ class VietmapHttpClient:
         try:
             resp = httpx.get(url, params=params, timeout=self._timeout)
         except httpx.HTTPError as e:
-            raise GeocodingProviderUnavailable(f"vietmap place network: {e}") from e
+            raise GeocodingProviderUnavailableError(f"vietmap place network: {e}") from e
 
         if resp.status_code != 200:
-            raise GeocodingProviderUnavailable(
-                f"vietmap place status {resp.status_code}"
-            )
+            raise GeocodingProviderUnavailableError(f"vietmap place status {resp.status_code}")
 
         try:
             data = resp.json()
         except ValueError as e:
-            raise GeocodingProviderUnavailable(f"vietmap place non-json: {e}") from e
+            raise GeocodingProviderUnavailableError(f"vietmap place non-json: {e}") from e
 
         if not isinstance(data, dict):
             return None

@@ -24,13 +24,10 @@ class FakeSurveyIngest:
         self._quarantined.append(batch)
         return batch.batch_id
 
-    def write_quarantine_idempotent(
-        self, batch: SurveyBatch, record_ids: Sequence[UUID]
-    ) -> int:
+    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
-                f"record_ids size ({len(record_ids)}) != records "
-                f"({len(batch.records)})"
+                f"record_ids size ({len(record_ids)}) != records ({len(batch.records)})"
             )
         inserted = 0
         for rid, rec in zip(record_ids, batch.records, strict=True):
@@ -63,8 +60,7 @@ class FakeSurveyIngest:
             items = [
                 p
                 for p in items
-                if min_lon <= p.longitude <= max_lon
-                and min_lat <= p.latitude <= max_lat
+                if min_lon <= p.longitude <= max_lon and min_lat <= p.latitude <= max_lat
             ]
         # Fake không track device_id trên TrainingPoint — accept arg để giữ
         # đúng signature Protocol, ignore filter (test in-mem chưa cần).

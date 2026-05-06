@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class PredictionErrorCode(str, Enum):
+class PredictionErrorCode(StrEnum):
     NO_GATEWAY_NEARBY = "NO_GATEWAY_NEARBY"
     LINK_BUDGET_INFEASIBLE = "LINK_BUDGET_INFEASIBLE"
     DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
@@ -18,7 +18,7 @@ class PredictionUnavailable:
     message: str
 
 
-class AddressLookupErrorCode(str, Enum):
+class AddressLookupErrorCode(StrEnum):
     NOT_FOUND = "ADDRESS_NOT_FOUND"
     OUT_OF_REGION = "ADDRESS_OUT_OF_REGION"
     PROVIDER_UNAVAILABLE = "GEOCODING_PROVIDER_UNAVAILABLE"

@@ -6,16 +6,14 @@ from collections.abc import Mapping
 
 from lora_coverage_api.application.address_service import (
     GeocodingClient,
-    GeocodingProviderUnavailable,
+    GeocodingProviderUnavailableError,
 )
 from lora_coverage_api.application.repositories import AddressCache
 from lora_coverage_api.domain.address import AddressLookupResult, GeocodingProvider
 
 
 class FakeAddressCache(AddressCache):
-    def __init__(
-        self, seed: Mapping[str, AddressLookupResult] | None = None
-    ) -> None:
+    def __init__(self, seed: Mapping[str, AddressLookupResult] | None = None) -> None:
         self._store: dict[str, AddressLookupResult] = dict(seed or {})
         self.put_calls: list[tuple[str, AddressLookupResult]] = []
 
@@ -47,7 +45,7 @@ class FakeGeocoder(GeocodingClient):
     def search(self, query: str) -> AddressLookupResult | None:
         self.calls.append(query)
         if self._raise:
-            raise GeocodingProviderUnavailable("simulated unavailability")
+            raise GeocodingProviderUnavailableError("simulated unavailability")
         return self._result
 
 

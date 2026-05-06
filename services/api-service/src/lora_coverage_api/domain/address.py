@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 # Vietnam bounding box (rộng, để cho biên giới đảo + Trường Sa).
 # Dùng để reject toạ độ rõ ràng không phải VN.
@@ -20,14 +20,14 @@ VN_LAT_MIN, VN_LAT_MAX = 8.0, 23.5
 VN_LON_MIN, VN_LON_MAX = 102.0, 118.0
 
 
-class GeocodingProvider(str, Enum):
+class GeocodingProvider(StrEnum):
     """Tier trong cascade. Chuỗi giá trị KHÔNG đổi (lưu vào address.canonical)."""
 
-    POSTGRES = "postgres"      # cache nội bộ trong address.canonical
-    NOMINATIM = "nominatim"    # OSM, free, rate-limited
-    VIETMAP = "vietmap"        # paid, ưu tiên VN — defer
-    GOONG = "goong"            # paid, alt — defer
-    GOOGLE = "google"          # last resort — sponsor only, defer
+    POSTGRES = "postgres"  # cache nội bộ trong address.canonical
+    NOMINATIM = "nominatim"  # OSM, free, rate-limited
+    VIETMAP = "vietmap"  # paid, ưu tiên VN — defer
+    GOONG = "goong"  # paid, alt — defer
+    GOOGLE = "google"  # last resort — sponsor only, defer
 
 
 _NORMALIZE_RE = re.compile(r"\s+")
@@ -97,6 +97,5 @@ class AddressLookupResult:
     @property
     def is_in_vietnam(self) -> bool:
         return (
-            VN_LAT_MIN <= self.latitude <= VN_LAT_MAX
-            and VN_LON_MIN <= self.longitude <= VN_LON_MAX
+            VN_LAT_MIN <= self.latitude <= VN_LAT_MAX and VN_LON_MIN <= self.longitude <= VN_LON_MAX
         )

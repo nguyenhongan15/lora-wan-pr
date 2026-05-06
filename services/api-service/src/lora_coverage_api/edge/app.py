@@ -69,8 +69,6 @@ def create_app() -> FastAPI:
 
     # Prometheus scrape endpoint — không trong router để giữ nó tối giản
     # và không bị middleware metrics tự ghi lại (đã skip trong middleware).
-    app.add_api_route(
-        "/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False
-    )
+    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
 
     return app

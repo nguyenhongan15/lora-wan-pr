@@ -41,20 +41,26 @@ def test_address_normalized_property() -> None:
 def test_lookup_result_validates_lat_lon() -> None:
     with pytest.raises(ValueError):
         AddressLookupResult(
-            latitude=999, longitude=0, display_name="x",
+            latitude=999,
+            longitude=0,
+            display_name="x",
             provider=GeocodingProvider.NOMINATIM,
         )
 
 
 def test_lookup_result_in_vietnam() -> None:
     da_nang = AddressLookupResult(
-        latitude=16.05, longitude=108.2, display_name="Đà Nẵng",
+        latitude=16.05,
+        longitude=108.2,
+        display_name="Đà Nẵng",
         provider=GeocodingProvider.NOMINATIM,
     )
     assert da_nang.is_in_vietnam
 
     pacific = AddressLookupResult(
-        latitude=0, longitude=-150, display_name="Pacific",
+        latitude=0,
+        longitude=-150,
+        display_name="Pacific",
         provider=GeocodingProvider.NOMINATIM,
     )
     assert not pacific.is_in_vietnam

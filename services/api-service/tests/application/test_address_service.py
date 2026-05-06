@@ -12,7 +12,6 @@ from lora_coverage_api.domain.errors import AddressLookupErrorCode
 
 from ..fakes.address import FakeAddressCache, FakeGeocoder, FakeNominatim  # noqa: F401
 
-
 _DA_NANG_HIT = AddressLookupResult(
     latitude=16.0544,
     longitude=108.2022,
@@ -57,7 +56,9 @@ def test_nominatim_not_found_returns_err() -> None:
 
 def test_out_of_region_returns_err_and_does_not_cache() -> None:
     pacific_hit = AddressLookupResult(
-        latitude=0, longitude=-150, display_name="Pacific Ocean",
+        latitude=0,
+        longitude=-150,
+        display_name="Pacific Ocean",
         provider=GeocodingProvider.NOMINATIM,
     )
     cache = FakeAddressCache()
@@ -115,7 +116,7 @@ def test_nominatim_unavailable_falls_back_to_vietmap() -> None:
 
 def test_nominatim_not_found_falls_through_to_goong() -> None:
     cache = FakeAddressCache()
-    nom = FakeNominatim(result=None)              # tier 2 không có data
+    nom = FakeNominatim(result=None)  # tier 2 không có data
     vm = FakeNominatim(result=None, provider=GeocodingProvider.VIETMAP)  # tier 3 cũng không
     goong = FakeNominatim(result=_GOONG_HIT, provider=GeocodingProvider.GOONG)
     svc = AddressResolutionService(cache, nom, fallbacks=(vm, goong))
@@ -142,7 +143,7 @@ def test_all_unavailable_returns_provider_unavailable() -> None:
 
 def test_some_unavailable_some_no_data_returns_not_found() -> None:
     cache = FakeAddressCache()
-    nom = FakeNominatim(raise_unavailable=True)        # tier 2 down
+    nom = FakeNominatim(raise_unavailable=True)  # tier 2 down
     vm = FakeNominatim(result=None, provider=GeocodingProvider.VIETMAP)  # tier 3 không data
     svc = AddressResolutionService(cache, nom, fallbacks=(vm,))
 
@@ -154,7 +155,9 @@ def test_some_unavailable_some_no_data_returns_not_found() -> None:
 
 def test_out_of_region_in_fallback_does_not_cache() -> None:
     pacific_via_goong = AddressLookupResult(
-        latitude=0, longitude=-150, display_name="Pacific",
+        latitude=0,
+        longitude=-150,
+        display_name="Pacific",
         provider=GeocodingProvider.GOONG,
     )
     cache = FakeAddressCache()

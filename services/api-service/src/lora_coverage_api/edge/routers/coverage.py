@@ -56,11 +56,7 @@ async def predict(
 
     if isinstance(result, Err):
         # Map domain error → HTTP status (RFC 7807).
-        status_code = (
-            404
-            if result.error.code == PredictionErrorCode.NO_GATEWAY_NEARBY
-            else 422
-        )
+        status_code = 404 if result.error.code == PredictionErrorCode.NO_GATEWAY_NEARBY else 422
         return JSONResponse(
             status_code=status_code,
             media_type="application/problem+json",
@@ -82,16 +78,16 @@ def _to_prediction_response(p: object) -> PredictionResponse:
     """Map domain Prediction → wire schema."""
     # Lazy attr access — tránh import cycle với domain ở module top.
     return PredictionResponse(
-        rssi_dbm=p.rssi_dbm,                                     # type: ignore[attr-defined]
-        snr_db=p.snr_db,                                         # type: ignore[attr-defined]
-        coverage_status=p.coverage_status.value,                 # type: ignore[attr-defined]
-        serving_gateway_id=p.serving_gateway_id,                 # type: ignore[attr-defined]
+        rssi_dbm=p.rssi_dbm,  # type: ignore[attr-defined]
+        snr_db=p.snr_db,  # type: ignore[attr-defined]
+        coverage_status=p.coverage_status.value,  # type: ignore[attr-defined]
+        serving_gateway_id=p.serving_gateway_id,  # type: ignore[attr-defined]
         confidence=ConfidenceResponse(
-            score=p.confidence.score,                            # type: ignore[attr-defined]
-            method=p.confidence.method.value,                    # type: ignore[attr-defined]
+            score=p.confidence.score,  # type: ignore[attr-defined]
+            method=p.confidence.method.value,  # type: ignore[attr-defined]
         ),
-        model_version=p.model_version,                           # type: ignore[attr-defined]
-        recommended_sf=p.recommended_sf,                         # type: ignore[attr-defined]
+        model_version=p.model_version,  # type: ignore[attr-defined]
+        recommended_sf=p.recommended_sf,  # type: ignore[attr-defined]
     )
 
 
@@ -162,9 +158,7 @@ async def lookup(
     pred_result = service.predict(target)
     if isinstance(pred_result, Err):
         status_code = (
-            404
-            if pred_result.error.code == PredictionErrorCode.NO_GATEWAY_NEARBY
-            else 422
+            404 if pred_result.error.code == PredictionErrorCode.NO_GATEWAY_NEARBY else 422
         )
         _record("error_predict")
         return JSONResponse(
@@ -195,7 +189,7 @@ async def lookup(
             latitude=resolved.latitude,
             longitude=resolved.longitude,
             display_name=resolved.display_name,
-            provider=resolved.provider.value,  # type: ignore[arg-type]
+            provider=resolved.provider.value,
             confidence=resolved.confidence,
         ),
         prediction=_to_prediction_response(pred_result.value),
@@ -261,8 +255,8 @@ def _process_batch_item(
     resolved_dto: ResolvedAddressResponse | None = None
     if has_coords:
         # User-supplied coords — không geocode reverse, dùng label hoặc tọa độ.
-        lat = item.latitude  # type: ignore[assignment]
-        lng = item.longitude  # type: ignore[assignment]
+        lat = item.latitude
+        lng = item.longitude
         assert lat is not None and lng is not None
         resolved_dto = ResolvedAddressResponse(
             latitude=lat,
@@ -285,7 +279,7 @@ def _process_batch_item(
             latitude=resolved.latitude,
             longitude=resolved.longitude,
             display_name=resolved.display_name,
-            provider=resolved.provider.value,  # type: ignore[arg-type]
+            provider=resolved.provider.value,
             confidence=resolved.confidence,
         )
 

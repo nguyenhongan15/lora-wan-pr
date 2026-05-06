@@ -31,9 +31,9 @@ def test_multiple_pairs_with_whitespace() -> None:
 @pytest.mark.parametrize(
     "raw",
     [
-        "no-colon-here",                                # missing :
-        ":11111111-1111-1111-1111-111111111111",        # empty token
-        "tok:not-a-uuid",                               # bad uuid
+        "no-colon-here",  # missing :
+        ":11111111-1111-1111-1111-111111111111",  # empty token
+        "tok:not-a-uuid",  # bad uuid
     ],
 )
 def test_silently_skips_malformed(raw: str) -> None:

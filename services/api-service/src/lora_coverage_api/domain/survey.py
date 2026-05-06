@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import NewType
 from uuid import UUID, uuid4
 
@@ -24,9 +24,9 @@ SNR_MIN_DB = -30.0
 SNR_MAX_DB = 30.0
 
 
-class SurveyBatchStatus(str, Enum):
+class SurveyBatchStatus(StrEnum):
     QUARANTINED = "quarantined"  # Đã nhận, chờ validate
-    REJECTED = "rejected"        # Schema invalid (whole batch)
+    REJECTED = "rejected"  # Schema invalid (whole batch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,13 +49,9 @@ class SurveyRecord:
         if not -180.0 <= self.longitude <= 180.0:
             raise ValueError(f"longitude out of range: {self.longitude}")
         if not RSSI_MIN_DBM <= self.rssi_dbm <= RSSI_MAX_DBM:
-            raise ValueError(
-                f"rssi_dbm {self.rssi_dbm} ngoài [{RSSI_MIN_DBM}, {RSSI_MAX_DBM}]"
-            )
+            raise ValueError(f"rssi_dbm {self.rssi_dbm} ngoài [{RSSI_MIN_DBM}, {RSSI_MAX_DBM}]")
         if not SNR_MIN_DB <= self.snr_db <= SNR_MAX_DB:
-            raise ValueError(
-                f"snr_db {self.snr_db} ngoài [{SNR_MIN_DB}, {SNR_MAX_DB}]"
-            )
+            raise ValueError(f"snr_db {self.snr_db} ngoài [{SNR_MIN_DB}, {SNR_MAX_DB}]")
         if self.spreading_factor not in (7, 8, 9, 10, 11, 12):
             raise ValueError(f"invalid SF: {self.spreading_factor}")
 

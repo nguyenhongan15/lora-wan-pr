@@ -127,11 +127,7 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
     uplink_time = _parse_iso(uplink.get("time")) or datetime.now(tz=UTC)
 
     device_info = uplink.get("deviceInfo") or {}
-    device_id = (
-        device_info.get("devEui")
-        or device_info.get("deviceName")
-        or uplink.get("devEui")
-    )
+    device_id = device_info.get("devEui") or device_info.get("deviceName") or uplink.get("devEui")
     if isinstance(device_id, str):
         device_id = device_id[:128]  # match SurveyRecord constraint
     else:
