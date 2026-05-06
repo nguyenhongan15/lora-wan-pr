@@ -28,7 +28,7 @@ def test_healthz(client: TestClient) -> None:
 
 
 def test_predict_near_danang_gateway(client: TestClient) -> None:
-    # Toạ độ rất gần seed gateway DAD-001 (108.2772, 16.1144).
+    # Test chỉ assert có gateway nào đó in-range, không bind code cụ thể.
     r = client.post(
         "/api/v1/coverage/predict",
         json={

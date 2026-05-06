@@ -35,8 +35,8 @@ def test_predict_returns_ok_prediction_when_one_gateway_in_range():
 
 
 def test_predict_picks_gateway_with_highest_rssi_when_multiple_candidates():
-    gw_weak = make_gateway(id=make_gateway_id(seed=1), code="GW-WEAK")
-    gw_strong = make_gateway(id=make_gateway_id(seed=2), code="GW-STRONG")
+    gw_weak = make_gateway(gateway_id=make_gateway_id(seed=1), code="GW-WEAK")
+    gw_strong = make_gateway(gateway_id=make_gateway_id(seed=2), code="GW-STRONG")
     model = FakePathLossModel(default_rssi_dbm=-110.0)
     model.rssi_for[gw_weak.id] = -110.0
     model.rssi_for[gw_strong.id] = -80.0

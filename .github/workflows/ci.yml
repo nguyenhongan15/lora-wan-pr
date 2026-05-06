@@ -84,8 +84,12 @@ jobs:
           DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
         run: uv run alembic -c migrations/alembic.ini upgrade head
 
-      # Pytest chạy từ ROOT để testpaths trong [tool.pytest.ini_options]
-      # ("services/api-service/tests", ...) resolve đúng path.
+      - name: Seed gateways
+        working-directory: .
+        env:
+          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
+        run: uv run --project services/api-service python services/api-service/scripts/seed_gateways.py  
+
       - name: Pytest
         working-directory: .
         env:
