@@ -1,58 +1,60 @@
--- Seed 11 LoRa gateways trên địa bàn TP. Đà Nẵng (mock data cho v2 demo).
--- Toạ độ chọn theo địa danh thực; tham số antenna/TX là giả định hợp lý
--- (LoRa EU868: TX 14-17 dBm, antenna gain 2-8 dBi, độ cao 10-40m).
--- Chạy bằng: psql $DATABASE_URL -f migrations/seeds/seed_gateways.sql
+-- 11 LoRaWAN gateways thực tế — deployment "3. DNIIT" (ChirpStack v4 export).
+-- Source: r-dt/response_1777987688423.json (snapshot 2026-02-17, AS923-2).
+--
+-- Antenna metadata (height / gain / TX power) KHÔNG có trong export → dùng
+-- default của bảng (10m / 2dBi / 14dBm). Operator phải verify và cập nhật
+-- trước khi dùng cho prediction nghiêm túc.
+--
+-- altitude_m = 0 cho tất cả: 7/11 record trong export có altitude == longitude
+-- (lỗi parser upstream), 4/11 còn lại null. Data dev sẽ fill từ DEM/khảo sát.
+--
+-- frequency_mhz = 923.0 vì CHECK chk_freq_lora_band của geo.gateways chỉ cho
+-- 433/868/915/923. Carrier thực 921.4 MHz được lưu chính xác trong
+-- ts.survey_*.frequency_mhz (table đó không có CHECK band).
+--
+-- Idempotent: chạy lại nhiều lần không tạo duplicate.
 
+-- Cleanup seed cũ (mock data v0).
 DELETE FROM geo.gateways WHERE code LIKE 'DAD-%' OR code IN ('HCM-001', 'HAN-001');
 
 INSERT INTO geo.gateways
-    (code, name, location, altitude_m, antenna_height_m, antenna_gain_dbi, tx_power_dbm, frequency_mhz, owner_org, is_public)
+    (code, name, location, altitude_m, frequency_mhz, owner_org, is_public)
 VALUES
-    -- High-elevation hilltop & mountain sites (good macro coverage)
-    ('DAD-001', 'Bán đảo Sơn Trà',
-     ST_SetSRID(ST_MakePoint(108.3000, 16.1180), 4326)::geography,
-     693, 15, 8.0, 17.0, 868.0, 'demo-org', true),
-    ('DAD-002', 'Bà Nà Hills',
-     ST_SetSRID(ST_MakePoint(107.9886, 15.9981), 4326)::geography,
-     1487, 12, 8.0, 17.0, 868.0, 'demo-org', true),
-
-    -- Urban core / iconic landmarks (rooftop installations)
-    ('DAD-003', 'Cầu Rồng (trung tâm)',
-     ST_SetSRID(ST_MakePoint(108.2275, 16.0613), 4326)::geography,
-     8, 35, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-004', 'Hải Châu (trung tâm hành chính)',
-     ST_SetSRID(ST_MakePoint(108.2208, 16.0667), 4326)::geography,
-     10, 40, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-005', 'Thanh Khê',
-     ST_SetSRID(ST_MakePoint(108.1900, 16.0640), 4326)::geography,
-     6, 30, 5.0, 14.0, 868.0, 'demo-org', true),
-
-    -- Đại học & sân bay
-    ('DAD-006', 'Đại học Đà Nẵng',
-     ST_SetSRID(ST_MakePoint(108.2150, 16.0721), 4326)::geography,
-     9, 25, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-007', 'Sân bay Quốc tế Đà Nẵng',
-     ST_SetSRID(ST_MakePoint(108.1992, 16.0439), 4326)::geography,
-     7, 28, 6.0, 14.0, 868.0, 'demo-org', true),
-
-    -- Vùng ven & các quận xa trung tâm
-    ('DAD-008', 'Ngũ Hành Sơn',
-     ST_SetSRID(ST_MakePoint(108.2625, 16.0040), 4326)::geography,
-     12, 22, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-009', 'Liên Chiểu',
-     ST_SetSRID(ST_MakePoint(108.1500, 16.0728), 4326)::geography,
-     5, 30, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-010', 'Cẩm Lệ',
-     ST_SetSRID(ST_MakePoint(108.1985, 16.0204), 4326)::geography,
-     8, 25, 5.0, 14.0, 868.0, 'demo-org', true),
-    ('DAD-011', 'Hoà Vang (huyện)',
-     ST_SetSRID(ST_MakePoint(108.0810, 15.9849), 4326)::geography,
-     20, 30, 6.0, 17.0, 868.0, 'demo-org', true)
+    ('ac1f09fffe06fcf2', 'DNIIT GW 06fcf2',
+     ST_SetSRID(ST_MakePoint(108.21985626414313, 16.054765682623003), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('7276ff002e06029f', 'DNIIT GW 06029f',
+     ST_SetSRID(ST_MakePoint(108.1532551, 16.0659959), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('7276ff002e0507da', 'DNIIT GW 0507da',
+     ST_SetSRID(ST_MakePoint(108.1524913, 16.0740935), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('a84041ffff1ec39f', 'DNIIT GW 1ec39f',
+     ST_SetSRID(ST_MakePoint(108.1525171, 16.0741086), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('ac1f09fffe00ab25', 'DNIIT GW 00ab25',
+     ST_SetSRID(ST_MakePoint(108.12857, 16.11073), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('ac1f09fffe0fd63b', 'DNIIT GW 0fd63b',
+     ST_SetSRID(ST_MakePoint(108.23986, 15.98571), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('7276ff002e062cf2', 'DNIIT GW 062cf2',
+     ST_SetSRID(ST_MakePoint(108.27363586425781, 16.11829376220703), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('7276ff002e061f5b', 'DNIIT GW 061f5b',
+     ST_SetSRID(ST_MakePoint(108.22207641601562, 16.075590133666992), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('a840411eebb44150', 'DNIIT GW b44150',
+     ST_SetSRID(ST_MakePoint(108.15253, 16.0740984), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('ac1f09fffe0fd629', 'DNIIT GW 0fd629',
+     ST_SetSRID(ST_MakePoint(108.15448, 16.06815), 4326)::geography,
+     0, 923.0, 'DNIIT', true),
+    ('ac1f09fffe00ab20', 'DNIIT GW 00ab20',
+     ST_SetSRID(ST_MakePoint(108.22009, 16.05469), 4326)::geography,
+     0, 923.0, 'DNIIT', true)
 ON CONFLICT (code) DO UPDATE SET
     name = EXCLUDED.name,
     location = EXCLUDED.location,
     altitude_m = EXCLUDED.altitude_m,
-    antenna_height_m = EXCLUDED.antenna_height_m,
-    antenna_gain_dbi = EXCLUDED.antenna_gain_dbi,
-    tx_power_dbm = EXCLUDED.tx_power_dbm,
     frequency_mhz = EXCLUDED.frequency_mhz;

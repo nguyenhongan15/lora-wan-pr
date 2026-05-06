@@ -6,7 +6,6 @@ rule-design-restfulapi.md §6).
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -36,6 +35,7 @@ class PredictionResponse(BaseModel):
     serving_gateway_id: UUID | None
     confidence: ConfidenceResponse
     model_version: str
+    recommended_sf: int = Field(..., ge=7, le=12)
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -113,38 +113,7 @@ class GatewayPatchRequest(BaseModel):
     is_public: bool | None = None
 
 
-# ── Survey upload ─────────────────────────────────────────────────────────
-
-
-class SurveyRecordIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    timestamp: datetime
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
-    rssi_dbm: float = Field(..., ge=-150, le=-30)
-    snr_db: float = Field(..., ge=-30, le=30)
-    spreading_factor: int = Field(..., ge=7, le=12)
-    frequency_mhz: float = Field(default=868.0)
-    device_id: str | None = Field(default=None, max_length=128)
-    serving_gateway_id: UUID | None = None
-
-
-class SurveyUploadRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    uploader_id: UUID
-    records: list[SurveyRecordIn] = Field(..., min_length=1, max_length=10_000)
-
-
-class SurveyUploadResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    batch_id: UUID
-    status: Literal["quarantined", "rejected"]
-    accepted_count: int
-    rejected_count: int
-    estimated_review_hours: int
+# ── Survey training (read-only) ───────────────────────────────────────────
 
 
 class SurveyTrainingPointResponse(BaseModel):
@@ -163,3 +132,88 @@ class SurveyTrainingListResponse(BaseModel):
 
     items: list[SurveyTrainingPointResponse]
     total: int
+
+
+# ── ChirpStack webhook ────────────────────────────────────────────────────
+
+
+class WebhookIngestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted_count: int = Field(..., ge=0)
+    inserted_count: int = Field(..., ge=0)
+    rejected_count: int = Field(..., ge=0)
+    rejected_reasons: list[str] = Field(default_factory=list)
+
+
+# ── Address lookup (F2 funnel) ────────────────────────────────────────────
+
+
+class AddressLookupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    address: str = Field(..., min_length=1, max_length=500, examples=[
+        "Số 1 Lý Thường Kiệt, Hải Châu, Đà Nẵng",
+    ])
+    spreading_factor: int = Field(default=7, ge=7, le=12)
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0
+
+
+class ResolvedAddressResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    latitude: float
+    longitude: float
+    display_name: str
+    provider: Literal["postgres", "nominatim", "vietmap", "goong", "google"]
+    confidence: float = Field(..., ge=0, le=1)
+
+
+class CoverageLookupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    address: ResolvedAddressResponse
+    prediction: PredictionResponse
+
+
+# ── Coverage batch (bulk lookup, F3 § /coverage/batch) ────────────────────
+
+
+class CoverageBatchItem(BaseModel):
+    """Mỗi phần tử là một input đơn — có thể là address text hoặc tọa độ."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    label: str | None = Field(default=None, max_length=200)
+    address: str | None = Field(default=None, min_length=1, max_length=500)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+class CoverageBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CoverageBatchItem] = Field(..., min_length=1, max_length=500)
+    spreading_factor: int = Field(default=7, ge=7, le=12)
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0
+
+
+class CoverageBatchItemResult(BaseModel):
+    """Per-item kết quả. status="ok" → có prediction; "error" → có error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None
+    status: Literal["ok", "error"]
+    address: ResolvedAddressResponse | None = None
+    prediction: PredictionResponse | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class CoverageBatchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CoverageBatchItemResult]
+    ok_count: int
+    error_count: int

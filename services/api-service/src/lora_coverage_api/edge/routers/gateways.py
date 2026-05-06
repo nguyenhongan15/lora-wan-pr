@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from ...application.repositories import GatewayDirectory
@@ -33,6 +34,22 @@ def _to_response(g: Gateway) -> GatewayResponse:
         tx_power_dbm=g.tx_power_dbm,
         frequency_mhz=g.frequency_mhz,
     )
+
+
+def _etag_for(g: Gateway) -> str:
+    """Weak ETag derived from mutable content.
+
+    Đủ cho optimistic concurrency: hai admin sửa cùng lúc → admin sau bị 412.
+    Không track delete vì gateway hiện không hỗ trợ DELETE.
+    """
+    payload = "|".join(
+        str(v) for v in (
+            g.id, g.name, g.altitude_m, g.antenna_height_m,
+            g.antenna_gain_dbi, g.tx_power_dbm, g.frequency_mhz,
+        )
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return f'W/"{digest}"'
 
 
 @router.get(
@@ -75,6 +92,7 @@ async def list_gateways(
 async def get_gateway(
     gateway_id: UUID,
     request: Request,
+    response: Response,
     directory: GatewayDirectory = Depends(gateway_directory),
 ) -> GatewayResponse | JSONResponse:
     g = directory.get_by_id(GatewayId(gateway_id))
@@ -91,6 +109,7 @@ async def get_gateway(
                 "traceId": getattr(request.state, "trace_id", None),
             },
         )
+    response.headers["ETag"] = _etag_for(g)
     return _to_response(g)
 
 
@@ -138,19 +157,37 @@ async def create_gateway(
 @router.patch(
     "/{gateway_id}",
     response_model=GatewayResponse,
-    responses={404: {"description": "Not found"}},
+    responses={
+        404: {"description": "Not found"},
+        412: {"description": "ETag mismatch"},
+        428: {"description": "If-Match header required"},
+    },
 )
 async def patch_gateway(
     gateway_id: UUID,
     payload: GatewayPatchRequest,
     request: Request,
+    response: Response,
     directory: GatewayDirectory = Depends(gateway_directory),
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> GatewayResponse | JSONResponse:
-    patch_dict: dict[str, object] = {
-        k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None
-    }
-    updated = directory.update(GatewayId(gateway_id), patch_dict)
-    if updated is None:
+    if if_match is None:
+        return JSONResponse(
+            status_code=428,
+            media_type="application/problem+json",
+            content={
+                "type": "about:blank",
+                "title": "Precondition required",
+                "status": 428,
+                "detail": "If-Match header bắt buộc khi PATCH gateway.",
+                "instance": str(request.url.path),
+                "code": "IF_MATCH_REQUIRED",
+                "traceId": getattr(request.state, "trace_id", None),
+            },
+        )
+
+    current = directory.get_by_id(GatewayId(gateway_id))
+    if current is None:
         return JSONResponse(
             status_code=404,
             media_type="application/problem+json",
@@ -163,4 +200,45 @@ async def patch_gateway(
                 "traceId": getattr(request.state, "trace_id", None),
             },
         )
+
+    current_etag = _etag_for(current)
+    # Parse If-Match list (RFC 7232) — accept "*" as wildcard.
+    if_match_clean = if_match.strip()
+    if if_match_clean != "*":
+        candidates = {tok.strip() for tok in if_match_clean.split(",")}
+        if current_etag not in candidates:
+            return JSONResponse(
+                status_code=412,
+                media_type="application/problem+json",
+                headers={"ETag": current_etag},
+                content={
+                    "type": "about:blank",
+                    "title": "Precondition failed",
+                    "status": 412,
+                    "detail": "Gateway đã bị sửa bởi user khác. Reload và thử lại.",
+                    "instance": str(request.url.path),
+                    "code": "ETAG_MISMATCH",
+                    "traceId": getattr(request.state, "trace_id", None),
+                },
+            )
+
+    patch_dict: dict[str, object] = {
+        k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None
+    }
+    updated = directory.update(GatewayId(gateway_id), patch_dict)
+    if updated is None:
+        # Race: gateway xóa giữa GET-current và UPDATE.
+        return JSONResponse(
+            status_code=404,
+            media_type="application/problem+json",
+            content={
+                "type": "about:blank",
+                "title": "Gateway not found",
+                "status": 404,
+                "instance": str(request.url.path),
+                "code": "GATEWAY_NOT_FOUND",
+                "traceId": getattr(request.state, "trace_id", None),
+            },
+        )
+    response.headers["ETag"] = _etag_for(updated)
     return _to_response(updated)

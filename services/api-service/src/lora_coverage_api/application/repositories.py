@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from ..domain.address import Address, AddressLookupResult
 from ..domain.coverage import Gateway, GatewayId, Prediction, Target
-from ..domain.errors import PredictionUnavailable
+from ..domain.errors import AddressLookupError, PredictionUnavailable
 from ..domain.result import Result
 from ..domain.survey import SurveyBatch, SurveyBatchId
 
@@ -66,7 +67,23 @@ class SurveyIngest(Protocol):
     """
 
     def write_quarantine(self, batch: SurveyBatch) -> SurveyBatchId:
-        """Insert toàn bộ records vào ts.survey_quarantine. Trả batch_id."""
+        """Insert toàn bộ records vào ts.survey_quarantine. Trả batch_id.
+
+        ID record sinh ngẫu nhiên (uuid4) — KHÔNG idempotent.
+        """
+        ...
+
+    def write_quarantine_idempotent(
+        self, batch: SurveyBatch, record_ids: Sequence[UUID]
+    ) -> int:
+        """Như `write_quarantine` nhưng ID do caller cung cấp + ON CONFLICT
+        DO NOTHING ở (timestamp, id).
+
+        Dùng cho ChirpStack webhook (network server có thể retry cùng uplink
+        khi mất ack). `record_ids` PHẢI cùng độ dài với `batch.records`.
+
+        Trả số record THỰC SỰ insert (đã trừ duplicate skip).
+        """
         ...
 
     def list_quarantine(
@@ -79,6 +96,7 @@ class SurveyIngest(Protocol):
         self,
         bbox: tuple[float, float, float, float] | None = None,
         limit: int = 1000,
+        device_id: str | None = None,
     ) -> Sequence[TrainingPoint]:
         """List promoted survey points cho map visualization."""
         ...
@@ -94,3 +112,31 @@ class TrainingPoint:
     snr_db: float
     spreading_factor: int
     serving_gateway_id: UUID | None
+
+
+class AddressResolution(Protocol):
+    """F2 funnel — input là chuỗi địa chỉ, output là toạ độ canonical.
+
+    Theo data-architecture.md §3.4. Cascade implementation (Postgres cache →
+    Nominatim → VietMap/Goong → Google) sống ở application/address_service.py;
+    Protocol này chỉ định nghĩa interface dùng cho coverage lookup endpoint.
+    """
+
+    def lookup(self, address: Address) -> Result[AddressLookupResult, AddressLookupError]:
+        """Trả toạ độ + display_name canonical, hoặc Err với code rõ ràng."""
+        ...
+
+
+class AddressCache(Protocol):
+    """Read/write cho address.canonical (tier 1 trong cascade).
+
+    Tách riêng khỏi `AddressResolution` để các tier khác (Nominatim) chỉ phụ
+    thuộc cache, không phụ thuộc cả service.
+    """
+
+    def get(self, normalized_query: str) -> AddressLookupResult | None:
+        ...
+
+    def put(self, normalized_query: str, hit: AddressLookupResult) -> None:
+        """Idempotent upsert. KHÔNG raise nếu key đã tồn tại."""
+        ...

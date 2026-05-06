@@ -3,13 +3,10 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, predictCoverage } from "../api/client.js";
 import { PredictionView } from "./PredictionView.jsx";
+import { strings } from "../strings.js";
 
-const PRESETS = [
-  { label: "Đà Nẵng (gần GW)", lat: 16.115, lng: 108.278 },
-  { label: "TP.HCM (gần GW)", lat: 10.7717, lng: 106.7042 },
-  { label: "Hà Nội (gần GW)", lat: 21.0303, lng: 105.8125 },
-  { label: "Cà Mau (xa GW)", lat: 9.179, lng: 105.15 },
-];
+const t = strings.predictForm;
+const PRESETS = t.presets;
 
 export function PredictForm() {
   const [lat, setLat] = useState("16.0544");
@@ -36,7 +33,7 @@ export function PredictForm() {
       <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-4">
         <label className="block">
           <span className="block text-sm font-medium text-slate-700">
-            Vĩ độ (°)
+            {t.fields.lat}
           </span>
           <input
             type="number"
@@ -49,7 +46,7 @@ export function PredictForm() {
         </label>
         <label className="block">
           <span className="block text-sm font-medium text-slate-700">
-            Kinh độ (°)
+            {t.fields.lng}
           </span>
           <input
             type="number"
@@ -62,7 +59,7 @@ export function PredictForm() {
         </label>
         <label className="block">
           <span className="block text-sm font-medium text-slate-700">
-            Spreading Factor
+            {t.fields.sf}
           </span>
           <select
             value={sf}
@@ -81,7 +78,7 @@ export function PredictForm() {
           disabled={m.isPending}
           className="self-end rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
         >
-          {m.isPending ? "Đang dự đoán…" : "Dự đoán"}
+          {m.isPending ? t.submitPending : t.submit}
         </button>
       </form>
 
@@ -108,7 +105,7 @@ export function PredictForm() {
           )}
           {m.error.problem.code && (
             <div className="mt-1 text-xs text-red-600">
-              code: {m.error.problem.code}
+              {t.errorCodeLabel}: {m.error.problem.code}
             </div>
           )}
         </div>

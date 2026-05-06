@@ -66,6 +66,23 @@ def _classify(rssi_dbm: float, snr_db: float, sf: int) -> CoverageStatus:
     return CoverageStatus.NO_COVERAGE
 
 
+# 3 dB margin trên SF limit để đảm bảo decode tin cậy (LoRa SNR có jitter).
+_SF_MARGIN_DB = 3.0
+
+
+def _recommend_sf(snr_db: float) -> int:
+    """SF nhỏ nhất vẫn decode được với 3 dB margin.
+
+    Theo business-logic.md §4.2 — Layer 2 trả "recommended_sf" cho engineer
+    biết nên cấu hình LoRaWAN MAC như thế nào. Không trả SF=7 mặc định khi
+    điều kiện thực tế đòi hỏi SF cao hơn — đó là điểm cốt lõi của khuyến nghị.
+    """
+    for sf in (7, 8, 9, 10, 11, 12):
+        if snr_db >= SF_SNR_LIMITS_DB[sf] + _SF_MARGIN_DB:
+            return sf
+    return 12  # Beyond SF12 limit — vẫn report SF12 (caller xử lý NO_COVERAGE).
+
+
 class PathLossModel(Protocol):
     """Tất cả model qua các Stage chia sẻ interface này."""
 
@@ -119,4 +136,5 @@ class Stage1LogDistanceModel:
             serving_gateway_id=gateway.id,
             confidence=Confidence(score=round(score, 3), method=ConfidenceMethod.EMPIRICAL),
             model_version=self.model_version,
+            recommended_sf=_recommend_sf(snr_db),
         )

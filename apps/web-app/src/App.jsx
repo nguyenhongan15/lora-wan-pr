@@ -1,43 +1,58 @@
 // @ts-check
 import { useState } from "react";
+import { AdminGateways } from "./components/AdminGateways.jsx";
+import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
-import { PredictForm } from "./components/PredictForm.jsx";
+import { strings } from "./strings.js";
 
-/** @typedef {"predict" | "map"} Tab */
+/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin"} Tab */
 
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
-  const isMap = tab === "map";
+  const t = strings.app;
 
   return (
     <div className="flex h-dvh flex-col">
       <header className="shrink-0 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between gap-4 px-6 py-3">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">
-              LoRa Coverage Vietnam
-            </h1>
-            <p className="text-xs text-slate-500">
-              v2 — Đà Nẵng pilot. Stage 1 + 200 survey points.
-            </p>
+            <h1 className="text-lg font-bold text-slate-900">{t.title}</h1>
+    
           </div>
           <nav className="flex gap-2">
-            <TabButton active={isMap} onClick={() => setTab("map")}>
-              Bản đồ phủ sóng
+            <TabButton active={tab === "map"} onClick={() => setTab("map")}>
+              {t.tabs.map}
             </TabButton>
-            <TabButton active={!isMap} onClick={() => setTab("predict")}>
-              Dự đoán điểm
+            <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
+              {t.tabs.heatmap}
             </TabButton>
+
+            <TabButton active={tab === "predict"} onClick={() => setTab("predict")}>
+              {t.tabs.predict}
+            </TabButton>
+            <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
+              {t.tabs.bulk}
+            </TabButton>
+            <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
+              {t.tabs.admin}
+            </TabButton>
+            
           </nav>
         </div>
       </header>
 
       <main className="min-h-0 flex-1">
-        {isMap ? (
-          <CoverageMap />
-        ) : (
-          <div className="mx-auto h-full max-w-6xl overflow-y-auto px-6 py-8">
-            <PredictForm />
+        {tab === "map" && <CoverageMap mode="points" />}
+        {tab === "heatmap" && <CoverageMap mode="heatmap" />}
+        {tab === "predict" && <CoverageMap mode="predict" />}
+        {tab === "bulk" && (
+          <div className="h-full overflow-y-auto">
+            <BulkLookup />
+          </div>
+        )}
+        {tab === "admin" && (
+          <div className="h-full overflow-y-auto">
+            <AdminGateways />
           </div>
         )}
       </main>

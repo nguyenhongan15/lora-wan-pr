@@ -1,0 +1,78 @@
+{
+  "deviceNames": [
+    "board01",
+    "node01",
+    "node3"
+  ],
+  "gateways": [
+    {
+      "altitude": null,
+      "gatewayId": "ac1f09fffe06fcf2",
+      "latitude": 16.054765682623003,
+      "longitude": 108.21985626414313
+    },
+    {
+      "altitude": null,
+      "gatewayId": "7276ff002e06029f",
+      "latitude": 16.0659959,
+      "longitude": 108.1532551
+    },
+    {
+      "altitude": null,
+      "gatewayId": "7276ff002e0507da",
+      "latitude": 16.0740935,
+      "longitude": 108.1524913
+    },
+    {
+      "altitude": null,
+      "gatewayId": "a84041ffff1ec39f",
+      "latitude": 16.0741086,
+      "longitude": 108.1525171
+    },
+    {
+      "altitude": 108.12857055664062,
+      "gatewayId": "ac1f09fffe00ab25",
+      "latitude": 16.11073,
+      "longitude": 108.12857
+    },
+    {
+      "altitude": 108.23986053466797,
+      "gatewayId": "ac1f09fffe0fd63b",
+      "latitude": 15.98571,
+      "longitude": 108.23986
+    },
+    {
+      "altitude": 108.27363586425781,
+      "gatewayId": "7276ff002e062cf2",
+      "latitude": 16.11829376220703,
+      "longitude": 108.27363586425781
+    },
+    {
+      "altitude": 108.22207641601562,
+      "gatewayId": "7276ff002e061f5b",
+      "latitude": 16.075590133666992,
+      "longitude": 108.22207641601562
+    },
+    {
+      "altitude": null,
+      "gatewayId": "a840411eebb44150",
+      "latitude": 16.0740984,
+      "longitude": 108.15253
+    },
+    {
+      "altitude": 108.15447998046875,
+      "gatewayId": "ac1f09fffe0fd629",
+      "latitude": 16.06815,
+      "longitude": 108.15448
+    },
+    {
+      "altitude": 108.2200927734375,
+      "gatewayId": "ac1f09fffe00ab20",
+      "latitude": 16.05469,
+      "longitude": 108.22009
+    }
+  ],
+  "message": "Success",
+  "token": "fef37d6c-b16e-4e22-9475-01e7f034887c",
+  "webhook_url": "/webhook/vanlic-dn"
+}

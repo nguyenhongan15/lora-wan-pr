@@ -5,6 +5,8 @@ KHÔNG hardcode default cho secrets. Default chỉ cho dev convenience.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,9 +37,59 @@ class Settings(BaseSettings):
     rate_limit_default: str = Field(default="60/minute")
     rate_limit_anon: str = Field(default="10/minute")
 
+    chirpstack_webhook_tokens: str = Field(
+        default="",
+        description=(
+            "Comma-separated 'token:uploader_uuid' pairs cho ChirpStack webhook auth. "
+            "Vd: 'abc123:11111111-1111-1111-1111-111111111111,def456:2222...'"
+        ),
+    )
+
+    # ── Geocoding cascade tier 3+ (paid, VN-first) ────────────────────────
+    # Để rỗng → service skip tier đó. Có key → wire vào cascade fallback
+    # sau Nominatim (xem application/address_service.py + edge/deps.py).
+    vietmap_api_key: str = Field(
+        default="",
+        description="VietMap geocoding API key. Empty = disabled.",
+    )
+    goong_api_key: str = Field(
+        default="",
+        description="Goong geocoding API key. Empty = disabled.",
+    )
+
+    # ── F2 SLO ────────────────────────────────────────────────────────────
+    # P95 lookup end-to-end latency (geocode + predict + render). Theo
+    # business-logic.md §8.2 — operating-level SLA, không phải target.
+    lookup_slo_seconds: float = Field(
+        default=3.0,
+        description="P95 lookup end-to-end latency budget. >ngưỡng → SLO violation.",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+    @property
+    def chirpstack_webhook_token_map(self) -> dict[str, UUID]:
+        """Parse `chirpstack_webhook_tokens` env → {token: uploader_uuid}.
+
+        Pair sai format hoặc UUID không hợp lệ → bị bỏ qua âm thầm
+        (start-up không fail vì 1 dòng env xấu, log đã bắn ở chỗ kiểm tra).
+        """
+        out: dict[str, UUID] = {}
+        for entry in self.chirpstack_webhook_tokens.split(","):
+            s = entry.strip()
+            if not s or ":" not in s:
+                continue
+            token, uid = s.split(":", 1)
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                out[token] = UUID(uid.strip())
+            except ValueError:
+                continue
+        return out
 
 
 def get_settings() -> Settings:

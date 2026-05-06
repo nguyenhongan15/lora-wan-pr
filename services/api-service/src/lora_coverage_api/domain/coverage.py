@@ -68,12 +68,15 @@ class Prediction:
     serving_gateway_id: GatewayId | None
     confidence: Confidence
     model_version: str
+    recommended_sf: int  # SF nhỏ nhất vẫn đảm bảo SNR ≥ SF limit + 3dB margin
 
     def __post_init__(self) -> None:
         # Hard invariant: confidence luôn phải có (đã enforce qua type, nhưng
         # double-check để bắt lỗi runtime nếu có ai bypass type check).
         if self.confidence is None:  # type: ignore[redundant-expr]
             raise ValueError("Prediction.confidence is required")
+        if self.recommended_sf not in (7, 8, 9, 10, 11, 12):
+            raise ValueError(f"invalid recommended_sf: {self.recommended_sf}")
 
 
 @dataclass(frozen=True, slots=True)

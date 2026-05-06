@@ -16,3 +16,16 @@ class PredictionErrorCode(str, Enum):
 class PredictionUnavailable:
     code: PredictionErrorCode
     message: str
+
+
+class AddressLookupErrorCode(str, Enum):
+    NOT_FOUND = "ADDRESS_NOT_FOUND"
+    OUT_OF_REGION = "ADDRESS_OUT_OF_REGION"
+    PROVIDER_UNAVAILABLE = "GEOCODING_PROVIDER_UNAVAILABLE"
+    RATE_LIMITED = "GEOCODING_RATE_LIMITED"
+
+
+@dataclass(frozen=True, slots=True)
+class AddressLookupError:
+    code: AddressLookupErrorCode
+    message: str

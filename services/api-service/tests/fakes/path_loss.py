@@ -40,4 +40,5 @@ class FakePathLossModel:
             serving_gateway_id=gateway.id,
             confidence=Confidence(score=0.5, method=ConfidenceMethod.EMPIRICAL),
             model_version=self.model_version,
+            recommended_sf=target.spreading_factor,
         )

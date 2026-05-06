@@ -13,15 +13,17 @@ jobs:
       run:
         working-directory: services/api-service
     services:
+      # PostGIS + TimescaleDB cùng 1 image (theo docker-compose.yml).
+      # Migration 0001 cần CREATE EXTENSION postgis; image -ts2.17-all đã có sẵn.
       postgres:
-        image: timescale/timescaledb-ha:pg17
+        image: timescale/timescaledb-ha:pg17-ts2.17-all
         env:
           POSTGRES_USER: lora
           POSTGRES_PASSWORD: test
           POSTGRES_DB: lora_coverage
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U lora"
+          --health-cmd "pg_isready -U lora -d lora_coverage"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -73,6 +75,45 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
         run: uv run pytest -v
+
+  docker-build:
+    # Smoke-build container image — đảm bảo Dockerfile vẫn build được
+    # (đa-stage, non-root, healthcheck) theo rule-design-containers.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build api-service image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: services/api-service
+          file: services/api-service/Dockerfile
+          push: false
+          load: true
+          tags: lora-coverage-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test image starts
+        run: |
+          docker run --rm --name api-smoke -d -p 8000:8000 \
+            -e DATABASE_URL=postgresql+psycopg://lora:test@127.0.0.1:5432/none \
+            lora-coverage-api:ci
+          # Đợi tối đa 15s rồi kill — chỉ cần process khởi động không crash.
+          for i in $(seq 1 15); do
+            if docker ps --filter name=api-smoke --filter status=running -q | grep -q .; then
+              echo "container running after ${i}s"
+              docker logs api-smoke | tail -20
+              docker stop api-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container failed to start"
+          docker logs api-smoke || true
+          exit 1
 
   web-app:
     runs-on: ubuntu-latest

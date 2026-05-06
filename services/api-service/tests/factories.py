@@ -89,6 +89,7 @@ def make_prediction(
     confidence_score: float = 0.85,
     confidence_method: ConfidenceMethod = ConfidenceMethod.EMPIRICAL,
     model_version: str = "stage1-test-v0",
+    recommended_sf: int = 7,
 ) -> Prediction:
     return Prediction(
         rssi_dbm=rssi_dbm,
@@ -97,6 +98,7 @@ def make_prediction(
         serving_gateway_id=serving_gateway_id or make_gateway_id(),
         confidence=Confidence(score=confidence_score, method=confidence_method),
         model_version=model_version,
+        recommended_sf=recommended_sf,
     )
 
 
