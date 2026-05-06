@@ -35,7 +35,7 @@ def test_predict_near_danang_gateway(client: TestClient) -> None:
             "latitude": 16.115,
             "longitude": 108.278,
             "spreading_factor": 7,
-            "frequency_mhz": 868.0,
+            "frequency_mhz": 923.0,
         },
     )
     assert r.status_code == 200, r.text
