@@ -248,7 +248,6 @@ Code-location rules:
 - ❌ **Do not** put training scripts in `scripts/` at the repo root (that folder is for ops scripts like `seed_gateways.py`). Create `services/ml-service/src/lora_coverage_ml/training/` or a similar subfolder.
 - ❌ **Do not** commit datasets / weights / `.hgt` / ONNX files into git. `.gitignore` must cover `services/ml-service/data/` and `services/ml-service/models/`.
 - ❌ **Do not** modify `.env.test`. If you need ML-specific env vars, use the `ML_` prefix in your local `.env`.
-- ❌ **Do not** touch `u-work/`, `thumucluucacfilemdcu/`, `.claude/` — these are not part of the project codebase.
 - ✅ Exploratory notebooks go in `services/ml-service/notebooks/` (create it). Gitignore outputs; only commit `.ipynb` files with cleared cell output.
 
 ## 6. Documents to read before writing code
