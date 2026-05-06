@@ -141,8 +141,8 @@ def main() -> int:
             skip_no_rxinfo += 1
             continue
 
-        tx = (rec.get("txInfo") or {})
-        lora = ((tx.get("modulation") or {}).get("lora") or {})
+        tx = rec.get("txInfo") or {}
+        lora = (tx.get("modulation") or {}).get("lora") or {}
         sf = lora.get("spreadingFactor")
         if sf is None or not (SF_MIN <= int(sf) <= SF_MAX):
             skip_no_sf += 1

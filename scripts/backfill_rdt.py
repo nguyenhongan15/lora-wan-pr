@@ -85,8 +85,7 @@ def main() -> int:
     uploader_raw = os.environ.get("BACKFILL_UPLOADER_ID")
     if not uploader_raw:
         print(
-            "ERROR: BACKFILL_UPLOADER_ID chưa set "
-            "(uuid của uploader để gắn vào quarantine rows).",
+            "ERROR: BACKFILL_UPLOADER_ID chưa set (uuid của uploader để gắn vào quarantine rows).",
             file=sys.stderr,
         )
         return 2
@@ -116,9 +115,7 @@ def main() -> int:
         total_ins += ins
         total_rej += rej
 
-    print(
-        f"\nTotal: accepted={total_acc}  inserted={total_ins}  rejected={total_rej}"
-    )
+    print(f"\nTotal: accepted={total_acc}  inserted={total_ins}  rejected={total_rej}")
     return 0
 
 
