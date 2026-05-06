@@ -34,7 +34,6 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SEED_FILE = REPO_ROOT / "r-dt" / "response_1777987688423.json"
 

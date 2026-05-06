@@ -43,13 +43,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine, text
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SEED_FILE = REPO_ROOT / "r-dt" / "response_1777987550466.json"

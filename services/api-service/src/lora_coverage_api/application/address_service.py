@@ -21,7 +21,6 @@ class GeocodingClient(Protocol):
     Trả None nếu không tìm thấy; raise GeocodingProviderUnavailableError nếu
     provider lỗi (rate-limit, timeout, 5xx).
     """
-
     provider=GeocodingProvider.CACHE,
 
     def search(self, query: str) -> AddressLookupResult | None: ...
