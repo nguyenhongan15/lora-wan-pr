@@ -1,7 +1,7 @@
 {
     "extends": "./jsconfig.json",
     "compilerOptions": {
-      "module": "node16",
-      "moduleResolution": "node16"
-    }
+      "moduleResolution": "node"
+    },
+    "exclude": ["node_modules", "dist", "vite.config.js"]
   }
