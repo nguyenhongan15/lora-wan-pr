@@ -1,5 +1,5 @@
 // @ts-check
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -290,6 +290,10 @@ export function CoverageMap({ mode = "points" }) {
       map.remove();
       mapRef.current = null;
     };
+    // Map init 1 lần duy nhất khi mount; mode được "đóng băng" qua closure
+    // (mỗi tab unmount/mount component riêng nên mode constant per-mount),
+    // surveysQ.data có effect riêng phía dưới handle update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Survey: 1 lệnh setData() trên GeoJSON source thay vì 4k+ HTML markers.
@@ -345,12 +349,9 @@ export function CoverageMap({ mode = "points" }) {
    *    RSSI / SNR / Confidence + link gateway phục vụ.
    * Theo business-logic.md §4.2 — dual-layer rule cho 1 feature phục vụ
    * cả end-user (Layer 1) lẫn kỹ sư P1/P2 (Layer 2).
-   * @param {number} lat
-   * @param {number} lng
-   * @param {import("../api/client.js").PredictionT} prediction
-   * @param {number} sfUsed SF user chọn lúc dự đoán (để so với recommended).
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number) => HTMLDivElement}
    */
-  function buildPopupNode(lat, lng, prediction, sfUsed) {
+  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed) => {
     const root = document.createElement("div");
     root.style.cssText = "font:12px/1.4 system-ui;max-width:280px";
 
@@ -442,17 +443,16 @@ export function CoverageMap({ mode = "points" }) {
     });
 
     return root;
-  }
+  }, []);
+  // Deps rỗng: hàm chỉ đọc refs (gatewaysRef, mapRef) và module-level
+  // constants (STATUS_COLOR, STATUS_LABEL, t) — không có reactive state.
 
   /**
    * Pure marker-drawing helper — không phụ thuộc state, chỉ dùng refs.
    * Cho phép gọi từ effect mà không gây stale closure.
-   * @param {number} lat
-   * @param {number} lng
-   * @param {import("../api/client.js").PredictionT} prediction
-   * @param {number} sfUsed
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number) => void}
    */
-  function drawSearchMarker(lat, lng, prediction, sfUsed) {
+  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed) => {
     const map = mapRef.current;
     if (!map) return;
 
@@ -483,7 +483,8 @@ export function CoverageMap({ mode = "points" }) {
     searchMarkerRef.current = marker;
 
     map.flyTo({ center: [lng, lat], zoom: 14 });
-  }
+  }, [buildPopupNode]);
+  // Phụ thuộc buildPopupNode (đã stable nhờ useCallback ở trên).
 
   // Initial URL deep-link: predict 1 lần sau khi map mount.
   // Chỉ tab "Dự đoán điểm" mới tiêu thụ URL state — tab "Bản đồ điểm đo" và
@@ -512,7 +513,7 @@ export function CoverageMap({ mode = "points" }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [mode, drawSearchMarker]);
 
   /**
    * Predict mode: chạy prediction từ pickedCoords + SF hiện tại, vẽ marker
@@ -567,7 +568,7 @@ export function CoverageMap({ mode = "points" }) {
     return () => {
       cancelled = true;
     };
-  }, [sf]);
+  }, [sf, drawSearchMarker]);
 
   return (
     <div className="h-full w-full">
