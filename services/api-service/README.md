@@ -98,6 +98,26 @@ uv run pytest tests/integration -v             # cần DB test sẵn sàng
 là local-only và chỉ dùng cho DB test — KHÔNG bao giờ tái sử dụng cho DB
 dev hay staging/production.
 
+## Bootstrap admin (plan-auth-v1 §3.5)
+
+`/api/v1/admin/*` yêu cầu `is_admin=true`. Không có endpoint tự promote —
+admin đầu tiên phải set thủ công trong DB sau khi register thường:
+
+```bash
+# 1. Register user qua API như mọi user khác:
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"<strong-pw>"}'
+
+# 2. Promote bằng SQL (cần DB role có UPDATE quyền lên auth.users):
+docker exec lora-wan-db psql -U lora_user -d lora_coverage \
+  -c "UPDATE auth.users SET is_admin = true WHERE email = 'admin@example.com';"
+```
+
+Self-protection: admin KHÔNG thể tự sửa `is_admin`/`disabled` của chính
+mình qua API (`AdminSelfModificationError` 400). Demote/disable admin cuối
+cùng → SQL trực tiếp.
+
 ## Hard invariants (CI enforced)
 
 - `application/` không import `infrastructure/` (import-linter)

@@ -8,15 +8,20 @@ KHÔNG quản lý linked external sources — đó là Step 6 (`linking/`).
 """
 
 from .errors import (
+    AdminRequiredError,
+    AdminSelfModificationError,
     EmailAlreadyExistsError,
     IdentityError,
     InvalidCredentialsError,
     TokenExpiredError,
     UserDisabledError,
+    UserNotFoundError,
 )
 from .service import AuthToken, IdentityService, User
 
 __all__ = [
+    "AdminRequiredError",
+    "AdminSelfModificationError",
     "AuthToken",
     "EmailAlreadyExistsError",
     "IdentityError",
@@ -25,4 +30,5 @@ __all__ = [
     "TokenExpiredError",
     "User",
     "UserDisabledError",
+    "UserNotFoundError",
 ]

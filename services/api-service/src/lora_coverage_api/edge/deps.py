@@ -16,7 +16,12 @@ from ..application.address_service import (
     GeocodingClient,
 )
 from ..application.coverage_service import CoverageQueryService
-from ..application.identity import IdentityService, InvalidCredentialsError, User
+from ..application.identity import (
+    AdminRequiredError,
+    IdentityService,
+    InvalidCredentialsError,
+    User,
+)
 from ..application.linking import CredentialCipher, LinkingService
 from ..application.path_loss import Stage1LogDistanceModel
 from ..application.repositories import (
@@ -127,6 +132,18 @@ def current_user(
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
         return identity.current_user(conn, token)
+
+
+def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
+    """Gate cho /admin/*. Resolve current_user trước rồi assert is_admin.
+
+    Tách khỏi `current_user` để route nào không cần admin vẫn dùng dep gốc,
+    còn route admin gắn thêm dep này — FastAPI cache User instance qua scope
+    request nên không double-fetch.
+    """
+    if not user.is_admin:
+        raise AdminRequiredError("Endpoint yêu cầu quyền admin")
+    return user
 
 
 # ── Linking (plan-auth-v1 §3.3) ───────────────────────────────────────────

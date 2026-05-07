@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ── Coverage prediction ───────────────────────────────────────────────────
 
@@ -332,3 +332,73 @@ class SyncResultResponse(BaseModel):
     measurements_updated: int = Field(..., ge=0)
     last_sync_at: datetime | None
     error: str | None
+
+
+class SyncReportResponse(BaseModel):
+    """Aggregate kết quả admin global sync (plan §3.4 sync_all_eligible)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SyncResultResponse]
+    total: int = Field(..., ge=0)
+    successes: int = Field(..., ge=0)
+    failures: int = Field(..., ge=0)
+
+
+# ── Admin (plan-auth-v1 §3.5, §11 step 8) ─────────────────────────────────
+# Chỉ admin (is_admin=true) gọi được. Audit log + RFC 7807 errors qua
+# AdminRequiredError (403) / AdminSelfModificationError (400).
+
+
+class UserAdminResponse(BaseModel):
+    """User listing cho /admin/users — bao gồm quản lý + thống kê đóng góp."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    email: str
+    is_admin: bool
+    disabled: bool
+    created_at: datetime
+    contribution_count: int = Field(..., ge=0)
+
+
+class UserListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[UserAdminResponse]
+    total: int = Field(..., ge=0)
+
+
+class UserPatchRequest(BaseModel):
+    """Partial update is_admin / disabled. Cả 2 None → 422.
+
+    Self-modification (admin sửa chính mình) được xử lý ở router thay vì
+    schema vì cần biết caller — schema chỉ check shape.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_admin: bool | None = None
+    disabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> UserPatchRequest:
+        if self.is_admin is None and self.disabled is None:
+            raise ValueError("Cần ít nhất 1 trong is_admin hoặc disabled")
+        return self
+
+
+class AdminStatsResponse(BaseModel):
+    """Counters tổng cho /admin/stats. Snapshot tại thời điểm query —
+    không phải transactional aggregate đối với insert/delete đồng thời.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_count: int = Field(..., ge=0)
+    active_user_count: int = Field(..., ge=0)
+    linked_source_count: int = Field(..., ge=0)
+    active_source_count: int = Field(..., ge=0)
+    gateway_count: int = Field(..., ge=0)
+    measurement_count: int = Field(..., ge=0)

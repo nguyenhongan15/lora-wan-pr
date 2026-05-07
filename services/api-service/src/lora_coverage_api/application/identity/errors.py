@@ -37,3 +37,29 @@ class UserDisabledError(IdentityError):
 
     http_status = 403
     code = "user_disabled"
+
+
+class UserNotFoundError(IdentityError):
+    """Admin truy vấn user_id không tồn tại trong DB."""
+
+    http_status = 404
+    code = "user_not_found"
+
+
+class AdminRequiredError(IdentityError):
+    """Endpoint yêu cầu is_admin=true nhưng caller không có quyền."""
+
+    http_status = 403
+    code = "admin_required"
+
+
+class AdminSelfModificationError(IdentityError):
+    """Admin tự sửa is_admin/disabled của chính mình.
+
+    Self-protection: tránh trường hợp admin cuối cùng tự revoke quyền hoặc tự
+    disable → không còn ai vào /admin được. Không yêu cầu kiểm tra "admin
+    cuối cùng" cụ thể (race-prone) — chặn mọi self-modification là đủ.
+    """
+
+    http_status = 400
+    code = "admin_self_modification"
