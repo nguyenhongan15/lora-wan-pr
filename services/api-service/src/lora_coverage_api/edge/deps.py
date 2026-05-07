@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from fastapi import Depends, Header
 from sqlalchemy import Engine
 
 from ..application.address_service import (
@@ -14,6 +15,7 @@ from ..application.address_service import (
     GeocodingClient,
 )
 from ..application.coverage_service import CoverageQueryService
+from ..application.identity import IdentityService, InvalidCredentials, User
 from ..application.path_loss import Stage1LogDistanceModel
 from ..application.repositories import (
     AddressResolution,
@@ -90,3 +92,39 @@ def address_resolution() -> AddressResolution:
         nominatim=_nominatim(),
         fallbacks=_geocoding_fallbacks(),
     )
+
+
+# ── Identity (plan-auth-v1 §3.1) ──────────────────────────────────────────
+
+
+@lru_cache(maxsize=1)
+def _identity_service() -> IdentityService:
+    s = _settings()
+    return IdentityService(jwt_secret=s.jwt_secret, jwt_ttl_hours=s.jwt_ttl_hours)
+
+
+def identity_service() -> IdentityService:
+    return _identity_service()
+
+
+def _extract_bearer(authorization: str | None) -> str:
+    if not authorization:
+        raise InvalidCredentials("Thiếu Authorization header")
+    parts = authorization.split(maxsplit=1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise InvalidCredentials("Authorization header phải dạng 'Bearer <token>'")
+    return parts[1].strip()
+
+
+def current_user(
+    authorization: str | None = Header(default=None),
+    identity: IdentityService = Depends(identity_service),
+) -> User:
+    """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn.
+
+    Application-layer exceptions (InvalidCredentials/TokenExpired/UserDisabled)
+    propagate qua handler ở edge/errors.py — không cần try/except ở route.
+    """
+    token = _extract_bearer(authorization)
+    with _engine().begin() as conn:
+        return identity.current_user(conn, token)

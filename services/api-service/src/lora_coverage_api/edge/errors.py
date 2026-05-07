@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..application.errors import ApplicationError
+
 
 def _trace_id_of(request: Request) -> str:
     return (
@@ -19,6 +21,27 @@ def _trace_id_of(request: Request) -> str:
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(ApplicationError)
+    async def on_application_error(
+        request: Request, exc: ApplicationError
+    ) -> JSONResponse:
+        # Plan-auth-v1 §8.1+§8.2: 1 handler duy nhất cho mọi subclass. Routes
+        # không phải try/except; adapter raise đúng class — handler tự map
+        # http_status + code → RFC 7807.
+        return JSONResponse(
+            status_code=exc.http_status,
+            media_type="application/problem+json",
+            content={
+                "type": "about:blank",
+                "title": exc.__class__.__name__,
+                "status": exc.http_status,
+                "detail": str(exc) or None,
+                "instance": str(request.url.path),
+                "code": exc.code,
+                "traceId": _trace_id_of(request),
+            },
+        )
+
     @app.exception_handler(RequestValidationError)
     async def on_validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

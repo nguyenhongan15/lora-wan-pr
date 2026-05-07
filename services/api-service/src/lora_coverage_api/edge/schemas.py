@@ -6,6 +6,7 @@ rule-design-restfulapi.md §6).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -225,3 +226,41 @@ class CoverageBatchResponse(BaseModel):
     items: list[CoverageBatchItemResult]
     ok_count: int
     error_count: int
+
+
+# ── Auth (plan-auth-v1 §3.1) ──────────────────────────────────────────────
+# Email regex chỉ check shape tối thiểu (có '@', có TLD). Validation thật
+# nằm ở DB unique constraint + (v2) email verification flow.
+
+_EMAIL_PATTERN = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    email: str = Field(..., min_length=3, max_length=320, pattern=_EMAIL_PATTERN)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    email: str
+    is_admin: bool
+    created_at: datetime
+
+
+class TokenResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    token_type: Literal["bearer"]
+    expires_at: datetime

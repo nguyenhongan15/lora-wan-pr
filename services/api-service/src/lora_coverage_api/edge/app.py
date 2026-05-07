@@ -13,6 +13,7 @@ from ..config import get_settings
 from .errors import register_error_handlers
 from .metrics import metrics_endpoint, metrics_middleware
 from .middleware import trace_and_log
+from .routers import auth as auth_router
 from .routers import coverage as coverage_router
 from .routers import gateways as gateways_router
 from .routers import health as health_router
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     app.include_router(health_router.router)
+    app.include_router(auth_router.router)
     app.include_router(coverage_router.router)
     app.include_router(gateways_router.router)
     app.include_router(survey_router.router)

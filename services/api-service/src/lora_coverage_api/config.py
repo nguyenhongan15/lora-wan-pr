@@ -32,6 +32,21 @@ class Settings(BaseSettings):
         description="Comma-separated; strict whitelist (xem rule-design-cors.md).",
     )
 
+    # ── Identity (plan-auth-v1 §3.1) ──────────────────────────────────────
+    # Required: app fail-fast nếu thiếu, không có dev fallback. Ai cũng có
+    # thể gen `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+    jwt_secret: str = Field(
+        ...,
+        min_length=32,
+        description="HS256 signing key cho access token. Bắt buộc — không default.",
+    )
+    jwt_ttl_hours: int = Field(
+        default=24,
+        ge=1,
+        le=720,
+        description="Access token TTL (giờ). v1 không có refresh nên TTL dài hơn.",
+    )
+
     ml_model_version: str = Field(default="stage1-loglike-v0.1.0")
 
     rate_limit_default: str = Field(default="60/minute")
