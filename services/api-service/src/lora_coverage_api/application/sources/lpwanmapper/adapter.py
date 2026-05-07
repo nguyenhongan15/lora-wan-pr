@@ -61,8 +61,8 @@ class LpwanmapperSource(DataSource):
                 if since is None or rec.time > since:
                     yield rec
 
-    def _fetch_data_with_reauth(self, handle: dict) -> list[dict]:
-        client = handle["client"]
+    def _fetch_data_with_reauth(self, handle: dict[str, Any]) -> list[dict[str, Any]]:
+        client: _client.Client = handle["client"]
         try:
             return client.get_recent_data(handle["token"], limit=_FETCH_LIMIT)
         except _client._AuthExpiredError:

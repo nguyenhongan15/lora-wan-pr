@@ -16,7 +16,7 @@ Quyết định:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -94,6 +94,6 @@ class Client:
         if not isinstance(data, list):
             # API có thể wrap trong {"data": [...]} — accept cả 2 dạng.
             if isinstance(data, dict) and isinstance(data.get("data"), list):
-                return data["data"]
+                return cast(list[dict[str, Any]], data["data"])
             raise SourceFetchError(f"/data expected list, got {type(data).__name__}")
         return data
