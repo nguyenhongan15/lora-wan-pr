@@ -15,9 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  # ─────────────────────────────────────────────────────────────
   # 1) Phát hiện đường dẫn thay đổi → skip job không liên quan.
-  # ─────────────────────────────────────────────────────────────
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -48,11 +46,6 @@ jobs:
               - 'services/api-service/**'
               - '.github/workflows/ci.yml'
 
-  # ─────────────────────────────────────────────────────────────
-  # 2) Lint song song — KHÔNG cần Postgres → khởi động cực nhanh.
-  #    Mỗi task chạy trên runner riêng, fail-fast: false để thấy
-  #    hết lỗi trong 1 lần push.
-  # ─────────────────────────────────────────────────────────────
   api-lint:
     name: api-lint / ${{ matrix.task.name }}
     needs: changes
@@ -112,13 +105,6 @@ jobs:
       - name: Run ${{ matrix.task.name }}
         run: ${{ matrix.task.cmd }}
 
-  # ─────────────────────────────────────────────────────────────
-  # 3) Test có DB — chạy SONG SONG với api-lint.
-  #    Image `timescaledb-ha:pg17-ts2.17-all` ~1 GB → cache lại để
-  #    từ lần 2 trở đi không phải pull (giảm ~50–60s/run).
-  #    Phải dùng `docker run` thủ công thay vì `services:` block,
-  #    vì services block luôn pull fresh, không tận dụng được cache.
-  # ─────────────────────────────────────────────────────────────
   api-test:
     needs: changes
     if: needs.changes.outputs.api == 'true'
@@ -127,13 +113,6 @@ jobs:
       DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
     steps:
       - uses: actions/checkout@v4
-
-      # Cache toàn bộ image qua `docker save`/`docker load`.
-      # Bump suffix `-v1` lên `-v2` khi muốn ép pull lại (vd image update).
-      - name: Cache Postgres image
-        uses: ScribeMD/docker-cache@0.5.0
-        with:
-          key: docker-${{ runner.os }}-timescaledb-ha-pg17-ts2.17-all-v1
 
       - name: Start Postgres
         run: |
@@ -153,10 +132,6 @@ jobs:
 
       - uses: ./.github/actions/setup-python-uv
 
-      # Gộp 2 step thành 1 → bớt 1 lần spawn `uv run`.
-      # `seed_gateways.py` nằm ở `<repo-root>/scripts/`, không phải trong service.
-      # Không cần `--project` vì `--all-packages` ở composite action đã
-      # editable-install lora_coverage_api vào root .venv (script vẫn import được).
       - name: Migrate + seed
         run: |
           uv run alembic -c migrations/alembic.ini upgrade head
@@ -169,10 +144,6 @@ jobs:
         if: always()
         run: docker rm -f postgres-ci || true
 
-  # ─────────────────────────────────────────────────────────────
-  # 4) Smoke build container — đảm bảo Dockerfile vẫn build được
-  #    (đa-stage, non-root, healthcheck) theo rule-design-containers.md.
-  # ─────────────────────────────────────────────────────────────
   docker-build:
     needs: changes
     if: needs.changes.outputs.docker == 'true'
@@ -211,9 +182,6 @@ jobs:
           docker logs api-smoke || true
           exit 1
 
-  # ─────────────────────────────────────────────────────────────
-  # 5) Frontend.
-  # ─────────────────────────────────────────────────────────────
   web-app:
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -242,12 +210,6 @@ jobs:
           npm run jsdoc-check
           npm run build
 
-  # ─────────────────────────────────────────────────────────────
-  # 6) Aggregation job cho branch protection.
-  #    Vì các job kia có `if:` (skip khi không liên quan), GitHub
-  #    branch protection không tự coi "skipped == ok" — phải có
-  #    1 job tổng hợp như thế này làm required check.
-  # ─────────────────────────────────────────────────────────────
   ci:
     if: always()
     needs: [changes, api-lint, api-test, docker-build, web-app]
