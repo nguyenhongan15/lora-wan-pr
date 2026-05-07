@@ -55,7 +55,7 @@ def _load_creds() -> tuple[str, str]:
     if not ENV_FILE.exists():
         print(f"ERROR: thiếu {ENV_FILE.name}", file=sys.stderr)
         sys.exit(2)
-    from dotenv import load_dotenv  # noqa: PLC0415
+    from dotenv import load_dotenv
 
     load_dotenv(ENV_FILE, override=False)
     email = os.environ.get("LPWANMAPPER_EMAIL", "").strip()
@@ -74,13 +74,13 @@ def main() -> int:
     email, password = _load_creds()
 
     # Lazy import — chỉ load app deps sau khi pre-checks pass.
-    from lora_coverage_api.application.sources import (  # noqa: PLC0415
+    from lora_coverage_api.application.sources import (
         SourceAuthError,
         SourceFetchError,
         SourceUnreachableError,
         get_adapter,
     )
-    from lora_coverage_api.application.sync import (  # noqa: PLC0415
+    from lora_coverage_api.application.sync import (
         upsert_gateway,
         upsert_measurement,
     )
@@ -166,7 +166,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[sync] interrupted", file=sys.stderr)
         sys.exit(130)
-    except Exception:  # noqa: BLE001
+    except Exception:
         print("[FAIL] unexpected:", file=sys.stderr)
         traceback.print_exc()
         sys.exit(9)

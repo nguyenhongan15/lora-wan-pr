@@ -6,6 +6,7 @@ Edge là chỗ DUY NHẤT biết tới infrastructure. Application chỉ thấy 
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
 from fastapi import Depends, Header
 from sqlalchemy import Engine
@@ -41,7 +42,6 @@ def _settings() -> Settings:
 def settings_dep() -> Settings:
     """FastAPI dependency wrapper — đời sống = process (qua lru_cache)."""
     return _settings()
-
 
 @lru_cache(maxsize=1)
 def _engine() -> Engine:
@@ -117,14 +117,11 @@ def _extract_bearer(authorization: str | None) -> str:
 
 
 def current_user(
-    authorization: str | None = Header(default=None),
-    identity: IdentityService = Depends(identity_service),
+    identity: Annotated[IdentityService, Depends(identity_service)],
+    authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn.
-
-    Application-layer exceptions (InvalidCredentials/TokenExpired/UserDisabled)
-    propagate qua handler ở edge/errors.py — không cần try/except ở route.
-    """
+    """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn."""
+    ...
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
         return identity.current_user(conn, token)

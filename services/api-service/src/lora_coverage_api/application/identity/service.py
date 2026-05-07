@@ -41,7 +41,7 @@ class User:
 class AuthToken:
     access_token: str
     expires_at: datetime
-    token_type: str = "bearer"  # noqa: S105 — RFC 6750 literal, not a secret
+    token_type: str = "bearer"
 
 
 _INSERT_USER = text("""

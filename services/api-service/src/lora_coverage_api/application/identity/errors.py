@@ -16,27 +16,19 @@ class IdentityError(ApplicationError):
     http_status = 401
     code = "identity_error"
 
-
-class InvalidCredentials(IdentityError):
+class InvalidCredentialsError(IdentityError):
     """Email/password sai, token sai signature, hoặc token malformed."""
 
-    code = "invalid_credentials"
+class TokenExpiredError(IdentityError):
+    """JWT exp < now. Phân biệt khỏi InvalidCredentialsError để frontend biết khi nào re-login."""
 
-
-class TokenExpired(IdentityError):
-    """JWT exp < now. Phân biệt khỏi InvalidCredentials để frontend biết khi nào re-login."""
-
-    code = "token_expired"
-
-
-class EmailAlreadyExists(IdentityError):
+class EmailAlreadyExistsError(IdentityError):
     """Register với email đã tồn tại."""
 
     http_status = 409
     code = "email_already_exists"
 
-
-class UserDisabled(IdentityError):
+class UserDisabledError(IdentityError):
     """Login thành công về password nhưng user bị admin disable."""
 
     http_status = 403
