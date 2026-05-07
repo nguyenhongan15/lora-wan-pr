@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from lora_coverage_api.application.repositories import TrainingPoint
+from lora_coverage_api.application.repositories import ContributorSpec, TrainingPoint
 from lora_coverage_api.domain.survey import SurveyBatch, SurveyBatchId
 
 
@@ -50,9 +50,12 @@ class FakeSurveyIngest:
 
     def list_training(
         self,
+        *,
+        contributor: ContributorSpec,
         bbox: tuple[float, float, float, float] | None = None,
         limit: int = 1000,
         device_id: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[TrainingPoint]:
         items = self._training
         if bbox is not None:
@@ -62,9 +65,10 @@ class FakeSurveyIngest:
                 for p in items
                 if min_lon <= p.longitude <= max_lon and min_lat <= p.latitude <= max_lat
             ]
-        # Fake không track device_id trên TrainingPoint — accept arg để giữ
-        # đúng signature Protocol, ignore filter (test in-mem chưa cần).
-        _ = device_id
+        # Fake không track device_id/contributor/source_type trên TrainingPoint
+        # — accept arg để giữ đúng signature Protocol, ignore filter ở
+        # in-mem layer (tests có thể seed _training khớp ngữ cảnh).
+        _ = device_id, contributor, source_type
         return items[:limit]
 
     # --- Test helpers (không thuộc Protocol, để tests assert/seed) ---

@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, text
 
-from ..application.repositories import TrainingPoint
+from ..application.repositories import ContributorSpec, TrainingPoint
 from ..domain.survey import SurveyBatch, SurveyBatchId
 
 
@@ -88,33 +88,60 @@ class PgSurveyRepository:
 
     def list_training(
         self,
+        *,
+        contributor: ContributorSpec,
         bbox: tuple[float, float, float, float] | None = None,
         limit: int = 1000,
         device_id: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[TrainingPoint]:
         # Build WHERE clauses động — tránh string concat thô để giữ tham số hoá.
+        # JOIN auth.linked_sources + auth.users CHỈ cho mode=community (cần
+        # filter contribute + disabled). Mode self/user bypass — defense in
+        # depth không cần thiết vì target_user_id đã do edge ép buộc.
         where: list[str] = []
         params: dict[str, object] = {"limit": limit}
+        join_sql = ""
+
+        if contributor.mode == "community":
+            join_sql = (
+                "JOIN auth.linked_sources ls ON ls.id = t.linked_source_id "
+                "JOIN auth.users u ON u.id = t.contributor_user_id"
+            )
+            where.append("ls.contribute_to_community = true")
+            where.append("ls.status = 'active'")
+            where.append("u.disabled = false")
+        else:  # self | user
+            where.append("t.contributor_user_id = :contributor_user_id")
+            params["contributor_user_id"] = contributor.target_user_id
+            if contributor.linked_source_id is not None:
+                where.append("t.linked_source_id = :linked_source_id")
+                params["linked_source_id"] = contributor.linked_source_id
+
         if bbox is not None:
             where.append(
-                "ST_Intersects(location::geometry, "
+                "ST_Intersects(t.location::geometry, "
                 "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326))"
             )
             params.update(min_lon=bbox[0], min_lat=bbox[1], max_lon=bbox[2], max_lat=bbox[3])
         if device_id is not None:
-            where.append("device_id = :device_id")
+            where.append("t.device_id = :device_id")
             params["device_id"] = device_id
+        if source_type is not None:
+            where.append("t.source_type = :source_type")
+            params["source_type"] = source_type
 
-        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        where_sql = "WHERE " + " AND ".join(where)
         sql = text(
             f"""
             SELECT
-                ST_Y(location::geometry) AS lat,
-                ST_X(location::geometry) AS lon,
-                rssi_dbm, snr_db, spreading_factor, serving_gateway_id
-            FROM ts.survey_training
+                ST_Y(t.location::geometry) AS lat,
+                ST_X(t.location::geometry) AS lon,
+                t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id
+            FROM ts.survey_training t
+            {join_sql}
             {where_sql}
-            ORDER BY timestamp DESC
+            ORDER BY t.timestamp DESC
             LIMIT :limit
             """
         )

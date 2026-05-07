@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from ..domain.address import Address, AddressLookupResult
@@ -90,11 +90,18 @@ class SurveyIngest(Protocol):
 
     def list_training(
         self,
+        *,
+        contributor: ContributorSpec,
         bbox: tuple[float, float, float, float] | None = None,
         limit: int = 1000,
         device_id: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[TrainingPoint]:
-        """List promoted survey points cho map visualization."""
+        """List promoted survey points cho map visualization.
+
+        `contributor` đã được authorize ở edge — repository chỉ áp dụng
+        WHERE clause tương ứng với mode (xem ContributorSpec).
+        """
         ...
 
 
@@ -108,6 +115,28 @@ class TrainingPoint:
     snr_db: float
     spreading_factor: int
     serving_gateway_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContributorSpec:
+    """Resolved filter cho `list_training`. Đã được authorize ở edge layer
+    (xem edge/filters.py:resolve_contributor) — repository không kiểm tra
+    quyền lại, chỉ build SQL.
+
+    `mode`:
+        community → public map; chỉ data có contribute_to_community=true,
+                    linked_source.status='active', uploader chưa bị disable.
+        self      → data của current_user; bypass contribute/disabled filter
+                    (user thấy data của mình kể cả khi chưa opt-in public).
+        user      → admin xem 1 user_id cụ thể; bypass contribute filter.
+
+    `linked_source_id` chỉ có nghĩa khi mode='self' (sub-filter UI). Edge
+    resolver đã verify ownership trước khi set field này.
+    """
+
+    mode: Literal["community", "self", "user"]
+    target_user_id: UUID | None = None
+    linked_source_id: UUID | None = None
 
 
 class AddressResolution(Protocol):

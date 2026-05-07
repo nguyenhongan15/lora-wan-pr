@@ -1,14 +1,15 @@
 // @ts-check
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { AdminGateways } from "./components/AdminGateways.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
 import { getUser, subscribe } from "./auth/store.js";
 import { logout } from "./auth/client.js";
+import { SourcesPage } from "./sources/SourcesPage.jsx";
 import { strings } from "./strings.js";
 
-/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin"} Tab */
+/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin" | "sources"} Tab */
 
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
@@ -17,6 +18,13 @@ export function App() {
   const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
   const tHeader = strings.auth.header;
+
+  // Tab "sources" cần user. Khi user = null (logout / 401) mà đang ở tab đó
+  // → switch về "map" để tránh render SourcesPage không có token (sẽ 401 và
+  // hiện error loading vô ích).
+  useEffect(() => {
+    if (!user && tab === "sources") setTab("map");
+  }, [user, tab]);
 
   function onAvatarClick() {
     if (user) setMenuOpen((o) => !o);
@@ -54,6 +62,14 @@ export function App() {
               <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
                 {t.tabs.admin}
               </TabButton>
+              {user && (
+                <TabButton
+                  active={tab === "sources"}
+                  onClick={() => setTab("sources")}
+                >
+                  {t.tabs.sources}
+                </TabButton>
+              )}
             </nav>
             <div className="relative">
             <button
@@ -114,6 +130,11 @@ export function App() {
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />
+          </div>
+        )}
+        {tab === "sources" && user && (
+          <div className="h-full overflow-y-auto">
+            <SourcesPage />
           </div>
         )}
       </main>

@@ -1,5 +1,5 @@
 // @ts-check
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -9,8 +9,12 @@ import {
   listSurveyTraining,
   predictCoverage,
 } from "../api/client.js";
+import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
+import { ContributorFilter } from "./filters/ContributorFilter.jsx";
+import { LinkedSourceFilter } from "./filters/LinkedSourceFilter.jsx";
+import { SourceTypeFilter } from "./filters/SourceTypeFilter.jsx";
 
 const t = strings.coverageMap;
 /** @type {Record<string, string>} */
@@ -115,6 +119,67 @@ function writeUrlState(lat, lng, sf) {
   window.history.replaceState(null, "", next);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * @returns {{
+ *   contributor: import("../api/client.js").ContributorMode,
+ *   linkedSourceId: string | null,
+ *   source: string | null,
+ * }}
+ */
+function readFilterUrlState() {
+  /** @type {import("../api/client.js").ContributorMode} */
+  let contributor = "community";
+  /** @type {string | null} */
+  let linkedSourceId = null;
+  /** @type {string | null} */
+  let source = null;
+  if (typeof window === "undefined") return { contributor, linkedSourceId, source };
+
+  const p = new URLSearchParams(window.location.search);
+  const c = p.get("contributor");
+  if (c === "me" || c === "community") {
+    contributor = c;
+  } else if (c?.startsWith("user/")) {
+    const uuid = c.slice(5);
+    if (UUID_RE.test(uuid)) contributor = /** @type {const} */ (`user/${uuid}`);
+  }
+
+  const ls = p.get("linked_source");
+  if (ls && UUID_RE.test(ls)) linkedSourceId = ls;
+
+  const s = p.get("source");
+  if (s) source = s;
+
+  return { contributor, linkedSourceId, source };
+}
+
+/**
+ * @param {{
+ *   contributor: import("../api/client.js").ContributorMode,
+ *   linkedSourceId: string | null,
+ *   source: string | null,
+ * }} state
+ */
+function writeFilterUrlState(state) {
+  if (typeof window === "undefined") return;
+  const p = new URLSearchParams(window.location.search);
+  // contributor=community là default → bỏ param cho URL gọn.
+  if (state.contributor === "community") p.delete("contributor");
+  else p.set("contributor", state.contributor);
+
+  if (state.linkedSourceId) p.set("linked_source", state.linkedSourceId);
+  else p.delete("linked_source");
+
+  if (state.source) p.set("source", state.source);
+  else p.delete("source");
+
+  const qs = p.toString();
+  const next = `${window.location.pathname}${qs ? "?" + qs : ""}${window.location.hash}`;
+  window.history.replaceState(null, "", next);
+}
+
 // Survey GeoJSON source/layer ID — dùng circle layer (WebGL) thay vì HTML
 // marker để render mượt với 4k+ điểm.
 const SURVEYS_SOURCE_ID = "surveys-src";
@@ -143,6 +208,9 @@ export function CoverageMap({ mode = "points" }) {
   );
   const skipFirstSfEffect = useRef(true);
   const initialUrlRef = useRef(readUrlState());
+  const initialFilterRef = useRef(readFilterUrlState());
+
+  const user = useSyncExternalStore(subscribeAuth, getUser);
 
   const [tileError, setTileError] = useState(/** @type {string | null} */ (null));
   const [pickedCoords, setPickedCoords] = useState(
@@ -156,24 +224,67 @@ export function CoverageMap({ mode = "points" }) {
     () => initialUrlRef.current?.sf ?? DEFAULT_SF,
   );
 
+  const [contributor, setContributor] = useState(
+    () => initialFilterRef.current.contributor,
+  );
+  const [linkedSourceId, setLinkedSourceId] = useState(
+    () => initialFilterRef.current.linkedSourceId,
+  );
+  const [sourceType, setSourceType] = useState(
+    () => initialFilterRef.current.source,
+  );
+
+  // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
+  // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
+  // toàn bộ map empty + error toast).
+  useEffect(() => {
+    if (!user && contributor !== "community") {
+      setContributor("community");
+      setLinkedSourceId(null);
+    }
+  }, [user, contributor]);
+
+  // Sync URL mỗi khi filter đổi.
+  useEffect(() => {
+    writeFilterUrlState({
+      contributor,
+      linkedSourceId: contributor === "me" ? linkedSourceId : null,
+      source: sourceType,
+    });
+  }, [contributor, linkedSourceId, sourceType]);
+
   const gatewaysQ = useQuery({
     queryKey: ["gateways", DANANG_BBOX],
     queryFn: () => listGateways(DANANG_BBOX),
   });
 
-  // Tạm thời chỉ hiển thị toàn bộ điểm đo của board01 (~4897 rec) — node01
-  // có 14 GPS outliers ngoài VN, node3 chỉ phủ 1 vùng nhỏ. Bỏ filter device
-  // bằng cách set SURVEY_DEVICE_ID = null + giảm limit.
+  // device_id legacy (DNIIT board01 dataset). Filter mới (contributor /
+  // linked_source / source) đứng song song — backend tự AND tất cả.
   const SURVEY_DEVICE_ID = "board01";
   const SURVEY_LIMIT = 5000;
+  const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
   const surveysQ = useQuery({
-    queryKey: ["surveys", DANANG_BBOX, SURVEY_DEVICE_ID, SURVEY_LIMIT],
+    queryKey: [
+      "surveys",
+      DANANG_BBOX,
+      SURVEY_DEVICE_ID,
+      SURVEY_LIMIT,
+      contributor,
+      linkedSourceForQuery,
+      sourceType,
+    ],
     queryFn: () =>
       listSurveyTraining(DANANG_BBOX, {
         deviceId: SURVEY_DEVICE_ID,
         limit: SURVEY_LIMIT,
+        contributor,
+        linkedSourceId: linkedSourceForQuery ?? undefined,
+        source: sourceType ?? undefined,
       }),
     enabled: mode === "points",
+    // contributor !== community gặp 401/403 không nên retry tự động —
+    // user thấy panel error 1 lần đỡ spam request.
+    retry: contributor === "community" ? 3 : false,
   });
 
   useEffect(() => {
@@ -642,7 +753,7 @@ export function CoverageMap({ mode = "points" }) {
               )}
             </div>
           ) : (
-            <div className="w-32 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+            <div className="w-56 space-y-2.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
               <div className="flex items-center gap-2">
                 <label
                   className="text-xs font-medium text-slate-700"
@@ -663,6 +774,28 @@ export function CoverageMap({ mode = "points" }) {
                   ))}
                 </select>
               </div>
+
+              {mode === "points" && (
+                <div className="space-y-2 border-t border-slate-200 pt-2">
+                  <ContributorFilter
+                    value={contributor}
+                    onChange={(next) => {
+                      setContributor(next);
+                      // Đổi mode khác "me" → reset linked_source (chỉ liên
+                      // quan đến mode me).
+                      if (next !== "me") setLinkedSourceId(null);
+                    }}
+                    user={user}
+                  />
+                  {contributor === "me" && (
+                    <LinkedSourceFilter
+                      value={linkedSourceId}
+                      onChange={setLinkedSourceId}
+                    />
+                  )}
+                  <SourceTypeFilter value={sourceType} onChange={setSourceType} />
+                </div>
+              )}
             </div>
           )}
 

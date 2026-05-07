@@ -134,6 +134,23 @@ def current_user(
         return identity.current_user(conn, token)
 
 
+def current_user_optional(
+    identity: Annotated[IdentityService, Depends(identity_service)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> User | None:
+    """Như `current_user` nhưng trả None khi không kèm Authorization header.
+
+    Dùng cho endpoint public-default (vd /survey/training mode community)
+    nhưng vẫn cho phép authenticated user pass token để dùng filter `me`.
+    Token sai/hết hạn vẫn raise 401 — nhất quán với `current_user`.
+    """
+    if not authorization:
+        return None
+    token = _extract_bearer(authorization)
+    with _engine().begin() as conn:
+        return identity.current_user(conn, token)
+
+
 def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
     """Gate cho /admin/*. Resolve current_user trước rồi assert is_admin.
 

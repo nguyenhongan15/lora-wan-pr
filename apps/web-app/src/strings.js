@@ -17,6 +17,7 @@ export const strings = {
       predict: "Dự đoán điểm",
       bulk: "Tra cứu hàng loạt",
       admin: "Gateway list",
+      sources: "Nguồn dữ liệu",
     },
   },
 
@@ -99,6 +100,25 @@ export const strings = {
       option: (sf) => `SF${sf}`,
     },
     urlPositionLabel: "Vị trí từ URL",
+    filters: {
+      contributor: {
+        legend: "Hiển thị",
+        community: "Cộng đồng",
+        me: "Của tôi",
+        meLoggedOutHint: "Đăng nhập để xem dữ liệu của riêng bạn.",
+        user: "Người dùng cụ thể",
+        userIdPlaceholder: "UUID người dùng",
+      },
+      linkedSource: {
+        label: "Nguồn liên kết",
+        optionAll: "Tất cả nguồn của tôi",
+        errorLoad: "Không tải được danh sách nguồn.",
+      },
+      source: {
+        label: "Loại nguồn",
+        optionAll: "Tất cả",
+      },
+    },
     predictPanel: {
       title: "Dự đoán điểm",
       hint: "Click lên bản đồ để chọn điểm",
@@ -284,6 +304,70 @@ export const strings = {
     },
     errors: {
       errorCodeLabel: "Mã lỗi",
+    },
+  },
+
+  sources: {
+    page: {
+      title: "Nguồn dữ liệu của tôi",
+      subtitle:
+        "Liên kết tài khoản bên ngoài (vd. lpwanmapper) để đóng góp dữ liệu khảo sát lên bản đồ cộng đồng.",
+      empty: "Chưa liên kết nguồn nào. Dùng form bên trên để thêm.",
+      loading: "Đang tải danh sách…",
+      errorLoad: "Không tải được danh sách nguồn.",
+    },
+    addForm: {
+      title: "Thêm nguồn lpwanmapper",
+      subtitle:
+        "Credential dùng để pull dữ liệu định kỳ. Mật khẩu được mã hoá trước khi lưu.",
+      sourceTypeLabel: "Loại nguồn",
+      labelLabel: "Nhãn (gợi nhớ)",
+      labelPlaceholder: "vd. Tài khoản cá nhân",
+      emailLabel: "Email lpwanmapper",
+      passwordLabel: "Mật khẩu lpwanmapper",
+      submit: "Liên kết",
+      submitPending: "Đang xác thực…",
+      successHint:
+        "Đã liên kết. Mặc định CHƯA đóng góp lên cộng đồng — bấm \"Đóng góp\" trong thẻ bên dưới khi sẵn sàng.",
+    },
+    card: {
+      statusActive: "Đang sync",
+      statusPaused: "Tạm dừng sync",
+      statusFailed: "Sync lỗi",
+      contributeOn: "Đang đóng góp",
+      contributeOff: "Chưa đóng góp",
+      lastSyncNever: "Chưa sync lần nào",
+      /** @param {string} when */
+      lastSyncAt: (when) => `Sync gần nhất: ${when}`,
+      lastSyncError: "Lỗi sync gần nhất:",
+      btnContributeOn: "Đóng góp cộng đồng",
+      btnContributeOff: "Dừng đóng góp",
+      btnPause: "Tạm dừng sync",
+      btnResume: "Bật sync",
+      btnSyncNow: "Sync ngay",
+      btnSyncPending: "Đang sync…",
+      btnDelete: "Xoá liên kết",
+      confirmDelete:
+        "Xoá liên kết sẽ ngừng pull dữ liệu mới. Dữ liệu đã đóng góp vẫn giữ nguyên trên bản đồ. Tiếp tục?",
+      /** @param {number} g @param {number} m */
+      syncOk: (g, m) =>
+        `Sync xong: ${g} gateway, ${m} điểm đo mới.`,
+    },
+    errors: {
+      errorCodeLabel: "Mã lỗi",
+      /** @param {string} code */
+      byCode: (code) => {
+        switch (code) {
+          case "credential_test_failed":
+            return "Email/mật khẩu lpwanmapper không đúng.";
+          case "linked_source_not_found":
+            return "Nguồn không tồn tại hoặc đã bị xoá.";
+          case "linking_error":
+            return "Yêu cầu không hợp lệ.";
+          default:
+            return "";
+        }
+      },
     },
   },
 };

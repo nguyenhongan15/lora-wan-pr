@@ -1,5 +1,6 @@
 // @ts-check
 import { z } from "zod";
+import { authFetch } from "../auth/_intercept.js";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -370,9 +371,26 @@ export async function lookupCoverageBatch(req) {
 }
 
 /**
- * GET /api/v1/survey/training
+ * @typedef {"community" | "me" | `user/${string}`} ContributorMode
+ *
+ * GET /api/v1/survey/training — backend resolver: edge/filters.py.
+ *   contributor=community (default): public map; backend filter
+ *     contribute_to_community=true + status='active' + uploader chưa disable.
+ *   contributor=me: cần token; sub-filter qua linkedSourceId.
+ *   contributor=user/<uuid>: admin only.
+ *
+ * Community gọi raw fetch (không gửi Authorization để tránh 401 spurious khi
+ * token đã expire). Mode khác qua authFetch để attach Bearer + clear store
+ * trên 401.
+ *
  * @param {BBox=} bbox
- * @param {{ deviceId?: string, limit?: number }=} opts
+ * @param {{
+ *   deviceId?: string,
+ *   limit?: number,
+ *   contributor?: ContributorMode,
+ *   linkedSourceId?: string,
+ *   source?: string
+ * }=} opts
  * @returns {Promise<z.infer<typeof SurveyTrainingList>>}
  */
 export async function listSurveyTraining(bbox, opts) {
@@ -385,8 +403,21 @@ export async function listSurveyTraining(bbox, opts) {
   }
   if (opts?.deviceId) url.searchParams.set("device_id", opts.deviceId);
   if (opts?.limit) url.searchParams.set("limit", String(opts.limit));
-  const res = await fetch(url);
+
+  const contributor = opts?.contributor ?? "community";
+  if (contributor !== "community") {
+    url.searchParams.set("contributor", contributor);
+  }
+  if (opts?.linkedSourceId) url.searchParams.set("linked_source", opts.linkedSourceId);
+  if (opts?.source) url.searchParams.set("source", opts.source);
+
+  const doFetch = contributor === "community" ? fetch : authFetch;
+  const res = await doFetch(url);
   if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/problem+json") || ct.includes("application/json")) {
+      throw new ApiError(ProblemDetails.parse(await res.json()));
+    }
     throw new ApiError({
       type: "about:blank",
       title: "Failed to list survey points",
