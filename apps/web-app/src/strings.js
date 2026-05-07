@@ -16,7 +16,7 @@ export const strings = {
       heatmap: "Bản đồ phủ sóng",
       predict: "Dự đoán điểm",
       bulk: "Tra cứu hàng loạt",
-      admin: "Gate list",
+      admin: "Gateway list",
     },
   },
 
