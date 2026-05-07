@@ -24,9 +24,14 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    # Sync ở ROOT để kéo về cả dev groups của workspace.
-    # `--all-extras` giữ tương thích nếu sau này có optional deps;
-    # `--all-groups` là phần thiết yếu để CI có ruff/mypy/...
+    # Sync ở ROOT cho TOÀN BỘ workspace.
+    # `--all-packages`: cài deps + editable install cho mọi workspace member
+    #                   → có alembic/pydantic/lora_coverage_api trong .venv.
+    # `--all-extras`  : kéo optional deps nếu có.
+    # `--all-groups`  : kéo dev groups (ruff, mypy, import-linter, pytest, ...).
+    # Thiếu --all-packages: deps của member (vd pydantic) và package member
+    # (vd lora_coverage_api) sẽ KHÔNG có trong .venv → mypy plugin import fail,
+    # import-linter báo "Could not find package", alembic CLI không spawn được.
     - name: Sync workspace deps
       shell: bash
-      run: uv sync --all-extras --all-groups
+      run: uv sync --all-packages --all-extras --all-groups

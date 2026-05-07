@@ -141,10 +141,12 @@ jobs:
       - uses: ./.github/actions/setup-python-uv
 
       # Gộp 2 step thành 1 → bớt 1 lần spawn `uv run`.
+      # Không cần `--project` vì `--all-packages` ở composite action đã
+      # editable-install lora_coverage_api vào root .venv.
       - name: Migrate + seed
         run: |
           uv run alembic -c migrations/alembic.ini upgrade head
-          uv run --project services/api-service python scripts/seed_gateways.py
+          uv run python services/api-service/scripts/seed_gateways.py
 
       - name: Pytest
         run: uv run pytest -v
