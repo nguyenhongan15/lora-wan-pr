@@ -6,12 +6,119 @@ on:
   pull_request:
     branches: [main]
 
+# Hủy run cũ khi PR push thêm commit; main vẫn chạy hết để giữ lịch sử.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  api-service:
+  # ─────────────────────────────────────────────────────────────
+  # 1) Phát hiện đường dẫn thay đổi → skip job không liên quan.
+  # ─────────────────────────────────────────────────────────────
+  changes:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/api-service
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'services/api-service/**'
+              - 'migrations/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.importlinter'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+            web:
+              - 'apps/web-app/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+            docker:
+              - 'services/api-service/Dockerfile'
+              - 'services/api-service/**'
+              - '.github/workflows/ci.yml'
+
+  # ─────────────────────────────────────────────────────────────
+  # 2) Lint song song — KHÔNG cần Postgres → khởi động cực nhanh.
+  #    Mỗi task chạy trên runner riêng, fail-fast: false để thấy
+  #    hết lỗi trong 1 lần push.
+  # ─────────────────────────────────────────────────────────────
+  api-lint:
+    name: api-lint / ${{ matrix.task.name }}
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - name: ruff-check
+            cache: ruff
+            cmd: uv run ruff check .
+          - name: ruff-format
+            cache: ruff
+            cmd: uv run ruff format --check .
+          # Mypy phải chạy từ ROOT để dùng đúng [tool.mypy] strict config
+          # (mypy không tự leo lên parent tìm config như ruff).
+          - name: mypy
+            cache: mypy
+            cmd: uv run mypy services/api-service/src
+          # import-linter đã có trong dev group root sau khi sync,
+          # không cần pip install thêm.
+          - name: import-linter
+            cache: none
+            cmd: uv run lint-imports --config .importlinter
+          - name: no-leaky-strings
+            cache: none
+            cmd: |
+              if grep -rEn 'postgres|redis|valkey|s3|stage_4|GiST|BRIN' \
+                  services/api-service/src/lora_coverage_api/application/ \
+                  services/api-service/src/lora_coverage_api/domain/; then
+                echo "::error::application/ or domain/ leaked storage-tier strings"
+                exit 1
+              fi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python-uv
+
+      - name: Restore mypy cache
+        if: matrix.task.cache == 'mypy'
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ hashFiles('services/api-service/src/**/*.py') }}
+          restore-keys: |
+            mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}-
+            mypy-${{ runner.os }}-
+
+      - name: Restore ruff cache
+        if: matrix.task.cache == 'ruff'
+        uses: actions/cache@v4
+        with:
+          path: .ruff_cache
+          key: ruff-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: ruff-${{ runner.os }}-
+
+      - name: Run ${{ matrix.task.name }}
+        run: ${{ matrix.task.cmd }}
+
+  # ─────────────────────────────────────────────────────────────
+  # 3) Test có DB — chạy SONG SONG với api-lint.
+  # ─────────────────────────────────────────────────────────────
+  api-test:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
     services:
       # PostGIS + TimescaleDB cùng 1 image (theo docker-compose.yml).
       # Migration 0001 cần CREATE EXTENSION postgis; image -ts2.17-all đã có sẵn.
@@ -24,85 +131,34 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U lora -d lora_coverage"
-          --health-interval 10s
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python-uv
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          # Lock file ở ROOT (uv workspace có 1 lock duy nhất).
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # Sync ở ROOT để kéo về cả dev groups của workspace
-      # (ruff, mypy, import-linter, pytest, ...).
-      # `--all-extras` giữ tương thích nếu sau này có optional deps;
-      # `--all-groups` là phần thiết yếu để CI có ruff/mypy/...
-      - name: Install deps
-        working-directory: .
-        run: uv sync --all-extras --all-groups
-
-      - name: Ruff lint
-        run: uv run ruff check .
-
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
-      # Mypy phải chạy từ ROOT để dùng đúng [tool.mypy] strict config
-      # (mypy không tự leo lên parent tìm config như ruff).
-      - name: Mypy
-        working-directory: .
-        run: uv run mypy services/api-service/src
-
-      # import-linter đã có trong dev group root sau khi sync,
-      # không cần pip install thêm.
-      - name: import-linter (5-layer separation)
-        working-directory: .
-        run: uv run lint-imports --config .importlinter
-
-      - name: No leaky strings in application/
-        working-directory: .
+      # Gộp 2 step thành 1 → bớt 1 lần spawn `uv run`.
+      - name: Migrate + seed
         run: |
-          if grep -rEn 'postgres|redis|valkey|s3|stage_4|GiST|BRIN' \
-              services/api-service/src/lora_coverage_api/application/ \
-              services/api-service/src/lora_coverage_api/domain/; then
-            echo "::error::application/ or domain/ leaked storage-tier strings"
-            exit 1
-          fi
-
-      - name: Alembic upgrade
-        working-directory: .
-        env:
-          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
-        run: uv run alembic -c migrations/alembic.ini upgrade head
-
-      - name: Seed gateways
-        working-directory: .
-        env:
-          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
-        run: uv run --project services/api-service python scripts/seed_gateways.py  
+          uv run alembic -c migrations/alembic.ini upgrade head
+          uv run --project services/api-service python scripts/seed_gateways.py
 
       - name: Pytest
-        working-directory: .
-        env:
-          DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
         run: uv run pytest -v
 
+  # ─────────────────────────────────────────────────────────────
+  # 4) Smoke build container — đảm bảo Dockerfile vẫn build được
+  #    (đa-stage, non-root, healthcheck) theo rule-design-containers.md.
+  # ─────────────────────────────────────────────────────────────
   docker-build:
-    # Smoke-build container image — đảm bảo Dockerfile vẫn build được
-    # (đa-stage, non-root, healthcheck) theo rule-design-containers.md.
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Build api-service image (no push)
@@ -135,7 +191,12 @@ jobs:
           docker logs api-smoke || true
           exit 1
 
+  # ─────────────────────────────────────────────────────────────
+  # 5) Frontend.
+  # ─────────────────────────────────────────────────────────────
   web-app:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -151,13 +212,35 @@ jobs:
 
       - name: Install
         working-directory: .
-        run: npm install
+        run: npm ci
 
-      - name: Lint
-        run: npm run lint
+      # Gộp 3 step (lint → jsdoc-check → build) trong 1 shell — bớt overhead.
+      # Nếu muốn parallel hoá, đổi thành matrix tương tự api-lint.
+      - name: Lint + JSDoc + Build
+        run: |
+          npm run lint
+          npm run jsdoc-check
+          npm run build
 
-      - name: JSDoc check (tsc --checkJs)
-        run: npm run jsdoc-check
-
-      - name: Build
-        run: npm run build
+  # ─────────────────────────────────────────────────────────────
+  # 6) Aggregation job cho branch protection.
+  #    Vì các job kia có `if:` (skip khi không liên quan), GitHub
+  #    branch protection không tự coi "skipped == ok" — phải có
+  #    1 job tổng hợp như thế này làm required check.
+  # ─────────────────────────────────────────────────────────────
+  ci:
+    if: always()
+    needs: [changes, api-lint, api-test, docker-build, web-app]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS_JSON"
+          # `result` của job bị skip là 'skipped' — coi như pass.
+          # Chỉ fail nếu có job 'failure' hoặc 'cancelled'.
+          if echo "$NEEDS_JSON" | grep -qE '"result":[[:space:]]*"(failure|cancelled)"'; then
+            echo "::error::A required job failed or was cancelled."
+            exit 1
+          fi

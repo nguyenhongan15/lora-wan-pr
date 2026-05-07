@@ -1,0 +1,32 @@
+name: Setup Python + uv
+description: >
+  Cài uv (kèm cache), set up Python, và sync uv workspace với
+  --all-extras --all-groups (kéo về ruff/mypy/import-linter/pytest/...).
+
+inputs:
+  python-version:
+    description: Python version để setup-python install.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv (with cache)
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+        # Lock file ở ROOT (uv workspace có 1 lock duy nhất).
+        cache-dependency-glob: "uv.lock"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # Sync ở ROOT để kéo về cả dev groups của workspace.
+    # `--all-extras` giữ tương thích nếu sau này có optional deps;
+    # `--all-groups` là phần thiết yếu để CI có ruff/mypy/...
+    - name: Sync workspace deps
+      shell: bash
+      run: uv sync --all-extras --all-groups
