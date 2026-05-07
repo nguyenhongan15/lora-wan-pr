@@ -37,12 +37,12 @@ ENV_FILE = REPO_ROOT / ".env.lpwanmapper.local"
 def _load_env() -> tuple[str, str]:
     if not ENV_FILE.exists():
         print(f"[FAIL] Không tìm thấy {ENV_FILE.name} ở repo root.", file=sys.stderr)
-        print(f"       Tạo file với 2 dòng:", file=sys.stderr)
-        print(f"         LPWANMAPPER_EMAIL=...", file=sys.stderr)
-        print(f"         LPWANMAPPER_PASSWORD=...", file=sys.stderr)
+        print("       Tạo file với 2 dòng:", file=sys.stderr)
+        print("         LPWANMAPPER_EMAIL=...", file=sys.stderr)
+        print("         LPWANMAPPER_PASSWORD=...", file=sys.stderr)
         sys.exit(2)
 
-    from dotenv import load_dotenv  # noqa: PLC0415
+    from dotenv import load_dotenv
 
     load_dotenv(ENV_FILE, override=False)
     email = os.environ.get("LPWANMAPPER_EMAIL", "").strip()
@@ -82,7 +82,7 @@ def main() -> int:
     print(f"[smoke] credentials loaded: {_redact_email(email)} (password redacted)")
 
     # Lazy import — chỉ load adapter sau khi confirm có creds.
-    from lora_coverage_api.application.sources import (  # noqa: PLC0415
+    from lora_coverage_api.application.sources import (
         SourceAuthFailed,
         SourceFetchFailed,
         SourceUnreachable,
@@ -128,7 +128,7 @@ def main() -> int:
     try:
         measurements = list(src.fetch_measurements(handle, since=None))
     except SourceAuthFailed as e:
-        print(f"[FAIL] /data 401 sau khi /login OK -> Bearer header KHÔNG đúng format.", file=sys.stderr)
+        print("[FAIL] /data 401 sau khi /login OK -> Bearer header KHÔNG đúng format.", file=sys.stderr)
         print(f"       err={e}", file=sys.stderr)
         return 3
     except SourceUnreachable as e:
@@ -155,7 +155,7 @@ def main() -> int:
 
     # ── Phase 4: fetch_measurements(since=future) sanity ──────────────────
     if measurements:
-        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+        from datetime import UTC, datetime, timedelta
 
         future = datetime.now(UTC) + timedelta(days=365)
         print("[smoke] phase 4: fetch_measurements(since=future) — must be empty")
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[smoke] interrupted", file=sys.stderr)
         sys.exit(130)
-    except Exception:  # noqa: BLE001
+    except Exception:
         print("[FAIL] unexpected exception:", file=sys.stderr)
         traceback.print_exc()
         sys.exit(9)

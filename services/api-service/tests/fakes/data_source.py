@@ -14,7 +14,7 @@ from lora_coverage_api.application.sources import (
     DataSource,
     GatewayRecord,
     MeasurementRecord,
-    SourceAuthFailed,
+    SourceAuthError,
 )
 
 
@@ -37,7 +37,7 @@ class FakeDataSource(DataSource):
     def connect(self, credentials: Mapping[str, Any]) -> dict:
         self.connect_calls += 1
         if not credentials:
-            raise SourceAuthFailed("empty credentials")
+            raise SourceAuthError("empty credentials")
         return {"token": "fake-token"}
 
     def fetch_gateways(self, handle: Any) -> Iterator[GatewayRecord]:

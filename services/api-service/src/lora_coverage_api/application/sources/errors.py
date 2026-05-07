@@ -16,19 +16,19 @@ class SourceError(ApplicationError):
     code = "source_error"
 
 
-class SourceAuthFailed(SourceError):
+class SourceAuthError(SourceError):
     code = "source_auth_failed"
 
 
-class SourceUnreachable(SourceError):
+class SourceUnreachableError(SourceError):
     code = "source_unreachable"
 
 
-class SourceFetchFailed(SourceError):
+class SourceFetchError(SourceError):
     code = "source_fetch_failed"
 
 
-class UnknownSourceType(SourceError):
+class UnknownSourceTypeError(SourceError):
     """Registry không có adapter cho source_type. User-facing → 400."""
 
     http_status = 400

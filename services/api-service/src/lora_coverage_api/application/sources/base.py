@@ -78,8 +78,8 @@ class DataSource(ABC):
         """Validate credentials và trả handle cho subsequent fetches.
 
         Raises:
-            SourceAuthFailed: credentials invalid/expired
-            SourceUnreachable: network/HTTP failure
+            SourceAuthError: credentials invalid/expired
+            SourceUnreachableError: network/HTTP failure
         """
 
     @abstractmethod
@@ -90,9 +90,9 @@ class DataSource(ABC):
         nội bộ.
 
         Raises:
-            SourceAuthFailed: token invalid (sau khi auto re-auth thất bại)
-            SourceUnreachable: network failure không retry được
-            SourceFetchFailed: response invalid (schema/parse error)
+            SourceAuthError: token invalid (sau khi auto re-auth thất bại)
+            SourceUnreachableError: network failure không retry được
+            SourceFetchError: response invalid (schema/parse error)
         """
 
     @abstractmethod

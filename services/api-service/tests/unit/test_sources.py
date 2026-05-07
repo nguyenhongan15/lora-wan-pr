@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 
 import pytest
@@ -10,14 +11,13 @@ from lora_coverage_api.application.sources import (
     DataSource,
     GatewayRecord,
     MeasurementRecord,
-    SourceAuthFailed,
-    UnknownSourceType,
+    SourceAuthError,
+    UnknownSourceTypeError,
     get_adapter,
     known_source_types,
     register,
 )
 from lora_coverage_api.application.sources.registry import _REGISTRY
-
 from tests.fakes.data_source import FakeDataSource
 
 
@@ -55,7 +55,7 @@ def _meas(eid: str, t: datetime) -> MeasurementRecord:
 class TestRecords:
     def test_records_are_frozen(self):
         gw = _gw()
-        with pytest.raises(Exception):  # FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
             gw.external_id = "x"  # type: ignore[misc]
 
 
@@ -72,7 +72,7 @@ class TestDataSourceContract:
 
     def test_connect_rejects_empty_creds(self):
         src = FakeDataSource()
-        with pytest.raises(SourceAuthFailed):
+        with pytest.raises(SourceAuthError):
             src.connect({})
 
     def test_fetch_measurements_filters_since(self):
@@ -97,7 +97,7 @@ class TestRegistry:
         assert isinstance(adapter, FakeDataSource)
 
     def test_get_unknown_raises(self):
-        with pytest.raises(UnknownSourceType) as ei:
+        with pytest.raises(UnknownSourceTypeError) as ei:
             get_adapter("nonexistent")
         assert ei.value.http_status == 400
         assert ei.value.code == "unknown_source_type"

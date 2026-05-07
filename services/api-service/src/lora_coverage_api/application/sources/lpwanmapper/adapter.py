@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from ..base import ConnectionHandle, DataSource, GatewayRecord, MeasurementRecord
-from ..errors import SourceAuthFailed
+from ..errors import SourceAuthError
 from . import _client, _mapping
 
 # Bao nhiêu measurement pull mỗi lần. API /data có param `limit` (max chưa
@@ -32,7 +32,7 @@ class LpwanmapperSource(DataSource):
         email = credentials.get("email")
         password = credentials.get("password")
         if not email or not password:
-            raise SourceAuthFailed("missing email/password")
+            raise SourceAuthError("missing email/password")
 
         client = _client.Client()
         login = client.login(str(email), str(password))
@@ -65,7 +65,7 @@ class LpwanmapperSource(DataSource):
         client = handle["client"]
         try:
             return client.get_recent_data(handle["token"], limit=_FETCH_LIMIT)
-        except _client._AuthExpired:
+        except _client._AuthExpiredError:
             creds = handle["credentials"]
             login = client.login(creds["email"], creds["password"])
             handle["token"] = login["token"]

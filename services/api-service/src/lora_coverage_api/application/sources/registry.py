@@ -9,7 +9,7 @@ Adapter modules tự register lúc import. Step 3 sẽ đăng ký LpwanmapperSou
 from __future__ import annotations
 
 from .base import DataSource
-from .errors import UnknownSourceType
+from .errors import UnknownSourceTypeError
 
 _REGISTRY: dict[str, type[DataSource]] = {}
 
@@ -23,11 +23,11 @@ def get_adapter(source_type: str) -> DataSource:
     """Trả instance adapter mới cho source_type.
 
     Raises:
-        UnknownSourceType: source_type không có trong registry.
+        UnknownSourceTypeError: source_type không có trong registry.
     """
     cls = _REGISTRY.get(source_type)
     if cls is None:
-        raise UnknownSourceType(f"unknown source_type: {source_type!r}")
+        raise UnknownSourceTypeError(f"unknown source_type: {source_type!r}")
     return cls()
 
 

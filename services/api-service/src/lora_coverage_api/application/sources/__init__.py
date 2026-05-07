@@ -7,6 +7,9 @@ Provider details (HTTP, auth, pagination, retry) ẩn trong implementation
 modules dưới sources/<provider>/.
 """
 
+# Side effect: built-in adapters self-register vào registry. Caller chỉ cần
+# import package này; không phải biết tên adapter module nào tồn tại.
+from . import lpwanmapper  # noqa: F401
 from .base import (
     ConnectionHandle,
     DataSource,
@@ -14,28 +17,24 @@ from .base import (
     MeasurementRecord,
 )
 from .errors import (
-    SourceAuthFailed,
+    SourceAuthError,
     SourceError,
-    SourceFetchFailed,
-    SourceUnreachable,
-    UnknownSourceType,
+    SourceFetchError,
+    SourceUnreachableError,
+    UnknownSourceTypeError,
 )
 from .registry import get_adapter, known_source_types, register
-
-# Side effect: built-in adapters self-register vào registry. Caller chỉ cần
-# import package này; không phải biết tên adapter module nào tồn tại.
-from . import lpwanmapper  # noqa: F401, E402
 
 __all__ = [
     "ConnectionHandle",
     "DataSource",
     "GatewayRecord",
     "MeasurementRecord",
+    "SourceAuthError",
     "SourceError",
-    "SourceAuthFailed",
-    "SourceFetchFailed",
-    "SourceUnreachable",
-    "UnknownSourceType",
+    "SourceFetchError",
+    "SourceUnreachableError",
+    "UnknownSourceTypeError",
     "get_adapter",
     "known_source_types",
     "register",
