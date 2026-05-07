@@ -22,9 +22,7 @@ def _trace_id_of(request: Request) -> str:
 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApplicationError)
-    async def on_application_error(
-        request: Request, exc: ApplicationError
-    ) -> JSONResponse:
+    async def on_application_error(request: Request, exc: ApplicationError) -> JSONResponse:
         # Plan-auth-v1 §8.1+§8.2: 1 handler duy nhất cho mọi subclass. Routes
         # không phải try/except; adapter raise đúng class — handler tự map
         # http_status + code → RFC 7807.

@@ -125,9 +125,7 @@ class IdentityService:
         if row.disabled:
             raise UserDisabled("Tài khoản đã bị vô hiệu hoá")
 
-        token, expires_at = _tokens.issue(
-            row.id, secret=self._secret, ttl_hours=self._ttl_hours
-        )
+        token, expires_at = _tokens.issue(row.id, secret=self._secret, ttl_hours=self._ttl_hours)
         return AuthToken(access_token=token, expires_at=expires_at)
 
     def current_user(self, conn: Connection, token: str) -> User:
@@ -140,9 +138,7 @@ class IdentityService:
             UserDisabled: user tồn tại nhưng đã bị disable.
         """
         claims = _tokens.decode(token, secret=self._secret)
-        row = conn.execute(
-            _SELECT_USER_BY_ID, {"user_id": claims.user_id}
-        ).one_or_none()
+        row = conn.execute(_SELECT_USER_BY_ID, {"user_id": claims.user_id}).one_or_none()
         if row is None:
             # User bị xoá sau khi token issued.
             raise InvalidCredentials("User không tồn tại")

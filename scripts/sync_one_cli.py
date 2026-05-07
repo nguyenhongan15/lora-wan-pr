@@ -146,8 +146,7 @@ def main() -> int:
             return 5
 
         print(
-            f"[sync] measurements: {m_counts['inserted']} inserted, "
-            f"{m_counts['updated']} updated"
+            f"[sync] measurements: {m_counts['inserted']} inserted, {m_counts['updated']} updated"
         )
         if skipped_no_gateway:
             print(

@@ -43,6 +43,7 @@ def settings_dep() -> Settings:
     """FastAPI dependency wrapper — đời sống = process (qua lru_cache)."""
     return _settings()
 
+
 @lru_cache(maxsize=1)
 def _engine() -> Engine:
     return make_engine(_settings().database_url)
