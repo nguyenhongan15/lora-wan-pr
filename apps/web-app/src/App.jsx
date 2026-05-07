@@ -1,15 +1,32 @@
 // @ts-check
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { AdminGateways } from "./components/AdminGateways.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
+import { AuthModal } from "./auth/AuthModal.jsx";
+import { getUser, subscribe } from "./auth/store.js";
+import { logout } from "./auth/client.js";
 import { strings } from "./strings.js";
 
 /** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin"} Tab */
 
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
+  const [authOpen, setAuthOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
+  const tHeader = strings.auth.header;
+
+  function onAvatarClick() {
+    if (user) setMenuOpen((o) => !o);
+    else setAuthOpen(true);
+  }
+
+  function onLogout() {
+    logout();
+    setMenuOpen(false);
+  }
 
   return (
     <div className="flex h-dvh flex-col">
@@ -17,27 +34,71 @@ export function App() {
         <div className="flex items-center justify-between gap-4 px-6 py-3">
           <div>
             <h1 className="text-lg font-bold text-slate-900">{t.title}</h1>
-    
-          </div>
-          <nav className="flex gap-2">
-            <TabButton active={tab === "map"} onClick={() => setTab("map")}>
-              {t.tabs.map}
-            </TabButton>
-            <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
-              {t.tabs.heatmap}
-            </TabButton>
 
-            <TabButton active={tab === "predict"} onClick={() => setTab("predict")}>
-              {t.tabs.predict}
-            </TabButton>
-            <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
-              {t.tabs.bulk}
-            </TabButton>
-            <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
-              {t.tabs.admin}
-            </TabButton>
-            
-          </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            <nav className="flex gap-2">
+              <TabButton active={tab === "map"} onClick={() => setTab("map")}>
+                {t.tabs.map}
+              </TabButton>
+              <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
+                {t.tabs.heatmap}
+              </TabButton>
+
+              <TabButton active={tab === "predict"} onClick={() => setTab("predict")}>
+                {t.tabs.predict}
+              </TabButton>
+              <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
+                {t.tabs.bulk}
+              </TabButton>
+              <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
+                {t.tabs.admin}
+              </TabButton>
+            </nav>
+            <div className="relative">
+            <button
+              type="button"
+              onClick={onAvatarClick}
+              aria-label={user ? tHeader.avatarLoggedIn : tHeader.avatarLoggedOut}
+              aria-haspopup={user ? "menu" : "dialog"}
+              aria-expanded={user ? menuOpen : authOpen}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-slate-100 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+            >
+              {user ? user.email[0].toUpperCase() : <UserIcon />}
+            </button>
+
+            {user && menuOpen && (
+              <>
+                {/* click-catcher để đóng menu khi click ra ngoài */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setMenuOpen(false)}
+                  aria-hidden="true"
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-50 mt-2 w-64 rounded-md border border-slate-200 bg-white p-3 shadow-lg"
+                >
+                  <div className="break-all text-sm font-medium text-slate-900">
+                    {user.email}
+                  </div>
+                  {user.is_admin && (
+                    <span className="mt-1 inline-block rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                      {tHeader.adminBadge}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="mt-3 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
+                  >
+                    {tHeader.logout}
+                  </button>
+                </div>
+              </>
+            )}
+            </div>
+          </div>
         </div>
       </header>
 
@@ -56,6 +117,8 @@ export function App() {
           </div>
         )}
       </main>
+
+      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
     </div>
   );
 }
@@ -76,5 +139,19 @@ function TabButton({ active, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm-7 8.25a7 7 0 0 1 14 0 .75.75 0 0 1-.75.75H5.75a.75.75 0 0 1-.75-.75Z" />
+    </svg>
   );
 }

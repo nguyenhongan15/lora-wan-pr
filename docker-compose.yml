@@ -63,6 +63,9 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-loglike-v0.1.0}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
+      LINKING_FERNET_KEYS: ${LINKING_FERNET_KEYS}
     ports:
       - "8000:8000"
     healthcheck:

@@ -253,4 +253,37 @@ export const strings = {
     },
   },
 
+  auth: {
+    login: {
+      title: "Đăng nhập",
+      subtitle: "Dùng email + mật khẩu đã đăng ký.",
+      emailLabel: "Email",
+      passwordLabel: "Mật khẩu",
+      submit: "Đăng nhập",
+      submitPending: "Đang đăng nhập…",
+      switchToRegister: "Chưa có tài khoản? Đăng ký",
+    },
+    register: {
+      title: "Đăng ký",
+      subtitle: "Mật khẩu tối thiểu 8 ký tự.",
+      emailLabel: "Email",
+      passwordLabel: "Mật khẩu",
+      submit: "Đăng ký",
+      submitPending: "Đang tạo tài khoản…",
+      switchToLogin: "Đã có tài khoản? Đăng nhập",
+      successHint: "Tài khoản đã tạo — đăng nhập để tiếp tục.",
+    },
+    header: {
+      /** @param {string} email */
+      hello: (email) => `Xin chào, ${email}`,
+      logout: "Đăng xuất",
+      adminBadge: "Admin",
+      avatarLoggedIn: "Tài khoản",
+      avatarLoggedOut: "Đăng nhập / đăng ký",
+      modalClose: "Đóng",
+    },
+    errors: {
+      errorCodeLabel: "Mã lỗi",
+    },
+  },
 };
