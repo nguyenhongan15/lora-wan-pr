@@ -222,9 +222,7 @@ class SyncService:
         # luôn vào geo.gateways — không có path quarantine cho gateway.
         # Annotation explicit: mypy không narrow conditional expr xuống Literal,
         # mặc định infer là `str`. MeasurementTarget = Literal["quarantine","training"].
-        m_target: MeasurementTarget = (
-            "training" if row.contribute_to_community else "quarantine"
-        )
+        m_target: MeasurementTarget = "training" if row.contribute_to_community else "quarantine"
 
         try:
             adapter = get_adapter(source_type)

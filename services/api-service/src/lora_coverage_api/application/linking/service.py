@@ -298,9 +298,7 @@ class LinkingService:
         )
         return _row_to_linked_source(row)
 
-    def _backfill_to_training(
-        self, conn: Connection, *, user_id: UUID, ls_id: UUID
-    ) -> None:
+    def _backfill_to_training(self, conn: Connection, *, user_id: UUID, ls_id: UUID) -> None:
         """INSERT...SELECT quarantine→training cho 1 linked_source. Audit-only:
         không trả gì, không raise (caller transaction wrap). Log row_count +
         duration_ms để observe (plan revisit a2 nếu >5% timeout)."""
