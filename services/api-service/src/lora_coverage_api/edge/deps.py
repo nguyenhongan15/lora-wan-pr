@@ -17,6 +17,7 @@ from ..application.address_service import (
 )
 from ..application.coverage_service import CoverageQueryService
 from ..application.identity import IdentityService, InvalidCredentialsError, User
+from ..application.linking import CredentialCipher, LinkingService
 from ..application.path_loss import Stage1LogDistanceModel
 from ..application.repositories import (
     AddressResolution,
@@ -125,3 +126,17 @@ def current_user(
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
         return identity.current_user(conn, token)
+
+
+# ── Linking (plan-auth-v1 §3.3) ───────────────────────────────────────────
+
+
+@lru_cache(maxsize=1)
+def _linking_service() -> LinkingService:
+    s = _settings()
+    cipher = CredentialCipher(keys=s.linking_fernet_keys_list)
+    return LinkingService(cipher=cipher)
+
+
+def linking_service() -> LinkingService:
+    return _linking_service()

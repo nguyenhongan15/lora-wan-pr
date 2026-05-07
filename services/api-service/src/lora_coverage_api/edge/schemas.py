@@ -264,3 +264,54 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"]
     expires_at: datetime
+
+
+# ── Linking — me/sources (plan-auth-v1 §3.3) ──────────────────────────────
+
+
+class LinkSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # source_type whitelist enforce qua sources.get_adapter() ở service layer
+    # (raise UnknownSourceTypeError → 400). Schema chỉ check shape.
+    source_type: str = Field(..., min_length=1, max_length=64, examples=["lpwanmapper"])
+    label: str = Field(..., min_length=1, max_length=100, examples=["Cá nhân"])
+    # Adapter-specific dict; mỗi adapter document required keys ở docstring
+    # connect(). Schema không validate shape vì sẽ khác giữa lpwanmapper /
+    # chirpstack / csv. service.test() validate bằng cách thử connect().
+    credentials: dict[str, str] = Field(..., min_length=1)
+
+
+class LinkedSourcePatchRequest(BaseModel):
+    """Partial update — chỉ field có giá trị mới được apply.
+
+    Cả 2 field None → 400 (request rỗng). Cho phép set cả 2 field cùng lúc.
+    `status` chỉ accept 'active'/'paused' từ API; 'failed' do sync
+    orchestrator set nội bộ (Step 7).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contribute_to_community: bool | None = None
+    status: Literal["active", "paused"] | None = None
+
+
+class LinkedSourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    source_type: str
+    label: str
+    status: Literal["active", "paused", "failed"]
+    contribute_to_community: bool
+    contributed_at: datetime | None
+    last_sync_at: datetime | None
+    last_sync_error: str | None
+    created_at: datetime
+
+
+class LinkedSourceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[LinkedSourceResponse]
+    total: int

@@ -47,6 +47,23 @@ class Settings(BaseSettings):
         description="Access token TTL (giờ). v1 không có refresh nên TTL dài hơn.",
     )
 
+    # ── Linking (plan-auth-v1 §3.3) ───────────────────────────────────────
+    # Comma-separated Fernet keys cho MultiFernet rotation. Key đầu = encrypt
+    # key hiện tại; tất cả keys = decrypt fallback. Generate:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    linking_fernet_keys: str = Field(
+        ...,
+        min_length=44,
+        description=(
+            "Fernet key(s) cho mã hoá credentials linked_sources. Format: "
+            "single key, hoặc 'newkey,oldkey1,oldkey2' khi rotate."
+        ),
+    )
+
+    @property
+    def linking_fernet_keys_list(self) -> list[bytes]:
+        return [k.strip().encode("ascii") for k in self.linking_fernet_keys.split(",") if k.strip()]
+
     ml_model_version: str = Field(default="stage1-loglike-v0.1.0")
 
     rate_limit_default: str = Field(default="60/minute")
