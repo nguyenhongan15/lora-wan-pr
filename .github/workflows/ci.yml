@@ -42,7 +42,6 @@ jobs:
               - 'package-lock.json'
               - '.github/workflows/ci.yml'
             docker:
-              - 'services/api-service/Dockerfile'
               - 'services/api-service/**'
               - '.github/workflows/ci.yml'
 
@@ -105,6 +104,10 @@ jobs:
       - name: Run ${{ matrix.task.name }}
         run: ${{ matrix.task.cmd }}
 
+  # Postgres + tests. Dùng `docker run` thủ công thay cho `services:` block để
+  # ScribeMD/docker-cache load image ~1GB từ GHA cache (services: luôn pull
+  # fresh, mất ~50–60s/run). Bump key suffix `-v1`→`-v2` để ép pull lại khi
+  # cần (ví dụ image upstream update).
   api-test:
     needs: changes
     if: needs.changes.outputs.api == 'true'
@@ -113,6 +116,11 @@ jobs:
       DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Postgres image
+        uses: ScribeMD/docker-cache@0.5.0
+        with:
+          key: docker-${{ runner.os }}-timescaledb-ha-pg17-ts2.17-all-v1
 
       - name: Start Postgres
         run: |
@@ -222,7 +230,11 @@ jobs:
           echo "$NEEDS_JSON"
           # `result` của job bị skip là 'skipped' — coi như pass.
           # Chỉ fail nếu có job 'failure' hoặc 'cancelled'.
-          if echo "$NEEDS_JSON" | grep -qE '"result":[[:space:]]*"(failure|cancelled)"'; then
+          # Dùng jq thay vì grep regex để không phụ thuộc format JSON pretty-print
+          # của toJSON() (nếu GitHub đổi indent thì grep dễ vỡ).
+          echo "$NEEDS_JSON" | jq -e '
+            to_entries | all(.value.result | IN("success", "skipped"))
+          ' > /dev/null || {
             echo "::error::A required job failed or was cancelled."
             exit 1
-          fi
+          }
