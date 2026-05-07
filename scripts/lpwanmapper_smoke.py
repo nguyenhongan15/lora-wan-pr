@@ -14,9 +14,9 @@ Usage:
 Exit codes:
     0  thành công (mọi phase pass)
     2  thiếu credential / env file
-    3  SourceAuthFailed (sai email/password hoặc Bearer header sai format)
-    4  SourceUnreachable (network / 5xx)
-    5  SourceFetchFailed (response shape không như expect)
+    3  SourceAuthError (sai email/password hoặc Bearer header sai format)
+    4  SourceUnreachableError (network / 5xx)
+    5  SourceFetchError (response shape không như expect)
     9  lỗi không lường trước
 
 KHÔNG in token, password, hoặc full record (có thể chứa GPS PII). Chỉ in
@@ -79,9 +79,9 @@ def main() -> int:
 
     # Lazy import — chỉ load adapter sau khi confirm có creds.
     from lora_coverage_api.application.sources import (
-        SourceAuthFailed,
-        SourceFetchFailed,
-        SourceUnreachable,
+        SourceAuthError,
+        SourceFetchError,
+        SourceUnreachableError,
         get_adapter,
     )
 
@@ -92,14 +92,14 @@ def main() -> int:
     print("[smoke] phase 1: connect() -> POST /login")
     try:
         handle = src.connect({"email": email, "password": password})
-    except SourceAuthFailed as e:
+    except SourceAuthError as e:
         print(f"[FAIL] auth rejected: {e}", file=sys.stderr)
         print("       -> check credential, hoặc Bearer header format có thể khác.", file=sys.stderr)
         return 3
-    except SourceUnreachable as e:
+    except SourceUnreachableError as e:
         print(f"[FAIL] network/5xx: {e}", file=sys.stderr)
         return 4
-    except SourceFetchFailed as e:
+    except SourceFetchError as e:
         print(f"[FAIL] response shape lạ: {e}", file=sys.stderr)
         return 5
 
@@ -123,17 +123,17 @@ def main() -> int:
     print("[smoke] phase 3: fetch_measurements(since=None) -> POST /data")
     try:
         measurements = list(src.fetch_measurements(handle, since=None))
-    except SourceAuthFailed as e:
+    except SourceAuthError as e:
         print(
             "[FAIL] /data 401 sau khi /login OK -> Bearer header KHÔNG đúng format.",
             file=sys.stderr,
         )
         print(f"       err={e}", file=sys.stderr)
         return 3
-    except SourceUnreachable as e:
+    except SourceUnreachableError as e:
         print(f"[FAIL] /data network/5xx: {e}", file=sys.stderr)
         return 4
-    except SourceFetchFailed as e:
+    except SourceFetchError as e:
         print(f"[FAIL] /data response shape lạ: {e}", file=sys.stderr)
         print(
             "       -> có thể wrapper khác (data field tên khác, hoặc shape không phải ChirpStack uplink).",
