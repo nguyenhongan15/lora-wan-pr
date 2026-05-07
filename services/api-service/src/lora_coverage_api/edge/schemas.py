@@ -315,3 +315,20 @@ class LinkedSourceListResponse(BaseModel):
 
     items: list[LinkedSourceResponse]
     total: int
+
+
+# ── Sync (plan-auth-v1 §3.4) ──────────────────────────────────────────────
+# `error` non-null = sync thất bại (adapter unreachable / decrypt fail / lock
+# busy). HTTP vẫn 200 (plan §3.4 không raise) — caller inspect field này.
+
+
+class SyncResultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    linked_source_id: UUID
+    gateways_inserted: int = Field(..., ge=0)
+    gateways_updated: int = Field(..., ge=0)
+    measurements_inserted: int = Field(..., ge=0)
+    measurements_updated: int = Field(..., ge=0)
+    last_sync_at: datetime | None
+    error: str | None

@@ -19,12 +19,14 @@ from fastapi import APIRouter, Depends, Response, status
 
 from ...application.identity import User
 from ...application.linking import LinkedSource, LinkingError, LinkingService
-from ..deps import _engine, current_user, linking_service
+from ...application.sync import SyncResult, SyncService
+from ..deps import _engine, current_user, linking_service, sync_service
 from ..schemas import (
     LinkedSourceListResponse,
     LinkedSourcePatchRequest,
     LinkedSourceResponse,
     LinkSourceRequest,
+    SyncResultResponse,
 )
 
 router = APIRouter(prefix="/api/v1/me/sources", tags=["me-sources"])
@@ -115,3 +117,31 @@ def patch_source(
             )
     assert result is not None
     return _to_response(result)
+
+
+def _sync_to_response(r: SyncResult) -> SyncResultResponse:
+    return SyncResultResponse(
+        linked_source_id=r.linked_source_id,
+        gateways_inserted=r.gateways_inserted,
+        gateways_updated=r.gateways_updated,
+        measurements_inserted=r.measurements_inserted,
+        measurements_updated=r.measurements_updated,
+        last_sync_at=r.last_sync_at,
+        error=r.error,
+    )
+
+
+# Manual "Sync now" — plan §5 Flow B step 5. Per plan §3.4, sync KHÔNG raise
+# trên adapter/decrypt/lock failure: HTTP 200 + result.error != None thay vì
+# 502/409. Trade HTTP semantics cho client error handling đơn giản
+# (Ousterhout Ch10: define errors out of existence). Riêng linked_source
+# không tồn tại / sai owner → 404 (route fail, không phải sync fail).
+@router.post("/{linked_source_id}/sync", response_model=SyncResultResponse)
+def sync_source(
+    linked_source_id: UUID,
+    user: Annotated[User, Depends(current_user)],
+    sync: Annotated[SyncService, Depends(sync_service)],
+) -> SyncResultResponse:
+    with _engine().begin() as conn:
+        result = sync.sync(conn, user=user, linked_source_id=linked_source_id)
+    return _sync_to_response(result)

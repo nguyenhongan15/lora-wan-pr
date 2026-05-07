@@ -25,6 +25,7 @@ from ..application.repositories import (
     GatewayDirectory,
     SurveyIngest,
 )
+from ..application.sync import SyncService
 from ..config import Settings, get_settings
 from ..infrastructure.address_cache_pg import PgAddressCache
 from ..infrastructure.db import make_engine
@@ -132,11 +133,27 @@ def current_user(
 
 
 @lru_cache(maxsize=1)
+def _credential_cipher() -> CredentialCipher:
+    """Shared cipher instance — Linking encrypt/decrypt + Sync decrypt dùng
+    chung. Plan §2: cipher là primitive (không phải application module),
+    cross-module sharing qua DI hợp lệ.
+    """
+    return CredentialCipher(keys=_settings().linking_fernet_keys_list)
+
+
+@lru_cache(maxsize=1)
 def _linking_service() -> LinkingService:
-    s = _settings()
-    cipher = CredentialCipher(keys=s.linking_fernet_keys_list)
-    return LinkingService(cipher=cipher)
+    return LinkingService(cipher=_credential_cipher())
 
 
 def linking_service() -> LinkingService:
     return _linking_service()
+
+
+@lru_cache(maxsize=1)
+def _sync_service() -> SyncService:
+    return SyncService(cipher=_credential_cipher())
+
+
+def sync_service() -> SyncService:
+    return _sync_service()
