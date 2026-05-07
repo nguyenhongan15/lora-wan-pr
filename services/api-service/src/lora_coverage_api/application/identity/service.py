@@ -22,9 +22,9 @@ from sqlalchemy import Connection, text
 
 from . import _passwords, _tokens
 from .errors import (
-    EmailAlreadyExists,
-    InvalidCredentials,
-    UserDisabled,
+    EmailAlreadyExistsError,
+    InvalidCredentialsError,
+    UserDisabledError,
 )
 
 
@@ -78,7 +78,7 @@ class IdentityService:
         """Tạo user mới với email + password.
 
         Raises:
-            EmailAlreadyExists: email (case-insensitive) đã có trong DB.
+            EmailAlreadyExistsError: email (case-insensitive) đã có trong DB.
         """
         canonical = _canonical_email(email)
         password_hash = _passwords.hash_password(password)
@@ -91,7 +91,7 @@ class IdentityService:
             # psycopg unique violation → IntegrityError. Match qua tên
             # constraint thay vì sniff message để robust với pg version.
             if "users_email_key" in str(exc):
-                raise EmailAlreadyExists(f"Email '{canonical}' đã tồn tại") from exc
+                raise EmailAlreadyExistsError(f"Email '{canonical}' đã tồn tại") from exc
             raise
         return User(
             id=row.id,
@@ -105,11 +105,11 @@ class IdentityService:
         """Xác thực credential, trả access token nếu OK.
 
         Raises:
-            InvalidCredentials: email không có hoặc password sai.
-            UserDisabled: tìm thấy user nhưng `disabled=true`.
+            InvalidCredentialsError: email không có hoặc password sai.
+            UserDisabledError: tìm thấy user nhưng `disabled=true`.
 
-        Lý do tách `UserDisabled`: admin cần biết user disable cố tình login
-        (audit), và frontend hiển thị message khác với "sai mật khẩu".
+        Lý do tách `UserDisabledError`: admin cần biết user disable cố tình
+        login (audit), và frontend hiển thị message khác với "sai mật khẩu".
         """
         canonical = _canonical_email(email)
         row = conn.execute(_SELECT_USER_BY_EMAIL, {"email": canonical}).one_or_none()
@@ -117,13 +117,13 @@ class IdentityService:
             # Hash 1 password giả để chống timing attack (so user-exists vs
             # not-exists). Cost rất nhỏ vs bcrypt verify thật.
             _passwords.verify_password(password, _DUMMY_BCRYPT_HASH)
-            raise InvalidCredentials("Email hoặc password sai")
+            raise InvalidCredentialsError("Email hoặc password sai")
 
         if not _passwords.verify_password(password, row.password_hash):
-            raise InvalidCredentials("Email hoặc password sai")
+            raise InvalidCredentialsError("Email hoặc password sai")
 
         if row.disabled:
-            raise UserDisabled("Tài khoản đã bị vô hiệu hoá")
+            raise UserDisabledError("Tài khoản đã bị vô hiệu hoá")
 
         token, expires_at = _tokens.issue(row.id, secret=self._secret, ttl_hours=self._ttl_hours)
         return AuthToken(access_token=token, expires_at=expires_at)
@@ -132,18 +132,18 @@ class IdentityService:
         """Decode JWT + refetch user từ DB.
 
         Raises:
-            InvalidCredentials: token sai signature, malformed, hoặc user_id
-                không tồn tại.
-            TokenExpired: JWT exp < now.
-            UserDisabled: user tồn tại nhưng đã bị disable.
+            InvalidCredentialsError: token sai signature, malformed, hoặc
+                user_id không tồn tại.
+            TokenExpiredError: JWT exp < now.
+            UserDisabledError: user tồn tại nhưng đã bị disable.
         """
         claims = _tokens.decode(token, secret=self._secret)
         row = conn.execute(_SELECT_USER_BY_ID, {"user_id": claims.user_id}).one_or_none()
         if row is None:
             # User bị xoá sau khi token issued.
-            raise InvalidCredentials("User không tồn tại")
+            raise InvalidCredentialsError("User không tồn tại")
         if row.disabled:
-            raise UserDisabled("Tài khoản đã bị vô hiệu hoá")
+            raise UserDisabledError("Tài khoản đã bị vô hiệu hoá")
         return User(
             id=row.id,
             email=row.email,

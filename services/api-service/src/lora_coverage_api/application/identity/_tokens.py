@@ -24,7 +24,7 @@ from uuid import UUID
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 
-from .errors import InvalidCredentials, TokenExpired
+from .errors import InvalidCredentialsError, TokenExpiredError
 
 _ALGORITHM = "HS256"
 
@@ -57,25 +57,25 @@ def decode(token: str, *, secret: str) -> Claims:
     """Verify signature + exp. Trả Claims hoặc raise.
 
     Raises:
-        TokenExpired       — exp < now
-        InvalidCredentials — signature sai, malformed, sub không phải UUID
+        TokenExpiredError       — exp < now
+        InvalidCredentialsError — signature sai, malformed, sub không phải UUID
     """
     try:
         payload = jwt.decode(token, secret, algorithms=[_ALGORITHM])
     except ExpiredSignatureError as e:
-        raise TokenExpired("Token expired") from e
+        raise TokenExpiredError("Token expired") from e
     except JWTError as e:
-        raise InvalidCredentials("Invalid token") from e
+        raise InvalidCredentialsError("Invalid token") from e
 
     sub = payload.get("sub")
     iat = payload.get("iat")
     exp = payload.get("exp")
     if not isinstance(sub, str) or not isinstance(iat, int) or not isinstance(exp, int):
-        raise InvalidCredentials("Token claims malformed")
+        raise InvalidCredentialsError("Token claims malformed")
     try:
         user_id = UUID(sub)
     except ValueError as e:
-        raise InvalidCredentials("Token sub is not UUID") from e
+        raise InvalidCredentialsError("Token sub is not UUID") from e
 
     return Claims(
         user_id=user_id,

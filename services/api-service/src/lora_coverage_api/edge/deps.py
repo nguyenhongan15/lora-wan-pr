@@ -16,7 +16,7 @@ from ..application.address_service import (
     GeocodingClient,
 )
 from ..application.coverage_service import CoverageQueryService
-from ..application.identity import IdentityService, InvalidCredentials, User
+from ..application.identity import IdentityService, InvalidCredentialsError, User
 from ..application.path_loss import Stage1LogDistanceModel
 from ..application.repositories import (
     AddressResolution,
@@ -110,10 +110,10 @@ def identity_service() -> IdentityService:
 
 def _extract_bearer(authorization: str | None) -> str:
     if not authorization:
-        raise InvalidCredentials("Thiếu Authorization header")
+        raise InvalidCredentialsError("Thiếu Authorization header")
     parts = authorization.split(maxsplit=1)
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise InvalidCredentials("Authorization header phải dạng 'Bearer <token>'")
+        raise InvalidCredentialsError("Authorization header phải dạng 'Bearer <token>'")
     return parts[1].strip()
 
 
@@ -122,7 +122,6 @@ def current_user(
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
     """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn."""
-    ...
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
         return identity.current_user(conn, token)
