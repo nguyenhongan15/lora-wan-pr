@@ -52,7 +52,7 @@ def _uplink(**overrides):
             "modulation": {"lora": {"spreadingFactor": 7}},
         },
         "object": {
-            "gnss_latitude": 160_000_000,   # 16.0°
+            "gnss_latitude": 160_000_000,  # 16.0°
             "gnss_longitude": 1_080_000_000,  # 108.0°
         },
         "rxInfo": [
@@ -78,21 +78,25 @@ class TestMeasurementRecords:
         assert m.serving_gateway_external_id == "gw-1"
 
     def test_multi_rx_emits_one_per_gateway(self):
-        u = _uplink(rxInfo=[
-            {"gatewayId": "gw-1", "rssi": -90, "snr": 5.0, "gwTime": "2026-05-07T10:00:01Z"},
-            {"gatewayId": "gw-2", "rssi": -95, "snr": 3.0, "gwTime": "2026-05-07T10:00:01Z"},
-            {"gatewayId": "gw-3", "rssi": -100, "snr": 1.0, "gwTime": "2026-05-07T10:00:01Z"},
-        ])
+        u = _uplink(
+            rxInfo=[
+                {"gatewayId": "gw-1", "rssi": -90, "snr": 5.0, "gwTime": "2026-05-07T10:00:01Z"},
+                {"gatewayId": "gw-2", "rssi": -95, "snr": 3.0, "gwTime": "2026-05-07T10:00:01Z"},
+                {"gatewayId": "gw-3", "rssi": -100, "snr": 1.0, "gwTime": "2026-05-07T10:00:01Z"},
+            ]
+        )
         recs = list(measurement_records(u))
         assert len(recs) == 3
         assert {r.serving_gateway_external_id for r in recs} == {"gw-1", "gw-2", "gw-3"}
         assert {r.external_id for r in recs} == {"u-1@gw-1", "u-1@gw-2", "u-1@gw-3"}
 
     def test_skip_rx_missing_rssi(self):
-        u = _uplink(rxInfo=[
-            {"gatewayId": "gw-1", "rssi": -90, "gwTime": "2026-05-07T10:00:01Z"},
-            {"gatewayId": "gw-2", "gwTime": "2026-05-07T10:00:01Z"},  # no rssi → skip
-        ])
+        u = _uplink(
+            rxInfo=[
+                {"gatewayId": "gw-1", "rssi": -90, "gwTime": "2026-05-07T10:00:01Z"},
+                {"gatewayId": "gw-2", "gwTime": "2026-05-07T10:00:01Z"},  # no rssi → skip
+            ]
+        )
         recs = list(measurement_records(u))
         assert len(recs) == 1
         assert recs[0].serving_gateway_external_id == "gw-1"

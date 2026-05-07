@@ -61,11 +61,7 @@ def _redact_email(e: str) -> str:
 
 
 def _gateway_sample(gw) -> str:
-    return (
-        f"id={gw.external_id} "
-        f"lat={gw.latitude:.4f} lon={gw.longitude:.4f} "
-        f"alt={gw.altitude_m}"
-    )
+    return f"id={gw.external_id} lat={gw.latitude:.4f} lon={gw.longitude:.4f} alt={gw.altitude_m}"
 
 
 def _measurement_sample(m) -> str:
@@ -128,7 +124,10 @@ def main() -> int:
     try:
         measurements = list(src.fetch_measurements(handle, since=None))
     except SourceAuthFailed as e:
-        print("[FAIL] /data 401 sau khi /login OK -> Bearer header KHÔNG đúng format.", file=sys.stderr)
+        print(
+            "[FAIL] /data 401 sau khi /login OK -> Bearer header KHÔNG đúng format.",
+            file=sys.stderr,
+        )
         print(f"       err={e}", file=sys.stderr)
         return 3
     except SourceUnreachable as e:
@@ -136,7 +135,10 @@ def main() -> int:
         return 4
     except SourceFetchFailed as e:
         print(f"[FAIL] /data response shape lạ: {e}", file=sys.stderr)
-        print("       -> có thể wrapper khác (data field tên khác, hoặc shape không phải ChirpStack uplink).", file=sys.stderr)
+        print(
+            "       -> có thể wrapper khác (data field tên khác, hoặc shape không phải ChirpStack uplink).",
+            file=sys.stderr,
+        )
         return 5
 
     print(f"[smoke]   [ok] measurements: {len(measurements)}")
@@ -146,11 +148,15 @@ def main() -> int:
         ext_ids = {m.external_id for m in measurements}
         print(f"[smoke]   [ok] unique external_id: {len(ext_ids)} / {len(measurements)}")
         if len(ext_ids) != len(measurements):
-            print(f"[smoke]   [warn] duplicate external_id detected ({len(measurements) - len(ext_ids)}) — dedup logic cần review.")
+            print(
+                f"[smoke]   [warn] duplicate external_id detected ({len(measurements) - len(ext_ids)}) — dedup logic cần review."
+            )
         gw_set = {m.serving_gateway_external_id for m in measurements}
         print(f"[smoke]   [ok] distinct serving gateways: {len(gw_set)}")
     else:
-        print("[smoke]   [warn] 0 measurements — user có thể chưa post webhook nào lên lpwanmapper.")
+        print(
+            "[smoke]   [warn] 0 measurements — user có thể chưa post webhook nào lên lpwanmapper."
+        )
         print("[smoke]     (không phải fail; adapter logic đã verify tới /data thành công)")
 
     # ── Phase 4: fetch_measurements(since=future) sanity ──────────────────
@@ -161,7 +167,10 @@ def main() -> int:
         print("[smoke] phase 4: fetch_measurements(since=future) — must be empty")
         m_future = list(src.fetch_measurements(handle, since=future))
         if m_future:
-            print(f"[FAIL] since filter broken: trả {len(m_future)} record với since=+1 year", file=sys.stderr)
+            print(
+                f"[FAIL] since filter broken: trả {len(m_future)} record với since=+1 year",
+                file=sys.stderr,
+            )
             return 9
         print("[smoke]   [ok] since filter works")
 

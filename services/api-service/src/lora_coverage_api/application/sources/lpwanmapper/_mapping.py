@@ -57,7 +57,11 @@ def measurement_records(uplink: dict[str, Any]) -> Iterator[MeasurementRecord]:
         return
 
     tx = uplink.get("txInfo") or {}
-    sf = (tx.get("modulation") or {}).get("lora", {}).get("spreadingFactor") if isinstance(tx, dict) else None
+    sf = (
+        (tx.get("modulation") or {}).get("lora", {}).get("spreadingFactor")
+        if isinstance(tx, dict)
+        else None
+    )
     freq_mhz = _opt_freq_mhz(tx.get("frequency") if isinstance(tx, dict) else None)
 
     obj = uplink.get("object") or {}
@@ -86,11 +90,7 @@ def measurement_records(uplink: dict[str, Any]) -> Iterator[MeasurementRecord]:
         if rx_time is None:
             continue
 
-        eid = (
-            f"{uplink_id}@{gw_id}"
-            if uplink_id
-            else f"{device}@{rx_time.isoformat()}@{gw_id}"
-        )
+        eid = f"{uplink_id}@{gw_id}" if uplink_id else f"{device}@{rx_time.isoformat()}@{gw_id}"
 
         yield MeasurementRecord(
             external_id=eid,
