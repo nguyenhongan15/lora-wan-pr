@@ -18,6 +18,7 @@ export const strings = {
       bulk: "Tra cứu hàng loạt",
       admin: "Gateway list",
       sources: "Nguồn dữ liệu",
+      adminPanel: "Quản trị",
     },
   },
 
@@ -304,6 +305,88 @@ export const strings = {
     },
     errors: {
       errorCodeLabel: "Mã lỗi",
+    },
+  },
+
+  admin: {
+    page: {
+      title: "Quản trị hệ thống",
+      subtitle:
+        "Quản lý người dùng, theo dõi thống kê tổng hợp, và chạy đồng bộ toàn hệ thống.",
+      statsHeading: "Thống kê",
+      usersHeading: "Người dùng",
+      syncHeading: "Đồng bộ toàn cục",
+    },
+    stats: {
+      loading: "Đang tải thống kê…",
+      userCount: "Tổng user",
+      activeUserCount: "User đang hoạt động",
+      linkedSourceCount: "Nguồn đã liên kết",
+      activeSourceCount: "Đang đóng góp",
+      gatewayCount: "Gateway",
+      measurementCount: "Điểm đo (training)",
+    },
+    users: {
+      loading: "Đang tải danh sách người dùng…",
+      empty: "Chưa có người dùng nào.",
+      errorLoad: "Không tải được danh sách người dùng.",
+      headers: ["Email", "Đóng góp", "Vai trò", "Trạng thái", "Ngày tạo", ""],
+      selfBadge: "Bạn",
+      adminBadge: "Admin",
+      activeBadge: "Hoạt động",
+      disabledBadge: "Đã khoá",
+      btnPromote: "Cấp admin",
+      btnDemote: "Bỏ admin",
+      btnDisable: "Khoá",
+      btnEnable: "Mở khoá",
+      actionsSelfNote: "Không thể tự sửa",
+      confirm: {
+        title: "Xác nhận thao tác",
+        /** @param {string} email */
+        disable: (email) =>
+          `Khoá tài khoản ${email}? Toàn bộ dữ liệu đóng góp sẽ bị ẩn khỏi bản đồ (KHÔNG xoá — có thể mở khoá để khôi phục).`,
+        /** @param {string} email */
+        enable: (email) => `Mở khoá tài khoản ${email}? Dữ liệu sẽ hiển thị lại trên bản đồ.`,
+        /** @param {string} email */
+        promote: (email) =>
+          `Cấp quyền admin cho ${email}? User này sẽ truy cập được tab Quản trị.`,
+        /** @param {string} email */
+        demote: (email) => `Thu hồi quyền admin của ${email}?`,
+        cancel: "Huỷ",
+        pending: "Đang xử lý…",
+        errorGeneric: "Thao tác thất bại.",
+      },
+    },
+    sync: {
+      title: "Đồng bộ tất cả nguồn",
+      subtitle: "Pull data từ mọi linked source đang đóng góp (status=active).",
+      btn: "Chạy đồng bộ",
+      btnPending: "Đang đồng bộ…",
+      /** @param {number} total @param {number} ok @param {number} fail */
+      summary: (total, ok, fail) =>
+        `Đã xử lý ${total} nguồn — ${ok} thành công, ${fail} lỗi.`,
+      /** @param {number} n */
+      failuresTitle: (n) => `Chi tiết ${n} nguồn lỗi`,
+      errorRequest: "Yêu cầu đồng bộ thất bại.",
+    },
+    errors: {
+      errorCodeLabel: "Mã lỗi",
+      statsLoad: "Không tải được thống kê.",
+      /** @param {string} code */
+      byCode: (code) => {
+        switch (code) {
+          case "admin_required":
+            return "Bạn không có quyền admin.";
+          case "admin_self_modification":
+            return "Không thể tự sửa tài khoản đang đăng nhập.";
+          case "user_not_found":
+            return "Người dùng không tồn tại.";
+          case "invalid_credentials":
+            return "Phiên đăng nhập đã hết hạn.";
+          default:
+            return "";
+        }
+      },
     },
   },
 

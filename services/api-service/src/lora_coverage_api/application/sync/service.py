@@ -42,7 +42,7 @@ from ..sources import (
     UnknownSourceTypeError,
     get_adapter,
 )
-from ._upsert import upsert_gateway, upsert_measurement
+from ._upsert import MeasurementTarget, upsert_gateway, upsert_measurement
 
 logger = structlog.get_logger("lora_coverage_api.sync")
 
@@ -95,7 +95,8 @@ def _sanitise_exc(exc: BaseException) -> str:
 
 _LOCK_OWNED_ROW = text("""
     SELECT id, user_id, source_type, label,
-           credentials_encrypted, status, last_sync_at
+           credentials_encrypted, status, last_sync_at,
+           contribute_to_community
     FROM auth.linked_sources
     WHERE id = :id AND user_id = :user_id
     FOR UPDATE SKIP LOCKED
@@ -216,6 +217,15 @@ class SyncService:
                 counts=(0, 0, 0, 0),
             )
 
+        # Plan §3.4: contribute_to_community quyết định measurement đi thẳng
+        # vào training (lên map cộng đồng) hay nằm ở quarantine. Gateway
+        # luôn vào geo.gateways — không có path quarantine cho gateway.
+        # Annotation explicit: mypy không narrow conditional expr xuống Literal,
+        # mặc định infer là `str`. MeasurementTarget = Literal["quarantine","training"].
+        m_target: MeasurementTarget = (
+            "training" if row.contribute_to_community else "quarantine"
+        )
+
         try:
             adapter = get_adapter(source_type)
             handle = adapter.connect(creds)
@@ -236,6 +246,7 @@ class SyncService:
                 ls_id=ls_id,
                 since=row.last_sync_at,
                 gw_uuid_by_external=gw_uuid_by_external,
+                target=m_target,
             )
         except (UnknownSourceTypeError, SourceError) as exc:
             err = _sanitise_exc(exc)
@@ -354,6 +365,7 @@ def _ingest_measurements(
     ls_id: UUID,
     since: datetime | None,
     gw_uuid_by_external: dict[str, UUID],
+    target: MeasurementTarget,
 ) -> tuple[int, int]:
     inserted = updated = 0
     for rec in adapter.fetch_measurements(handle, since=since):
@@ -370,6 +382,7 @@ def _ingest_measurements(
             uploader_id=user_id,
             contributor_user_id=user_id,
             linked_source_id=ls_id,
+            target=target,
         )
         if status == "inserted":
             inserted += 1

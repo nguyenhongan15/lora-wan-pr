@@ -1,6 +1,7 @@
 // @ts-check
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { AdminGateways } from "./components/AdminGateways.jsx";
+import { AdminPage } from "./admin/AdminPage.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
@@ -9,7 +10,7 @@ import { logout } from "./auth/client.js";
 import { SourcesPage } from "./sources/SourcesPage.jsx";
 import { strings } from "./strings.js";
 
-/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin" | "sources"} Tab */
+/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin" | "sources" | "adminPanel"} Tab */
 
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
@@ -19,11 +20,13 @@ export function App() {
   const t = strings.app;
   const tHeader = strings.auth.header;
 
-  // Tab "sources" cần user. Khi user = null (logout / 401) mà đang ở tab đó
-  // → switch về "map" để tránh render SourcesPage không có token (sẽ 401 và
-  // hiện error loading vô ích).
+  // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin. Khi điều
+  // kiện không còn (logout / token expire / admin bị demote giữa session)
+  // mà đang ở tab đó → switch về "map" để tránh render component không có
+  // quyền (sẽ 401/403 và hiện error vô ích).
   useEffect(() => {
     if (!user && tab === "sources") setTab("map");
+    if (!user?.is_admin && tab === "adminPanel") setTab("map");
   }, [user, tab]);
 
   function onAvatarClick() {
@@ -68,6 +71,14 @@ export function App() {
                   onClick={() => setTab("sources")}
                 >
                   {t.tabs.sources}
+                </TabButton>
+              )}
+              {user?.is_admin && (
+                <TabButton
+                  active={tab === "adminPanel"}
+                  onClick={() => setTab("adminPanel")}
+                >
+                  {t.tabs.adminPanel}
                 </TabButton>
               )}
             </nav>
@@ -135,6 +146,11 @@ export function App() {
         {tab === "sources" && user && (
           <div className="h-full overflow-y-auto">
             <SourcesPage />
+          </div>
+        )}
+        {tab === "adminPanel" && user?.is_admin && (
+          <div className="h-full overflow-y-auto">
+            <AdminPage currentUserId={user.id} />
           </div>
         )}
       </main>

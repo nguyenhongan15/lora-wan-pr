@@ -9,11 +9,16 @@
 // Nút "Đóng góp cộng đồng" highlight (indigo) để hướng user opt-in.
 //
 // Auto-sync sau bật contribute (option (a), confirmed):
-//   plan §5 Flow B step 8 yêu cầu BE trigger sync khi set_contribution(true)
-//   nhưng implementation hiện tại chưa wire (LinkingService docstring nói
-//   Step 7 sẽ thêm — chưa làm). Frontend tự gọi /sync sau PATCH success để
-//   end-to-end Flow B làm việc, không cần sửa BE. Sync error không revert
-//   toggle (toggle là chính sách, sync là kỹ thuật — 2 việc tách biệt).
+//   plan §5 Flow B step 8 yêu cầu BE trigger sync khi set_contribution(true).
+//   BE giờ đã backfill quarantine→training transactionally trong PATCH
+//   set_contribution → data CŨ đã có sẵn trên map ngay sau toggle. FE vẫn
+//   gọi /sync để pull data MỚI (push from provider) end-to-end. Sync error
+//   không revert toggle (toggle là chính sách, sync là kỹ thuật — 2 việc
+//   tách biệt).
+//
+// Invalidate ["surveys"] sau cả 2 mutation: contribute (backfill có thể đã
+// move historical rows lên training) + sync (data mới vào training nếu cờ
+// đang on). Map dùng key ["surveys"] → invalidation kích re-fetch.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
@@ -30,20 +35,23 @@ export function LinkedSourceCard({ source }) {
   const qc = useQueryClient();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ["sources"] });
+  const invalidateSurveys = () =>
+    qc.invalidateQueries({ queryKey: ["surveys"] });
 
   const contributeM = useMutation({
     mutationFn: async (/** @type {boolean} */ enabled) => {
       const updated = await patchSource(source.id, {
         contribute_to_community: enabled,
       });
-      // Option (a): vừa bật contribute → tự sync để dữ liệu lên map ngay.
-      // Sync error trả qua field `error` (HTTP 200 — plan §3.4) → caller
-      // đọc trong syncM.data.error nếu cần. KHÔNG await để tránh block UI;
-      // useMutation sync chạy sau khi invalidate xong.
+      // Option (a): vừa bật contribute → tự sync để pull data MỚI. Data CŨ
+      // đã được BE backfill (quarantine→training) trong cùng PATCH
+      // transaction → invalidate ["surveys"] ngay đây để map hiện historical
+      // rows mà không phải đợi sync xong.
       return { updated, autoSync: enabled };
     },
     onSuccess: ({ autoSync }) => {
       invalidate();
+      invalidateSurveys();
       if (autoSync) syncM.mutate();
     },
   });
@@ -56,7 +64,10 @@ export function LinkedSourceCard({ source }) {
 
   const syncM = useMutation({
     mutationFn: () => syncSource(source.id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      invalidateSurveys();
+    },
   });
 
   const deleteM = useMutation({

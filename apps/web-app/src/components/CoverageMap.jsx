@@ -258,16 +258,15 @@ export function CoverageMap({ mode = "points" }) {
     queryFn: () => listGateways(DANANG_BBOX),
   });
 
-  // device_id legacy (DNIIT board01 dataset). Filter mới (contributor /
-  // linked_source / source) đứng song song — backend tự AND tất cả.
-  const SURVEY_DEVICE_ID = "board01";
+  // Filter qua contributor / linked_source / source — backend tự AND. KHÔNG
+  // hard-code device_id; dataset cộng đồng đa device, fix board01 ẩn data
+  // contributor mới link.
   const SURVEY_LIMIT = 5000;
   const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
   const surveysQ = useQuery({
     queryKey: [
       "surveys",
       DANANG_BBOX,
-      SURVEY_DEVICE_ID,
       SURVEY_LIMIT,
       contributor,
       linkedSourceForQuery,
@@ -275,7 +274,6 @@ export function CoverageMap({ mode = "points" }) {
     ],
     queryFn: () =>
       listSurveyTraining(DANANG_BBOX, {
-        deviceId: SURVEY_DEVICE_ID,
         limit: SURVEY_LIMIT,
         contributor,
         linkedSourceId: linkedSourceForQuery ?? undefined,

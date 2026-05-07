@@ -2,7 +2,8 @@
 
 Hai function:
   * upsert_gateway       → geo.gateways (key: source_type, external_id)
-  * upsert_measurement   → ts.survey_quarantine (key: timestamp, source_type, external_id)
+  * upsert_measurement   → ts.survey_quarantine HOẶC ts.survey_training
+                           (key: timestamp, source_type, external_id)
 
 Caller (sync orchestrator hoặc CLI) quản lý transaction. Mỗi function chạy 1
 SQL với ON CONFLICT; trả `UpsertResult` tag tag "inserted"/"updated"/"skipped"
@@ -21,6 +22,10 @@ Quyết định:
   * `frequency_mhz` default 923.0 (AS923-2 ĐN) khi adapter không trả; check
     constraint `chk_freq_lora_band` chỉ cho 433/868/915/923 nên caller phải
     pass giá trị hợp lệ.
+  * Target routing (plan §3.4): caller chọn quarantine|training dựa trên
+    `linked_sources.contribute_to_community` — tách 2 SQL thay vì template
+    table-name (an toàn, explicit). Training cần `gen_random_uuid()` vì id
+    không có DEFAULT (quarantine có).
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from sqlalchemy import Connection, text
 from ..sources import GatewayRecord, MeasurementRecord
 
 UpsertResult = Literal["inserted", "updated"]
+MeasurementTarget = Literal["quarantine", "training"]
 
 DEFAULT_FREQUENCY_MHZ = 923.0  # AS923-2 (Đà Nẵng / VN)
 _ALLOWED_FREQ_MHZ = (433.0, 868.0, 915.0, 923.0)
@@ -60,7 +66,7 @@ _GATEWAY_UPSERT_SQL = text("""
 """)
 
 
-_MEASUREMENT_UPSERT_SQL = text("""
+_QUARANTINE_UPSERT_SQL = text("""
     INSERT INTO ts.survey_quarantine (
         timestamp, location, rssi_dbm, snr_db,
         spreading_factor, frequency_mhz, device_id,
@@ -80,6 +86,37 @@ _MEASUREMENT_UPSERT_SQL = text("""
         linked_source_id    = COALESCE(EXCLUDED.linked_source_id,    ts.survey_quarantine.linked_source_id)
     RETURNING (xmax = 0) AS inserted
 """)
+
+
+# survey_training: id NOT NULL không có DEFAULT (quarantine có
+# `DEFAULT gen_random_uuid()`) → INSERT phải tự gọi gen_random_uuid().
+_TRAINING_UPSERT_SQL = text("""
+    INSERT INTO ts.survey_training (
+        id, timestamp, location, rssi_dbm, snr_db,
+        spreading_factor, frequency_mhz, device_id,
+        serving_gateway_id, uploader_id,
+        external_id, source_type, contributor_user_id, linked_source_id
+    )
+    VALUES (
+        gen_random_uuid(),
+        :ts,
+        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+        :rssi, :snr, :sf, :freq, :device_id,
+        :gw_id, :uploader_id,
+        :external_id, :source_type, :contributor_user_id, :linked_source_id
+    )
+    ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
+    DO UPDATE SET
+        contributor_user_id = COALESCE(EXCLUDED.contributor_user_id, ts.survey_training.contributor_user_id),
+        linked_source_id    = COALESCE(EXCLUDED.linked_source_id,    ts.survey_training.linked_source_id)
+    RETURNING (xmax = 0) AS inserted
+""")
+
+
+_MEASUREMENT_UPSERT_SQL_BY_TARGET = {
+    "quarantine": _QUARANTINE_UPSERT_SQL,
+    "training": _TRAINING_UPSERT_SQL,
+}
 
 
 def upsert_gateway(
@@ -128,16 +165,22 @@ def upsert_measurement(
     uploader_id: UUID,
     contributor_user_id: UUID | None = None,
     linked_source_id: UUID | None = None,
+    target: MeasurementTarget = "quarantine",
 ) -> UpsertResult:
     """Insert hoặc update provenance của 1 measurement.
 
     `serving_gateway_id` (UUID PK của geo.gateways) caller resolve trước qua
     map external_id → uuid (build từ output của upsert_gateway).
+
+    `target` quyết định table đích (plan §3.4):
+      * "quarantine" — sync khi linked_source.contribute_to_community=false
+      * "training"   — sync khi contribute_to_community=true (lên map cộng đồng)
+    Caller (sync orchestrator) đọc cờ từ row `auth.linked_sources` rồi pass.
     """
     freq = rec.frequency_mhz if rec.frequency_mhz is not None else DEFAULT_FREQUENCY_MHZ
 
     row = conn.execute(
-        _MEASUREMENT_UPSERT_SQL,
+        _MEASUREMENT_UPSERT_SQL_BY_TARGET[target],
         {
             "ts": rec.time,
             "lat": rec.latitude,

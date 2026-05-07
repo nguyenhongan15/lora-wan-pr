@@ -8,12 +8,15 @@ Stateless modulo `cipher` constructor param. Caller (`edge/deps`) khởi tạo
 IdentityService + sync/_upsert).
 
 KHÔNG gọi sync orchestrator (plan §2 cấm cross-application-module call).
-`set_contribution(true)` chỉ flip flag — Step 7 sẽ thêm trigger sync ở
-edge layer hoặc qua scheduler riêng.
+`set_contribution(true)` flip flag + backfill quarantine→training cùng
+transaction (plan §3.4 — data đã pull về phải hiện trên map ngay). Sync
+mới sẽ tự routing dựa cờ qua SyncService — caller (FE/edge) trigger sync
+sau toggle là tuỳ chọn để pull data MỚI (không phải lý do data cũ lên map).
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -101,6 +104,37 @@ _UPDATE_CONTRIBUTION_OWNED = text("""
     WHERE id = :id AND user_id = :user_id
     RETURNING id, user_id, source_type, label, status, contribute_to_community,
               contributed_at, last_sync_at, last_sync_error, created_at
+""")
+
+
+# Backfill khi user opt-in lần đầu: copy mọi measurement đã sync vào quarantine
+# sang training. Idempotent qua ON CONFLICT (user toggle off→on→off→on không
+# nhân đôi rows). Plan §3.4 + a-philosophy §8 (pull complexity downwards):
+# 1 SQL transactional, KHÔNG batching ở v1 (background queue đẩy sang v2).
+#
+# `SET LOCAL statement_timeout`: scope = transaction → revert tự động khi
+# commit/rollback. 25s buffer dưới uvicorn 30s default → timeout fail rollback
+# trước khi worker bị giết.
+_SET_BACKFILL_TIMEOUT = text("SET LOCAL statement_timeout = '25s'")
+
+_BACKFILL_QUARANTINE_TO_TRAINING = text("""
+    INSERT INTO ts.survey_training (
+        id, timestamp, location, rssi_dbm, snr_db,
+        spreading_factor, frequency_mhz, device_id,
+        serving_gateway_id, uploader_id,
+        external_id, source_type, contributor_user_id, linked_source_id
+    )
+    SELECT
+        gen_random_uuid(), timestamp, location, rssi_dbm, snr_db,
+        spreading_factor, frequency_mhz, device_id,
+        serving_gateway_id, uploader_id,
+        external_id, source_type, contributor_user_id, linked_source_id
+    FROM ts.survey_quarantine
+    WHERE linked_source_id = :ls_id
+      AND reject_reason IS NULL
+      AND external_id IS NOT NULL
+    ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
+    DO NOTHING
 """)
 
 
@@ -233,11 +267,18 @@ class LinkingService:
     def set_contribution(
         self, conn: Connection, user: User, linked_source_id: UUID, enabled: bool
     ) -> LinkedSource:
-        """Toggle `contribute_to_community`. KHÔNG trigger sync ở Step 6.
+        """Toggle `contribute_to_community`.
 
-        Step 7 sẽ thêm trigger sync ở edge layer (hoặc scheduler) khi user
-        bật contribute lần đầu — không gọi từ application module này
-        (plan §2 cấm cross-module call).
+        enabled=true → backfill quarantine→training cho ls_id ngay trong cùng
+        transaction. Plan §3.4: data đã pull về phải xuất hiện trên map cộng
+        đồng ngay sau opt-in, KHÔNG đợi sync kế tiếp.
+
+        Idempotent (ON CONFLICT DO NOTHING): toggle off→on→off→on không nhân
+        đôi training rows. Không xoá khỏi training khi opt-out — privacy edge
+        case này tách thành tác vụ riêng (không trong scope fix hiện tại).
+
+        Sync mới (sau toggle) sẽ tự routing về training nhờ
+        SyncService đọc `contribute_to_community` qua _LOCK_OWNED_ROW.
         """
         row = conn.execute(
             _UPDATE_CONTRIBUTION_OWNED,
@@ -245,6 +286,10 @@ class LinkingService:
         ).one_or_none()
         if row is None:
             raise LinkedSourceNotFoundError(f"Linked source {linked_source_id} không tồn tại")
+
+        if enabled:
+            self._backfill_to_training(conn, user_id=user.id, ls_id=linked_source_id)
+
         logger.info(
             "source_contribution_changed",
             user_id=str(user.id),
@@ -252,6 +297,25 @@ class LinkingService:
             enabled=enabled,
         )
         return _row_to_linked_source(row)
+
+    def _backfill_to_training(
+        self, conn: Connection, *, user_id: UUID, ls_id: UUID
+    ) -> None:
+        """INSERT...SELECT quarantine→training cho 1 linked_source. Audit-only:
+        không trả gì, không raise (caller transaction wrap). Log row_count +
+        duration_ms để observe (plan revisit a2 nếu >5% timeout)."""
+        started = time.monotonic()
+        conn.execute(_SET_BACKFILL_TIMEOUT)
+        result = conn.execute(_BACKFILL_QUARANTINE_TO_TRAINING, {"ls_id": ls_id})
+        row_count = result.rowcount
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "contribute_backfill_completed",
+            user_id=str(user_id),
+            linked_source_id=str(ls_id),
+            row_count=row_count,
+            duration_ms=duration_ms,
+        )
 
     # ── package-internal — Step 7 sync orchestrator dùng để decrypt ───────
 
