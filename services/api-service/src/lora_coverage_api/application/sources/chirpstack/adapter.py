@@ -57,6 +57,19 @@ class ChirpStackSource(DataSource):
             "tenant_id": tenant_id,
         }
 
+    def canonicalize_credentials(self, credentials: Mapping[str, Any]) -> Mapping[str, str]:
+        # api_url + api_token cùng nhau LÀ identity (cùng deployment, cùng
+        # token = cùng quyền truy cập). tenant_id scope nội dung visible
+        # nhưng KHÔNG thay token → đưa vào fingerprint cho phép cùng token
+        # link 2 lần với tenant khác nhau (use case hợp lệ: user link tenant
+        # A của họ và tenant B của họ riêng).
+        api_url = str(credentials.get("api_url") or "").strip().rstrip("/").lower()
+        api_token = str(credentials.get("api_token") or "").strip()
+        if not api_url or not api_token:
+            raise SourceAuthError("missing api_url/api_token for fingerprint")
+        tenant_id = str(credentials.get("tenant_id") or "").strip()
+        return {"api_url": api_url, "api_token": api_token, "tenant_id": tenant_id}
+
     def fetch_gateways(self, handle: ConnectionHandle) -> Iterator[GatewayRecord]:
         client: _client.Client = handle["client"]
         token: str = handle["token"]

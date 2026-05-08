@@ -498,6 +498,8 @@ export const strings = {
         switch (code) {
           case "credential_test_failed":
             return "Credential không hợp lệ — kiểm tra lại thông tin đăng nhập / API token.";
+          case "credential_already_linked":
+            return "Tài khoản này đã được người dùng khác liên kết. Mỗi tài khoản bên ngoài chỉ được liên kết bởi 1 người.";
           case "linked_source_not_found":
             return "Nguồn không tồn tại hoặc đã bị xoá.";
           case "linking_error":

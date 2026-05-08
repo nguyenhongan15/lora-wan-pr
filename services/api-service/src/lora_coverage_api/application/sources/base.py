@@ -83,6 +83,25 @@ class DataSource(ABC):
         """
 
     @abstractmethod
+    def canonicalize_credentials(self, credentials: Mapping[str, Any]) -> Mapping[str, str]:
+        """Trích những field định danh "external account" từ credential dict.
+
+        Adapter biết field nào IS identity (lpwanmapper: email; chirpstack:
+        api_url + api_token) và field nào là detail thay đổi được (password,
+        tenant scope...). Output dùng làm key cho fingerprint UNIQUE check
+        (linking §3.3) — 2 user nhập cùng identity ⇒ cùng fingerprint ⇒
+        UNIQUE conflict.
+
+        Implementation MUST:
+          * Lower-case / strip để cùng account ra cùng output bất kể UI
+            input variation.
+          * Loại field không định danh (vd. password lpwanmapper) — đổi
+            password mai sau vẫn được hiểu là cùng account.
+          * Deterministic: cùng input ⇒ cùng output (caller serialize
+            JSON sort_keys → hash; phụ thuộc thứ tự key sẽ phá UNIQUE).
+        """
+
+    @abstractmethod
     def fetch_gateways(self, handle: ConnectionHandle) -> Iterator[GatewayRecord]:
         """Yield mọi gateway visible với credential này. Order unspecified.
 

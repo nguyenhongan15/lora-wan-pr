@@ -25,11 +25,13 @@ from uuid import UUID
 import structlog
 from cryptography.fernet import InvalidToken
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
 
 from ..identity import User
 from ..sources import SourceAuthError, get_adapter
 from ._crypto import CredentialCipher
 from .errors import (
+    CredentialAlreadyLinkedError,
     CredentialTestFailedError,
     LinkedSourceNotFoundError,
     LinkingError,
@@ -62,9 +64,9 @@ class LinkedSource:
 
 _INSERT_LINKED_SOURCE = text("""
     INSERT INTO auth.linked_sources (
-        user_id, source_type, label, credentials_encrypted
+        user_id, source_type, label, credentials_encrypted, credential_fingerprint
     )
-    VALUES (:user_id, :source_type, :label, :credentials_encrypted)
+    VALUES (:user_id, :source_type, :label, :credentials_encrypted, :credential_fingerprint)
     RETURNING id, user_id, source_type, label, status, contribute_to_community,
               contributed_at, last_sync_at, last_sync_error, created_at
 """)
@@ -192,22 +194,40 @@ class LinkingService:
         Sau khi link: status='active' (default), contribute_to_community=false
         (privacy opt-in). User phải gọi `set_contribution(true)` riêng để
         opt-in đóng góp lên bản đồ cộng đồng.
+
+        Raises:
+            CredentialTestFailedError: provider reject credential.
+            CredentialAlreadyLinkedError: cùng external account (theo
+                fingerprint) đã được user khác link — UNIQUE conflict.
         """
         # 1. Validate trước khi encrypt + insert. Fail-fast tránh lưu blob
         #    không decrypt nổi sau này.
         self.test(source_type, credentials)
 
-        # 2. Encrypt + persist.
+        # 2. Encrypt + compute fingerprint. Fingerprint qua adapter — chỉ
+        #    chứa field định danh (lpwan: email; chirpstack: api_url+token+
+        #    tenant). UNIQUE (source_type, fingerprint) ở DB chặn dup.
+        adapter = get_adapter(source_type)
+        canonical = adapter.canonicalize_credentials(credentials)
+        fingerprint = self._cipher.fingerprint(canonical)
         blob = self._cipher.encrypt(credentials)
-        row = conn.execute(
-            _INSERT_LINKED_SOURCE,
-            {
-                "user_id": user.id,
-                "source_type": source_type,
-                "label": label,
-                "credentials_encrypted": blob,
-            },
-        ).one()
+        try:
+            row = conn.execute(
+                _INSERT_LINKED_SOURCE,
+                {
+                    "user_id": user.id,
+                    "source_type": source_type,
+                    "label": label,
+                    "credentials_encrypted": blob,
+                    "credential_fingerprint": fingerprint,
+                },
+            ).one()
+        except IntegrityError as exc:
+            # UNIQUE ux_linked_sources_fingerprint — không có UNIQUE nào khác
+            # trên insert path nên catch generic IntegrityError là an toàn.
+            raise CredentialAlreadyLinkedError(
+                "Tài khoản này đã được người dùng khác liên kết"
+            ) from exc
 
         logger.info(
             "source_linked",

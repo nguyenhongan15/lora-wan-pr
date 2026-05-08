@@ -43,6 +43,15 @@ class LpwanmapperSource(DataSource):
             "gateways_raw": login.get("gateways") or [],
         }
 
+    def canonicalize_credentials(self, credentials: Mapping[str, Any]) -> Mapping[str, str]:
+        # Email LÀ identity tài khoản lpwanmapper. Password thay đổi được
+        # (user reset pass) → KHÔNG đưa vào fingerprint, nếu không link cùng
+        # email với password mới sẽ lách UNIQUE.
+        email = str(credentials.get("email") or "").strip().lower()
+        if not email:
+            raise SourceAuthError("missing email for fingerprint")
+        return {"email": email}
+
     def fetch_gateways(self, handle: ConnectionHandle) -> Iterator[GatewayRecord]:
         for raw in handle["gateways_raw"]:
             rec = _mapping.gateway_record(raw)

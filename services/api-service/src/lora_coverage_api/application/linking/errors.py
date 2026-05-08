@@ -34,3 +34,21 @@ class LinkedSourceNotFoundError(LinkingError):
 
     http_status = 404
     code = "linked_source_not_found"
+
+
+class CredentialAlreadyLinkedError(LinkingError):
+    """Cùng external account (theo fingerprint) đã được user khác link.
+
+    UNIQUE `(source_type, credential_fingerprint)` ở DB layer (migration
+    0009) chặn — `LinkingService.link()` catch IntegrityError và raise
+    error này. 409 Conflict (REST: trạng thái resource hiện tại không
+    cho phép request).
+
+    Privacy trade-off: response tiết lộ "account này đã có người link" —
+    chấp nhận vì caller phải có credential hợp lệ để đến bước này
+    (test() đã pass), nên không cộng thêm khả năng enumeration nào so
+    với việc login trực tiếp vào provider.
+    """
+
+    http_status = 409
+    code = "credential_already_linked"

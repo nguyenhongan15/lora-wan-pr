@@ -9,6 +9,7 @@ KHÔNG quản lý identity (Step 5) hay sync (Step 7).
 
 from ._crypto import CredentialCipher
 from .errors import (
+    CredentialAlreadyLinkedError,
     CredentialTestFailedError,
     LinkedSourceNotFoundError,
     LinkingError,
@@ -16,6 +17,7 @@ from .errors import (
 from .service import LinkedSource, LinkingService
 
 __all__ = [
+    "CredentialAlreadyLinkedError",
     "CredentialCipher",
     "CredentialTestFailedError",
     "LinkedSource",

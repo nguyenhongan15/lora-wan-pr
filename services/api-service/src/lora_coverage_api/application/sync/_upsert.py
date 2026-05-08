@@ -59,8 +59,11 @@ _GATEWAY_UPSERT_SQL = text("""
     DO UPDATE SET
         location            = EXCLUDED.location,
         altitude_m          = EXCLUDED.altitude_m,
-        contributor_user_id = COALESCE(EXCLUDED.contributor_user_id, geo.gateways.contributor_user_id),
-        linked_source_id    = COALESCE(EXCLUDED.linked_source_id,    geo.gateways.linked_source_id),
+        -- First-writer-wins (plan-auth §3.3 fix): existing trước EXCLUDED →
+        -- giữ contributor đầu tiên, không cho user link sau ghi đè data
+        -- của user link trước. NULL legacy → fall back EXCLUDED tag dần.
+        contributor_user_id = COALESCE(geo.gateways.contributor_user_id, EXCLUDED.contributor_user_id),
+        linked_source_id    = COALESCE(geo.gateways.linked_source_id,    EXCLUDED.linked_source_id),
         updated_at          = now()
     RETURNING (xmax = 0) AS inserted, id
 """)
@@ -82,8 +85,9 @@ _QUARANTINE_UPSERT_SQL = text("""
     )
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
     DO UPDATE SET
-        contributor_user_id = COALESCE(EXCLUDED.contributor_user_id, ts.survey_quarantine.contributor_user_id),
-        linked_source_id    = COALESCE(EXCLUDED.linked_source_id,    ts.survey_quarantine.linked_source_id)
+        -- First-writer-wins: xem comment trong _GATEWAY_UPSERT_SQL.
+        contributor_user_id = COALESCE(ts.survey_quarantine.contributor_user_id, EXCLUDED.contributor_user_id),
+        linked_source_id    = COALESCE(ts.survey_quarantine.linked_source_id,    EXCLUDED.linked_source_id)
     RETURNING (xmax = 0) AS inserted
 """)
 
@@ -107,8 +111,9 @@ _TRAINING_UPSERT_SQL = text("""
     )
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
     DO UPDATE SET
-        contributor_user_id = COALESCE(EXCLUDED.contributor_user_id, ts.survey_training.contributor_user_id),
-        linked_source_id    = COALESCE(EXCLUDED.linked_source_id,    ts.survey_training.linked_source_id)
+        -- First-writer-wins: xem comment trong _GATEWAY_UPSERT_SQL.
+        contributor_user_id = COALESCE(ts.survey_training.contributor_user_id, EXCLUDED.contributor_user_id),
+        linked_source_id    = COALESCE(ts.survey_training.linked_source_id,    EXCLUDED.linked_source_id)
     RETURNING (xmax = 0) AS inserted
 """)
 
