@@ -52,8 +52,7 @@ def _seed_danang_gateway() -> None:
                 ON CONFLICT (code) DO NOTHING
                 """
             ),
-            {"code": _TEST_GATEWAY_CODE, "name": _TEST_GATEWAY_CODE,
-             "lat": 16.115, "lon": 108.278},
+            {"code": _TEST_GATEWAY_CODE, "name": _TEST_GATEWAY_CODE, "lat": 16.115, "lon": 108.278},
         )
     yield
     with engine.begin() as conn:
