@@ -21,6 +21,22 @@ const tErr = strings.sources.errors;
 
 /** @typedef {"lpwanmapper" | "chirpstack"} SourceType */
 
+/**
+ * Union shape — chứa toàn bộ field của mọi adapter. Tùy `sourceType` mà
+ * onSubmit chỉ pick subset tương ứng. Khai báo type tường minh để TS
+ * không suy ra literal `""` từ Object.freeze bên dưới (nếu để TS tự suy,
+ * setCreds(c => ({ ...c, email: v })) sẽ fail vì `string` ≠ `""`).
+ *
+ * @typedef {{
+ *   email: string,
+ *   password: string,
+ *   api_url: string,
+ *   api_token: string,
+ *   tenant_id: string,
+ * }} Creds
+ */
+
+/** @type {Readonly<Creds>} */
 const EMPTY_CREDS = Object.freeze({
   email: "",
   password: "",
@@ -34,7 +50,9 @@ export function AddSourceForm() {
     /** @type {SourceType} */ ("lpwanmapper"),
   );
   const [label, setLabel] = useState("");
-  const [creds, setCreds] = useState({ ...EMPTY_CREDS });
+  const [creds, setCreds] = useState(
+    /** @type {Creds} */ ({ ...EMPTY_CREDS }),
+  );
   const qc = useQueryClient();
 
   const m = useMutation({
