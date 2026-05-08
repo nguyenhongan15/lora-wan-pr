@@ -7,13 +7,22 @@ ST_SetSRID(ST_MakePoint, 4326)::geography để chuyển lat/lng → geography.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, text
 
-from ..application.repositories import ContributorSpec, TrainingPoint
+from ..application.repositories import ContributorSpec, TrainingPoint, UserDevice
 from ..domain.survey import SurveyBatch, SurveyBatchId
+
+# Mapping sort_by → SQL column. Whitelist để tránh SQL injection qua
+# concat (sort_by là Literal nhưng vẫn whitelist để defense-in-depth).
+_SORT_COLUMN: dict[str, str] = {
+    "timestamp": "t.timestamp",
+    "rssi": "t.rssi_dbm",
+    "snr": "t.snr_db",
+}
 
 
 class PgSurveyRepository:
@@ -91,16 +100,26 @@ class PgSurveyRepository:
         *,
         contributor: ContributorSpec,
         bbox: tuple[float, float, float, float] | None = None,
+        offset: int = 0,
         limit: int = 1000,
         device_id: str | None = None,
         source_type: str | None = None,
+        sf_list: Sequence[int] | None = None,
+        rssi_min: float | None = None,
+        rssi_max: float | None = None,
+        snr_min: float | None = None,
+        snr_max: float | None = None,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+        sort_by: Literal["timestamp", "rssi", "snr"] = "timestamp",
+        sort_order: Literal["asc", "desc"] = "desc",
     ) -> Sequence[TrainingPoint]:
         # Build WHERE clauses động — tránh string concat thô để giữ tham số hoá.
         # JOIN auth.linked_sources + auth.users CHỈ cho mode=community (cần
         # filter contribute + disabled). Mode self/user bypass — defense in
         # depth không cần thiết vì target_user_id đã do edge ép buộc.
         where: list[str] = []
-        params: dict[str, object] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit, "offset": offset}
         join_sql = ""
 
         if contributor.mode == "community":
@@ -130,8 +149,38 @@ class PgSurveyRepository:
         if source_type is not None:
             where.append("t.source_type = :source_type")
             params["source_type"] = source_type
+        if sf_list:
+            where.append("t.spreading_factor = ANY(:sf_list)")
+            params["sf_list"] = list(sf_list)
+        if rssi_min is not None:
+            where.append("t.rssi_dbm >= :rssi_min")
+            params["rssi_min"] = rssi_min
+        if rssi_max is not None:
+            where.append("t.rssi_dbm <= :rssi_max")
+            params["rssi_max"] = rssi_max
+        if snr_min is not None:
+            where.append("t.snr_db >= :snr_min")
+            params["snr_min"] = snr_min
+        if snr_max is not None:
+            where.append("t.snr_db <= :snr_max")
+            params["snr_max"] = snr_max
+        if time_from is not None:
+            where.append("t.timestamp >= :time_from")
+            params["time_from"] = time_from
+        if time_to is not None:
+            where.append("t.timestamp <= :time_to")
+            params["time_to"] = time_to
 
         where_sql = "WHERE " + " AND ".join(where)
+        sort_column = _SORT_COLUMN[sort_by]
+        sort_dir = "ASC" if sort_order == "asc" else "DESC"
+        # Tie-breaker: timestamp DESC để khi rssi/snr trùng giá trị, OFFSET
+        # vẫn deterministic giữa các page.
+        order_sql = (
+            f"ORDER BY {sort_column} {sort_dir}, t.timestamp DESC"
+            if sort_by != "timestamp"
+            else f"ORDER BY {sort_column} {sort_dir}"
+        )
         sql = text(
             f"""
             SELECT
@@ -141,8 +190,8 @@ class PgSurveyRepository:
             FROM ts.survey_training t
             {join_sql}
             {where_sql}
-            ORDER BY t.timestamp DESC
-            LIMIT :limit
+            {order_sql}
+            LIMIT :limit OFFSET :offset
             """
         )
 
@@ -160,3 +209,34 @@ class PgSurveyRepository:
             )
             for r in rows
         ]
+
+    def list_user_devices(
+        self,
+        *,
+        user_id: UUID,
+        linked_source_id: UUID | None = None,
+    ) -> Sequence[UserDevice]:
+        # contributor_user_id = :user_id đã giới hạn data của user → an toàn
+        # khi pass linked_source_id thẳng vào WHERE; nếu user truyền source
+        # của người khác, intersection rỗng → không leak.
+        params: dict[str, Any] = {"user_id": user_id}
+        ls_clause = ""
+        if linked_source_id is not None:
+            ls_clause = "AND t.linked_source_id = :linked_source_id"
+            params["linked_source_id"] = linked_source_id
+
+        sql = text(
+            f"""
+            SELECT t.device_id, COUNT(*) AS cnt
+            FROM ts.survey_training t
+            WHERE t.contributor_user_id = :user_id
+              AND t.device_id IS NOT NULL
+              {ls_clause}
+            GROUP BY t.device_id
+            ORDER BY cnt DESC, t.device_id ASC
+            LIMIT 200
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(sql, params).mappings().all()
+        return [UserDevice(device_id=r["device_id"], count=int(r["cnt"])) for r in rows]

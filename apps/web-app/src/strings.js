@@ -36,11 +36,10 @@ export const strings = {
       gatewayCount: (gw) => `${gw ?? "…"} gateway`,
       /** @param {number} sv */
       surveyCount: (sv) => `${sv} điểm đo`,
-      gateway: "Gateway",
-      strongRssi: "≥ -100",
-      mediumRssi: "≥ -110",
-      weakRssi: "≥ -120",
-      noCoverage: "< -120",
+      strongRssi: "≥ -100 dBm",
+      mediumRssi: "-115 đến -100 dBm",
+      weakRssi: "-120 đến -115 dBm",
+      noCoverage: "< -120 dBm",
       // Legend dạng dài (component Legend nội bộ — hiện không dùng nhưng giữ
       // chuỗi để khi bật lại không bị mất đồng bộ).
       strongLong: "Mạnh (≥ -100 dBm)",
@@ -115,10 +114,55 @@ export const strings = {
         optionAll: "Tất cả nguồn của tôi",
         errorLoad: "Không tải được danh sách nguồn.",
       },
+      device: {
+        label: "Thiết bị (DevEUI)",
+        optionAll: "Tất cả thiết bị",
+        empty: "Chưa có thiết bị nào.",
+        errorLoad: "Không tải được danh sách thiết bị.",
+      },
       source: {
         label: "Loại nguồn",
         optionAll: "Tất cả",
       },
+      sfMulti: {
+        legend: "Spreading Factor",
+        optionAll: "Tất cả SF",
+      },
+      toggle: {
+        open: "Mở bộ lọc",
+        close: "Đóng bộ lọc",
+        title: "Bộ lọc",
+      },
+      timeRange: {
+        legend: "Khoảng thời gian",
+        presets: {
+          all: "Tất cả",
+          "24h": "24 giờ qua",
+          "7d": "7 ngày qua",
+          "30d": "30 ngày qua",
+        },
+      },
+      sort: {
+        legend: "Sắp xếp",
+        sortBy: {
+          timestamp: "Thời gian",
+          rssi: "RSSI",
+          snr: "SNR",
+        },
+        sortOrder: {
+          desc: "Mạnh → yếu",
+          asc: "Yếu → mạnh",
+        },
+      },
+      rssi: {
+        legend: "RSSI (dBm)",
+        unit: "dBm",
+      },
+      snr: {
+        legend: "SNR (dB)",
+        unit: "dB",
+      },
+      clear: "Xoá",
     },
     predictPanel: {
       title: "Dự đoán điểm",
@@ -197,6 +241,7 @@ export const strings = {
     detailError: "Không tải được dữ liệu gateway.",
     emptyState: "Chưa có gateway. Thêm mới để bắt đầu.",
     tableHeaders: [
+      "STT",
       "Code",
       "Name",
       "Lat",

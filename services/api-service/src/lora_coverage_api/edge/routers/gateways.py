@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from ...application.identity import User
 from ...application.repositories import GatewayDirectory
 from ...domain.coverage import Gateway, GatewayId
-from ..deps import gateway_directory
+from ..deps import _engine, current_user_optional, gateway_directory
+from ..filters import resolve_contributor
 from ..schemas import (
     GatewayCreateRequest,
     GatewayListResponse,
@@ -61,10 +64,26 @@ def _etag_for(g: Gateway) -> str:
 @router.get(
     "",
     response_model=GatewayListResponse,
-    summary="List gateways (optional bbox filter)",
+    summary="List gateways (optional bbox + contributor filter)",
 )
 async def list_gateways(
+    user: Annotated[User | None, Depends(current_user_optional)],
     directory: GatewayDirectory = Depends(gateway_directory),
+    contributor: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Symbolic filter: 'community' (default), 'me' (cần auth), "
+                "'user/<uuid>' (admin only). Mode 'me'/'user' chỉ trả "
+                "gateway từng phục vụ ít nhất 1 survey của user đó."
+            ),
+            examples=["community", "me", "user/00000000-0000-0000-0000-000000000000"],
+        ),
+    ] = None,
+    linked_source: Annotated[
+        UUID | None,
+        Query(description="Sub-filter cho 'me': chỉ gateway phục vụ survey của 1 linked source."),
+    ] = None,
     min_lon: float | None = Query(default=None, ge=-180, le=180),
     min_lat: float | None = Query(default=None, ge=-90, le=90),
     max_lon: float | None = Query(default=None, ge=-180, le=180),
@@ -83,7 +102,21 @@ async def list_gateways(
     else:
         bbox = None
 
-    items = directory.list_gateways(bbox=bbox, is_public=True, limit=limit)
+    # Resolver mở connection ngắn để verify linked_source ownership.
+    with _engine().begin() as conn:
+        spec = resolve_contributor(
+            conn,
+            raw_contributor=contributor,
+            raw_linked_source=linked_source,
+            current_user=user,
+        )
+
+    items = directory.list_gateways(
+        bbox=bbox,
+        is_public=True,
+        limit=limit,
+        contributor=spec,
+    )
     return GatewayListResponse(
         items=[_to_response(g) for g in items],
         total=len(items),

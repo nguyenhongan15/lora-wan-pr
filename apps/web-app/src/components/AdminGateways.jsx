@@ -77,8 +77,9 @@ export function AdminGateways() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {listQ.data.items.map((g) => (
+              {listQ.data.items.map((g, i) => (
                 <tr key={g.id}>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-slate-500">{i + 1}</td>
                   <td className="px-3 py-2 font-mono text-xs">{g.code}</td>
                   <td className="px-3 py-2">{g.name}</td>
                   <td className="px-3 py-2 font-mono text-xs">
@@ -106,7 +107,7 @@ export function AdminGateways() {
               {listQ.data.items.length === 0 && (
                 <tr>
                   <td
-                    colSpan={ENABLE_EDIT_GATEWAY ? 9 : 8}
+                    colSpan={ENABLE_EDIT_GATEWAY ? 10 : 9}
                     className="px-3 py-6 text-center text-slate-500"
                   >
                     {t.emptyState}

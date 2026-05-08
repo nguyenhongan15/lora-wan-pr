@@ -111,11 +111,19 @@ export const GatewayList = z.object({
  */
 
 /**
- * GET /api/v1/gateways
+ * GET /api/v1/gateways — backend resolver dùng chung edge/filters.py.
+ *   contributor=community (default): tất cả gateway public.
+ *   contributor=me / user/<uuid>: chỉ gateway từng phục vụ survey của user
+ *     đó (JOIN serving_gateway_id). Cần Bearer token cho mode != community.
+ *
  * @param {BBox=} bbox
+ * @param {{
+ *   contributor?: ContributorMode,
+ *   linkedSourceId?: string,
+ * }=} opts
  * @returns {Promise<z.infer<typeof GatewayList>>}
  */
-export async function listGateways(bbox) {
+export async function listGateways(bbox, opts) {
   const url = new URL(`${API_BASE_URL}/api/v1/gateways`);
   if (bbox) {
     url.searchParams.set("min_lon", String(bbox.min_lon));
@@ -123,7 +131,14 @@ export async function listGateways(bbox) {
     url.searchParams.set("max_lon", String(bbox.max_lon));
     url.searchParams.set("max_lat", String(bbox.max_lat));
   }
-  const res = await fetch(url);
+  const contributor = opts?.contributor ?? "community";
+  if (contributor !== "community") {
+    url.searchParams.set("contributor", contributor);
+  }
+  if (opts?.linkedSourceId) url.searchParams.set("linked_source", opts.linkedSourceId);
+
+  const doFetch = contributor === "community" ? fetch : authFetch;
+  const res = await doFetch(url);
   if (!res.ok) {
     throw new ApiError({
       type: "about:blank",
@@ -249,6 +264,19 @@ export const SurveyTrainingList = z.object({
  * @typedef {z.infer<typeof SurveyTrainingPoint>} SurveyTrainingPointT
  */
 
+export const MyDeviceItem = z.object({
+  device_id: z.string(),
+  count: z.number().int().nonnegative(),
+});
+
+export const MyDeviceList = z.object({
+  items: z.array(MyDeviceItem),
+});
+
+/**
+ * @typedef {z.infer<typeof MyDeviceItem>} MyDeviceItemT
+ */
+
 // ── Coverage lookup theo địa chỉ (F2) ─────────────────────────────────────
 
 export const ResolvedAddress = z.object({
@@ -372,6 +400,8 @@ export async function lookupCoverageBatch(req) {
 
 /**
  * @typedef {"community" | "me" | `user/${string}`} ContributorMode
+ * @typedef {"timestamp" | "rssi" | "snr"} SortBy
+ * @typedef {"asc" | "desc"} SortOrder
  *
  * GET /api/v1/survey/training — backend resolver: edge/filters.py.
  *   contributor=community (default): public map; backend filter
@@ -389,7 +419,18 @@ export async function lookupCoverageBatch(req) {
  *   limit?: number,
  *   contributor?: ContributorMode,
  *   linkedSourceId?: string,
- *   source?: string
+ *   source?: string,
+ *   sfList?: ReadonlyArray<number>,
+ *   rssiMin?: number,
+ *   rssiMax?: number,
+ *   snrMin?: number,
+ *   snrMax?: number,
+ *   timeFrom?: string,
+ *   timeTo?: string,
+ *   sortBy?: SortBy,
+ *   sortOrder?: SortOrder,
+ *   rankFrom?: number,
+ *   rankTo?: number,
  * }=} opts
  * @returns {Promise<z.infer<typeof SurveyTrainingList>>}
  */
@@ -411,6 +452,24 @@ export async function listSurveyTraining(bbox, opts) {
   if (opts?.linkedSourceId) url.searchParams.set("linked_source", opts.linkedSourceId);
   if (opts?.source) url.searchParams.set("source", opts.source);
 
+  if (opts?.sfList && opts.sfList.length > 0) {
+    url.searchParams.set("sf", opts.sfList.join(","));
+  }
+  if (opts?.rssiMin != null) url.searchParams.set("rssi_min", String(opts.rssiMin));
+  if (opts?.rssiMax != null) url.searchParams.set("rssi_max", String(opts.rssiMax));
+  if (opts?.snrMin != null) url.searchParams.set("snr_min", String(opts.snrMin));
+  if (opts?.snrMax != null) url.searchParams.set("snr_max", String(opts.snrMax));
+  if (opts?.timeFrom) url.searchParams.set("time_from", opts.timeFrom);
+  if (opts?.timeTo) url.searchParams.set("time_to", opts.timeTo);
+  if (opts?.sortBy && opts.sortBy !== "timestamp") {
+    url.searchParams.set("sort_by", opts.sortBy);
+  }
+  if (opts?.sortOrder && opts.sortOrder !== "desc") {
+    url.searchParams.set("sort_order", opts.sortOrder);
+  }
+  if (opts?.rankFrom != null) url.searchParams.set("rank_from", String(opts.rankFrom));
+  if (opts?.rankTo != null) url.searchParams.set("rank_to", String(opts.rankTo));
+
   const doFetch = contributor === "community" ? fetch : authFetch;
   const res = await doFetch(url);
   if (!res.ok) {
@@ -425,4 +484,29 @@ export async function listSurveyTraining(bbox, opts) {
     });
   }
   return SurveyTrainingList.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/survey/me/devices — list distinct device_ids của user, kèm
+ * số điểm. Dùng cho dropdown filter "Bản đồ của tôi". Cần token (authFetch).
+ *
+ * @param {{ linkedSourceId?: string }=} opts
+ * @returns {Promise<z.infer<typeof MyDeviceList>>}
+ */
+export async function listMyDevices(opts) {
+  const url = new URL(`${API_BASE_URL}/api/v1/survey/me/devices`);
+  if (opts?.linkedSourceId) url.searchParams.set("linked_source", opts.linkedSourceId);
+  const res = await authFetch(url);
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/problem+json") || ct.includes("application/json")) {
+      throw new ApiError(ProblemDetails.parse(await res.json()));
+    }
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to list devices",
+      status: res.status,
+    });
+  }
+  return MyDeviceList.parse(await res.json());
 }

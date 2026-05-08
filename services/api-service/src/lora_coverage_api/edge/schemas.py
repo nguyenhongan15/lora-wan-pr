@@ -138,6 +138,19 @@ class SurveyTrainingListResponse(BaseModel):
     total: int
 
 
+class MyDeviceItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str
+    count: int = Field(..., ge=0)
+
+
+class MyDeviceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[MyDeviceItem]
+
+
 # ── ChirpStack webhook ────────────────────────────────────────────────────
 
 

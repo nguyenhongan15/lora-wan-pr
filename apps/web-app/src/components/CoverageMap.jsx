@@ -12,37 +12,26 @@ import {
 import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
-import { ContributorFilter } from "./filters/ContributorFilter.jsx";
-import { LinkedSourceFilter } from "./filters/LinkedSourceFilter.jsx";
-import { SourceTypeFilter } from "./filters/SourceTypeFilter.jsx";
+import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
+import {
+  BASEMAP_STYLE,
+  DEFAULT_FREQ_MHZ,
+  DEFAULT_SF,
+  DEFAULT_SORT_BY,
+  DEFAULT_SORT_ORDER,
+  GATEWAY_MARKER_STYLE,
+  INITIAL_CENTER,
+  INITIAL_ZOOM,
+  PREDICT_MARKER_STYLE,
+  SF_OPTIONS,
+  STATUS_COLOR,
+  STATUS_COLOR_FALLBACK,
+  SURVEY_CIRCLE_PAINT,
+} from "./CoverageMap.config.js";
 
 const t = strings.coverageMap;
 /** @type {Record<string, string>} */
 const STATUS_LABEL = strings.coverageStatus;
-
-/** @type {Record<string, string>} */
-const STATUS_COLOR = {
-  strong: "#16a34a",
-  marginal: "#eab308",
-  weak: "#f97316",
-  no_coverage: "#dc2626",
-};
-
-const SF_OPTIONS = /** @type {const} */ ([7, 8, 9, 10, 11, 12]);
-const DEFAULT_SF = 12;
-// VN AS923-2 — DNIIT seed cũng dùng 923 (xem migrations/seeds/seed_gateways.sql).
-const DEFAULT_FREQ_MHZ = 923;
-
-const DANANG_BBOX = {
-  min_lon: 107.95,
-  min_lat: 15.9,
-  max_lon: 108.4,
-  max_lat: 16.2,
-};
-
-// Centroid của 11 gateway DNIIT thực tế (tính từ r-dt/response_1777987688423.json).
-const INITIAL_CENTER = /** @type {[number, number]} */ ([108.188, 16.069]);
-const INITIAL_ZOOM = 11;
 
 /**
  * Convert survey items → GeoJSON FeatureCollection cho circle layer.
@@ -65,25 +54,6 @@ function buildSurveyGeoJson(items) {
     })),
   };
 }
-
-const OSM_RASTER_STYLE = {
-  version: 8,
-  sources: {
-    basemap: {
-      type: "raster",
-      tiles: [
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-      ],
-      tileSize: 256,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      maxzoom: 19,
-    },
-  },
-  layers: [{ id: "basemap", type: "raster", source: "basemap" }],
-};
 
 /**
  * @returns {{ lat: number, lng: number, sf: number | null } | null}
@@ -120,6 +90,119 @@ function writeUrlState(lat, lng, sf) {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * @typedef {{
+ *   sfList: number[],
+ *   deviceId: string | null,
+ *   rssiRange: { min: number | null, max: number | null },
+ *   snrRange: { min: number | null, max: number | null },
+ *   timeRange: { from: string | null, to: string | null },
+ *   sortConfig: {
+ *     sortBy: import("../api/client.js").SortBy,
+ *     sortOrder: import("../api/client.js").SortOrder,
+ *   },
+ * }} PointsFilterState
+ */
+
+/** @returns {PointsFilterState} */
+function readPointsFilterUrlState() {
+  /** @type {PointsFilterState} */
+  const def = {
+    sfList: [],
+    deviceId: null,
+    rssiRange: { min: null, max: null },
+    snrRange: { min: null, max: null },
+    timeRange: { from: null, to: null },
+    sortConfig: {
+      sortBy: DEFAULT_SORT_BY,
+      sortOrder: DEFAULT_SORT_ORDER,
+    },
+  };
+  if (typeof window === "undefined") return def;
+  const p = new URLSearchParams(window.location.search);
+
+  const sfRaw = p.get("sf_list");
+  if (sfRaw) {
+    const parsed = sfRaw
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 7 && n <= 12);
+    def.sfList = [...new Set(parsed)].sort((a, b) => a - b);
+  }
+
+  const dev = p.get("device_id");
+  if (dev) def.deviceId = dev.slice(0, 64);
+
+  /** @param {string} key @returns {number | null} */
+  const numOrNull = (key) => {
+    const v = p.get(key);
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  def.rssiRange = { min: numOrNull("rssi_min"), max: numOrNull("rssi_max") };
+  def.snrRange = { min: numOrNull("snr_min"), max: numOrNull("snr_max") };
+
+  const tf = p.get("time_from");
+  const tt = p.get("time_to");
+  def.timeRange = { from: tf, to: tt };
+
+  const sb = p.get("sort_by");
+  if (sb === "rssi" || sb === "snr" || sb === "timestamp") {
+    def.sortConfig.sortBy = sb;
+  }
+  const so = p.get("sort_order");
+  if (so === "asc" || so === "desc") def.sortConfig.sortOrder = so;
+
+  return def;
+}
+
+/** @param {PointsFilterState} state */
+function writePointsFilterUrlState(state) {
+  if (typeof window === "undefined") return;
+  const p = new URLSearchParams(window.location.search);
+
+  if (state.sfList.length > 0) p.set("sf_list", state.sfList.join(","));
+  else p.delete("sf_list");
+
+  if (state.deviceId) p.set("device_id", state.deviceId);
+  else p.delete("device_id");
+
+  /** @param {string} key @param {number | null} v */
+  const setNum = (key, v) => {
+    if (v == null) p.delete(key);
+    else p.set(key, String(v));
+  };
+  setNum("rssi_min", state.rssiRange.min);
+  setNum("rssi_max", state.rssiRange.max);
+  setNum("snr_min", state.snrRange.min);
+  setNum("snr_max", state.snrRange.max);
+
+  if (state.timeRange.from) p.set("time_from", state.timeRange.from);
+  else p.delete("time_from");
+  if (state.timeRange.to) p.set("time_to", state.timeRange.to);
+  else p.delete("time_to");
+
+  if (state.sortConfig.sortBy !== DEFAULT_SORT_BY) {
+    p.set("sort_by", state.sortConfig.sortBy);
+  } else {
+    p.delete("sort_by");
+  }
+  if (state.sortConfig.sortOrder !== DEFAULT_SORT_ORDER) {
+    p.set("sort_order", state.sortConfig.sortOrder);
+  } else {
+    p.delete("sort_order");
+  }
+  // rank_from / rank_to không còn quản lý từ UI — clean URL legacy keys khi
+  // user vào lại trang sau khi đã có cửa sổ rank cũ.
+  p.delete("rank_from");
+  p.delete("rank_to");
+
+  const qs = p.toString();
+  const next = `${window.location.pathname}${qs ? "?" + qs : ""}${window.location.hash}`;
+  window.history.replaceState(null, "", next);
+}
 
 /**
  * @returns {{
@@ -180,10 +263,10 @@ function writeFilterUrlState(state) {
   window.history.replaceState(null, "", next);
 }
 
-// Survey GeoJSON source/layer ID — dùng circle layer (WebGL) thay vì HTML
-// marker để render mượt với 4k+ điểm.
+// Survey GeoJSON source — circle layer (WebGL), không cluster.
 const SURVEYS_SOURCE_ID = "surveys-src";
 const SURVEYS_LAYER_ID = "surveys-circle";
+
 
 /**
  * @param {{ mode?: "points" | "heatmap" | "predict" }} props
@@ -197,7 +280,7 @@ const SURVEYS_LAYER_ID = "surveys-circle";
 export function CoverageMap({ mode = "points" }) {
   const containerRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
-  const mapLoadedRef = useRef(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const gatewayMarkersRef = useRef(/** @type {maplibregl.Marker[]} */ ([]));
   const searchMarkerRef = useRef(/** @type {maplibregl.Marker | null} */ (null));
   const gatewaysRef = useRef(
@@ -209,6 +292,7 @@ export function CoverageMap({ mode = "points" }) {
   const skipFirstSfEffect = useRef(true);
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
+  const initialPointsFilterRef = useRef(readPointsFilterUrlState());
 
   const user = useSyncExternalStore(subscribeAuth, getUser);
 
@@ -234,15 +318,43 @@ export function CoverageMap({ mode = "points" }) {
     () => initialFilterRef.current.source,
   );
 
+  // Points-tab filters — chỉ active khi mode === "points". State giữ ngay cả
+  // khi tab khác (component instance riêng per-mode nên thực tế reset, nhưng
+  // logic an toàn nếu sau này share instance).
+  const [sfList, setSfList] = useState(
+    () => initialPointsFilterRef.current.sfList,
+  );
+  const [deviceId, setDeviceId] = useState(
+    () => initialPointsFilterRef.current.deviceId,
+  );
+  const [rssiRange, setRssiRange] = useState(
+    () => initialPointsFilterRef.current.rssiRange,
+  );
+  const [snrRange, setSnrRange] = useState(
+    () => initialPointsFilterRef.current.snrRange,
+  );
+  const [timeRange, setTimeRange] = useState(
+    () => initialPointsFilterRef.current.timeRange,
+  );
+  const [sortConfig, setSortConfig] = useState(
+    () => initialPointsFilterRef.current.sortConfig,
+  );
+
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
   // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
   // toàn bộ map empty + error toast).
   useEffect(() => {
-    if (!user && contributor !== "community") {
-      setContributor("community");
-      setLinkedSourceId(null);
+    if (!user) {
+      if (contributor !== "community") {
+        setContributor("community");
+        setLinkedSourceId(null);
+        setDeviceId(null);
+      }
+      // SourceTypeFilter ẩn khi logged-out → reset state để không apply filter
+      // ngầm không thấy được trên UI.
+      if (sourceType !== null) setSourceType(null);
     }
-  }, [user, contributor]);
+  }, [user, contributor, sourceType]);
 
   // Sync URL mỗi khi filter đổi.
   useEffect(() => {
@@ -253,31 +365,74 @@ export function CoverageMap({ mode = "points" }) {
     });
   }, [contributor, linkedSourceId, sourceType]);
 
+  // Points-tab filter URL sync — tách riêng để không đụng URL keys khi user
+  // ở tab khác (mode !== "points" thì state vẫn là default → write no-op).
+  useEffect(() => {
+    if (mode !== "points") return;
+    writePointsFilterUrlState({
+      sfList,
+      deviceId,
+      rssiRange,
+      snrRange,
+      timeRange,
+      sortConfig,
+    });
+  }, [mode, sfList, deviceId, rssiRange, snrRange, timeRange, sortConfig]);
+
+  // Filter pipeline: backend nhận contributor/linked_source/source +
+  // (sf_list, device_id, rssi/snr/time range, sort + rank window) và AND
+  // tất cả. Window rank thay thế `limit` cũ — RankFilter clamp ≤ 5000.
+  const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
+  const deviceIdForQuery = contributor === "me" ? deviceId : null;
+
+  // Gateway list cũng đi qua resolver contributor — "Bản đồ của tôi" chỉ
+  // hiện gateway từng phục vụ survey của user. Predict/heatmap luôn dùng
+  // community (gateway là hạ tầng tham chiếu, không phụ thuộc user).
+  const gatewayContributor = mode === "points" ? contributor : "community";
+  const gatewayLinkedSource =
+    mode === "points" ? linkedSourceForQuery : null;
+
+  // Bbox=undefined → backend trả gateway/điểm đo toàn cầu. Initial map view
+  // vẫn anchor ở Đà Nẵng (INITIAL_CENTER + INITIAL_ZOOM), user pan/zoom-out
+  // để xem dữ liệu ngoài vùng.
   const gatewaysQ = useQuery({
-    queryKey: ["gateways", DANANG_BBOX],
-    queryFn: () => listGateways(DANANG_BBOX),
+    queryKey: ["gateways", gatewayContributor, gatewayLinkedSource],
+    queryFn: () =>
+      listGateways(undefined, {
+        contributor: gatewayContributor,
+        linkedSourceId: gatewayLinkedSource ?? undefined,
+      }),
+    retry: gatewayContributor === "community" ? 3 : false,
   });
 
-  // Filter qua contributor / linked_source / source — backend tự AND. KHÔNG
-  // hard-code device_id; dataset cộng đồng đa device, fix board01 ẩn data
-  // contributor mới link.
-  const SURVEY_LIMIT = 5000;
-  const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
   const surveysQ = useQuery({
     queryKey: [
       "surveys",
-      DANANG_BBOX,
-      SURVEY_LIMIT,
       contributor,
       linkedSourceForQuery,
+      deviceIdForQuery,
       sourceType,
+      sfList,
+      rssiRange,
+      snrRange,
+      timeRange,
+      sortConfig,
     ],
     queryFn: () =>
-      listSurveyTraining(DANANG_BBOX, {
-        limit: SURVEY_LIMIT,
+      listSurveyTraining(undefined, {
         contributor,
         linkedSourceId: linkedSourceForQuery ?? undefined,
+        deviceId: deviceIdForQuery ?? undefined,
         source: sourceType ?? undefined,
+        sfList: sfList.length > 0 ? sfList : undefined,
+        rssiMin: rssiRange.min ?? undefined,
+        rssiMax: rssiRange.max ?? undefined,
+        snrMin: snrRange.min ?? undefined,
+        snrMax: snrRange.max ?? undefined,
+        timeFrom: timeRange.from ?? undefined,
+        timeTo: timeRange.to ?? undefined,
+        sortBy: sortConfig.sortBy,
+        sortOrder: sortConfig.sortOrder,
       }),
     enabled: mode === "points",
     // contributor !== community gặp 401/403 không nên retry tự động —
@@ -293,7 +448,7 @@ export function CoverageMap({ mode = "points" }) {
     try {
       map = new maplibregl.Map({
         container,
-        style: /** @type {any} */ (OSM_RASTER_STYLE),
+        style: /** @type {any} */ (BASEMAP_STYLE),
         center: INITIAL_CENTER,
         zoom: INITIAL_ZOOM,
       });
@@ -322,9 +477,10 @@ export function CoverageMap({ mode = "points" }) {
     });
 
     map.on("load", () => {
-      mapLoadedRef.current = true;
-      // Chỉ "points" mode add survey layer. "heatmap" sẽ add raster source
-      // ở Phase 2; "predict" không cần điểm đo nền — user chỉ pick toạ độ.
+      setMapLoaded(true);
+
+      // Survey layer chỉ add cho "points" mode. "heatmap" sẽ add raster
+      // source ở Phase 2; "predict" không cần điểm đo nền.
       if (mode !== "points") return;
 
       // Source GeoJSON rỗng — sẽ setData khi survey query xong.
@@ -332,25 +488,11 @@ export function CoverageMap({ mode = "points" }) {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-      // Circle layer — color theo rssi_dbm bằng step expression. Ngưỡng:
-      // ≥-100 strong, [-115,-100) good, [-120,-115) marginal, <-120 weak.
       map.addLayer({
         id: SURVEYS_LAYER_ID,
         type: "circle",
         source: SURVEYS_SOURCE_ID,
-        paint: {
-          "circle-radius": 4,
-          "circle-color": [
-            "step",
-            ["get", "rssi_dbm"],
-            "#dc2626", // < -120
-            -120, "#f97316", // [-120, -115)
-            -115, "#eab308", // [-115, -100)
-            -100, "#16a34a", // ≥ -100
-          ],
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 1,
-        },
+        paint: /** @type {any} */ (SURVEY_CIRCLE_PAINT),
       });
 
       // Lazy popup — chỉ tạo khi click 1 circle, không pre-render 4k popup.
@@ -395,7 +537,7 @@ export function CoverageMap({ mode = "points" }) {
 
     mapRef.current = map;
     return () => {
-      mapLoadedRef.current = false;
+      setMapLoaded(false);
       map.remove();
       mapRef.current = null;
     };
@@ -410,30 +552,30 @@ export function CoverageMap({ mode = "points" }) {
     if (mode !== "points") return;
     const map = mapRef.current;
     if (!map || !surveysQ.data) return;
-    if (!mapLoadedRef.current || !map.getSource(SURVEYS_SOURCE_ID)) return;
+    if (!mapLoaded || !map.getSource(SURVEYS_SOURCE_ID)) return;
     /** @type {maplibregl.GeoJSONSource} */ (
       map.getSource(SURVEYS_SOURCE_ID)
     ).setData(buildSurveyGeoJson(surveysQ.data.items));
-  }, [surveysQ.data, mode]);
+  }, [surveysQ.data, mode, mapLoaded]);
 
-  // Gateway: chỉ 11 điểm → giữ HTML marker (cần rotate 45° tạo hình diamond,
-  // dễ hơn dùng circle layer với icon).
+  // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
+  // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !gatewaysQ.data) return;
+    if (!map || !gatewaysQ.data || !mapLoaded) return;
+    gatewaysRef.current = gatewaysQ.data.items;
 
     for (const m of gatewayMarkersRef.current) m.remove();
     gatewayMarkersRef.current = [];
-    gatewaysRef.current = gatewaysQ.data.items;
 
     for (const g of gatewaysQ.data.items) {
       const el = document.createElement("div");
-      el.style.width = "16px";
-      el.style.height = "16px";
-      el.style.background = "#1d4ed8";
-      el.style.border = "2px solid white";
-      el.style.boxShadow = "0 0 4px rgba(0,0,0,0.5)";
-      el.style.transform = "rotate(45deg)";
+      el.style.width = GATEWAY_MARKER_STYLE.size;
+      el.style.height = GATEWAY_MARKER_STYLE.size;
+      el.style.background = GATEWAY_MARKER_STYLE.background;
+      el.style.border = GATEWAY_MARKER_STYLE.border;
+      el.style.boxShadow = GATEWAY_MARKER_STYLE.boxShadow;
+      el.style.borderRadius = GATEWAY_MARKER_STYLE.borderRadius;
       const popup = new maplibregl.Popup({ offset: 12 }).setHTML(
         `<div style="font:12px/1.4 system-ui">
            <div><strong>${g.code}</strong> — ${g.name}</div>
@@ -448,7 +590,12 @@ export function CoverageMap({ mode = "points" }) {
         .addTo(map);
       gatewayMarkersRef.current.push(marker);
     }
-  }, [gatewaysQ.data]);
+
+    return () => {
+      for (const m of gatewayMarkersRef.current) m.remove();
+      gatewayMarkersRef.current = [];
+    };
+  }, [gatewaysQ.data, mapLoaded]);
 
   /**
    * Build popup DOM 2 layer cho marker dự đoán (chỉ tab "Dự đoán điểm").
@@ -465,7 +612,7 @@ export function CoverageMap({ mode = "points" }) {
     root.style.cssText = "font:12px/1.4 system-ui;max-width:280px";
 
     const status = prediction.coverage_status;
-    const color = STATUS_COLOR[status] ?? "#7c3aed";
+    const color = STATUS_COLOR[status] ?? STATUS_COLOR_FALLBACK;
 
     const title = document.createElement("div");
     title.style.cssText = "font-weight:600;color:#0f172a";
@@ -570,15 +717,16 @@ export function CoverageMap({ mode = "points" }) {
       searchMarkerRef.current = null;
     }
 
-    const color = STATUS_COLOR[prediction.coverage_status] ?? "#7c3aed";
+    const color =
+      STATUS_COLOR[prediction.coverage_status] ?? STATUS_COLOR_FALLBACK;
     const el = document.createElement("div");
-    el.style.width = "22px";
-    el.style.height = "22px";
+    el.style.width = PREDICT_MARKER_STYLE.size;
+    el.style.height = PREDICT_MARKER_STYLE.size;
     el.style.borderRadius = "50% 50% 50% 0";
     el.style.transform = "rotate(-45deg)";
     el.style.background = color;
-    el.style.border = "3px solid white";
-    el.style.boxShadow = "0 0 6px rgba(0,0,0,0.5)";
+    el.style.border = PREDICT_MARKER_STYLE.border;
+    el.style.boxShadow = PREDICT_MARKER_STYLE.boxShadow;
 
     const popup = new maplibregl.Popup({ offset: 16 }).setDOMContent(
       buildPopupNode(lat, lng, prediction, sfUsed),
@@ -684,7 +832,10 @@ export function CoverageMap({ mode = "points" }) {
       <div className="relative h-full w-full overflow-hidden">
         <div ref={containerRef} className="h-full w-full" />
 
-        <div className="absolute top-3 left-3 z-10 flex flex-col gap-2">
+        {/* Container anchor cả trên + dưới: `bottom-44` (=11rem) chừa zone
+            cho legend ở góc dưới-trái. `pointer-events-none` để vùng trống
+            (khi panel collapsed) không chặn map click; children tự bật lại. */}
+        <div className="pointer-events-none absolute top-3 bottom-52 left-3 z-10 flex flex-col gap-2 [&>*]:pointer-events-auto">
           {mode === "predict" ? (
             <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 shadow-sm">
               <div className="text-sm font-semibold text-slate-900">
@@ -750,8 +901,31 @@ export function CoverageMap({ mode = "points" }) {
                 </div>
               )}
             </div>
+          ) : mode === "points" ? (
+            <PointsFilterPanel
+              user={user}
+              contributor={contributor}
+              onContributorChange={setContributor}
+              linkedSourceId={linkedSourceId}
+              onLinkedSourceChange={setLinkedSourceId}
+              deviceId={deviceId}
+              onDeviceIdChange={setDeviceId}
+              sourceType={sourceType}
+              onSourceTypeChange={setSourceType}
+              sfList={sfList}
+              onSfListChange={setSfList}
+              rssiRange={rssiRange}
+              onRssiRangeChange={setRssiRange}
+              snrRange={snrRange}
+              onSnrRangeChange={setSnrRange}
+              timeRange={timeRange}
+              onTimeRangeChange={setTimeRange}
+              sortConfig={sortConfig}
+              onSortConfigChange={setSortConfig}
+            />
           ) : (
-            <div className="w-56 space-y-2.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+            // Heatmap mode: chỉ SF dropdown đơn để chọn SF input cho model.
+            <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
               <div className="flex items-center gap-2">
                 <label
                   className="text-xs font-medium text-slate-700"
@@ -772,31 +946,14 @@ export function CoverageMap({ mode = "points" }) {
                   ))}
                 </select>
               </div>
-
-              {mode === "points" && (
-                <div className="space-y-2 border-t border-slate-200 pt-2">
-                  <ContributorFilter
-                    value={contributor}
-                    onChange={(next) => {
-                      setContributor(next);
-                      // Đổi mode khác "me" → reset linked_source (chỉ liên
-                      // quan đến mode me).
-                      if (next !== "me") setLinkedSourceId(null);
-                    }}
-                    user={user}
-                  />
-                  {contributor === "me" && (
-                    <LinkedSourceFilter
-                      value={linkedSourceId}
-                      onChange={setLinkedSourceId}
-                    />
-                  )}
-                  <SourceTypeFilter value={sourceType} onChange={setSourceType} />
-                </div>
-              )}
             </div>
           )}
 
+        </div>
+
+        {/* Legend cố định ở góc dưới trái — chừa chỗ cho ScaleControl của
+            maplibre (mounted ở "bottom-left", cao ~24px). */}
+        <div className="absolute bottom-10 left-2 z-10">
           <MapLegend
             gatewayCount={gatewaysQ.data?.total}
             surveyCount={mode === "points" ? surveysQ.data?.total : null}

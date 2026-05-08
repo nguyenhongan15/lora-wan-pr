@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import Engine, text
 
+from ..application.repositories import ContributorSpec
 from ..domain.coverage import Gateway, GatewayId, Target
 
 # Subset cột được phép update (whitelist — KHÔNG cho update id/code).
@@ -97,28 +98,52 @@ class PgGatewayDirectory:
         bbox: tuple[float, float, float, float] | None = None,
         is_public: bool | None = True,
         limit: int = 500,
+        contributor: ContributorSpec | None = None,
     ) -> Sequence[Gateway]:
         clauses: list[str] = []
         params: dict[str, Any] = {"lim": limit}
+        join_sql = ""
+        # `g.` qualifier dùng cho mọi cột để khi JOIN ts.survey_training
+        # (trùng tên cột `location`) không bị ambiguous.
 
         if is_public is not None:
-            clauses.append("is_public = :is_public")
+            clauses.append("g.is_public = :is_public")
             params["is_public"] = is_public
 
         if bbox is not None:
             min_lon, min_lat, max_lon, max_lat = bbox
             clauses.append(
-                "ST_Intersects(location, ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)::geography)"
+                "ST_Intersects(g.location, ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)::geography)"
             )
             params.update(min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
 
+        # Mode self/user: chỉ trả gateway có survey từ user đó. INNER JOIN
+        # + DISTINCT (1 gateway có nhiều survey) — query plan dùng index
+        # ts.survey_training(contributor_user_id) đã tồn tại từ migration.
+        if contributor is not None and contributor.mode in ("self", "user"):
+            join_sql = "INNER JOIN ts.survey_training t ON t.serving_gateway_id = g.id"
+            clauses.append("t.contributor_user_id = :contributor_user_id")
+            params["contributor_user_id"] = contributor.target_user_id
+            if contributor.linked_source_id is not None:
+                clauses.append("t.linked_source_id = :linked_source_id")
+                params["linked_source_id"] = contributor.linked_source_id
+
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        distinct = "DISTINCT" if join_sql else ""
+        select_cols = """
+            g.id, g.code, g.name,
+            ST_Y(g.location::geometry) AS lat,
+            ST_X(g.location::geometry) AS lon,
+            g.altitude_m, g.antenna_height_m, g.antenna_gain_dbi,
+            g.tx_power_dbm, g.frequency_mhz
+        """
         sql = text(
             f"""
-            SELECT {_SELECT_COLS}
-            FROM geo.gateways
+            SELECT {distinct} {select_cols}
+            FROM geo.gateways g
+            {join_sql}
             {where}
-            ORDER BY code
+            ORDER BY g.code
             LIMIT :lim
             """
         )

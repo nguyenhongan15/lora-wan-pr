@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -38,8 +39,15 @@ class GatewayDirectory(Protocol):
         bbox: tuple[float, float, float, float] | None = None,
         is_public: bool | None = True,
         limit: int = 500,
+        contributor: ContributorSpec | None = None,
     ) -> Sequence[Gateway]:
-        """List gateways, optional filter theo bbox (min_lon, min_lat, max_lon, max_lat)."""
+        """List gateways, optional filter theo bbox (min_lon, min_lat, max_lon, max_lat).
+
+        Khi `contributor.mode` ∈ {self, user}: chỉ trả gateway từng phục vụ
+        ít nhất 1 survey training point của user đó (JOIN ts.survey_training
+        trên `serving_gateway_id`). Mode `community` hoặc None: behavior cũ
+        (tất cả gateway match bbox/is_public).
+        """
         ...
 
     def get_by_id(self, gateway_id: GatewayId) -> Gateway | None: ...
@@ -93,16 +101,57 @@ class SurveyIngest(Protocol):
         *,
         contributor: ContributorSpec,
         bbox: tuple[float, float, float, float] | None = None,
+        offset: int = 0,
         limit: int = 1000,
         device_id: str | None = None,
         source_type: str | None = None,
+        sf_list: Sequence[int] | None = None,
+        rssi_min: float | None = None,
+        rssi_max: float | None = None,
+        snr_min: float | None = None,
+        snr_max: float | None = None,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+        sort_by: Literal["timestamp", "rssi", "snr"] = "timestamp",
+        sort_order: Literal["asc", "desc"] = "desc",
     ) -> Sequence[TrainingPoint]:
         """List promoted survey points cho map visualization.
 
         `contributor` đã được authorize ở edge — repository chỉ áp dụng
         WHERE clause tương ứng với mode (xem ContributorSpec).
+
+        offset/limit thay cho 1 limit thuần — caller có thể "lấy điểm hạng
+        N..M sau khi sort". Edge router map rank_from/rank_to → offset+limit.
+
+        sort_by + sort_order: cho phép chọn trục xếp hạng (timestamp mặc định
+        DESC = newest first; rssi DESC = mạnh nhất trước; snr DESC = clean
+        nhất trước). Tie-break thêm timestamp DESC để OFFSET deterministic.
         """
         ...
+
+    def list_user_devices(
+        self,
+        *,
+        user_id: UUID,
+        linked_source_id: UUID | None = None,
+    ) -> Sequence[UserDevice]:
+        """List distinct device_id của 1 user trên ts.survey_training, kèm
+        số điểm. Optional narrow theo linked_source_id (đã verify ownership
+        ở edge nếu cần — repository chỉ AND vào WHERE).
+
+        Sort: count DESC, device_id ASC để UI hiển thị thiết bị nhiều data
+        trước.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class UserDevice:
+    """Read-model: 1 device_id của user, kèm số điểm đo. Dùng cho dropdown
+    filter "Bản đồ của tôi" → dropdown thiết bị thay vì text input."""
+
+    device_id: str
+    count: int
 
 
 @dataclass(frozen=True, slots=True)
