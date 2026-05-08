@@ -7,7 +7,6 @@ import logging
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse
 
 from ..config import get_settings
 from .errors import register_error_handlers
@@ -42,7 +41,6 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="LoRa Coverage Platform API",
         version="0.2.0",
-        default_response_class=ORJSONResponse,
         docs_url="/docs",
         redoc_url=None,
         openapi_url="/openapi.json",

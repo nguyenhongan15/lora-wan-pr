@@ -40,6 +40,13 @@ class FakeDataSource(DataSource):
             raise SourceAuthError("empty credentials")
         return {"token": "fake-token"}
 
+    def canonicalize_credentials(self, credentials: Mapping[str, Any]) -> Mapping[str, str]:
+        if not credentials:
+            raise SourceAuthError("empty credentials")
+        # Test fake: dùng nguyên dict (string-coerce) làm identity. Real adapter
+        # sẽ chỉ trích field định danh (xem lpwanmapper/chirpstack adapter).
+        return {k: str(v) for k, v in credentials.items()}
+
     def fetch_gateways(self, handle: Any) -> Iterator[GatewayRecord]:
         yield from self._gateways
 
