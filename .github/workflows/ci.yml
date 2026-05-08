@@ -104,40 +104,31 @@ jobs:
       - name: Run ${{ matrix.task.name }}
         run: ${{ matrix.task.cmd }}
 
-  # Postgres + tests. Dùng `docker run` thủ công thay cho `services:` block để
-  # ScribeMD/docker-cache load image ~1GB từ GHA cache (services: luôn pull
-  # fresh, mất ~50–60s/run). Bump key suffix `-v1`→`-v2` để ép pull lại khi
-  # cần (ví dụ image upstream update).
+  # Postgres qua `services:` block của GitHub Actions: pull mới ~50–60s/run,
+  # đổi lấy hết flakiness của ScribeMD/docker-cache (post-step `docker save`
+  # tràn đĩa runner với image ~5–7GB của timescaledb-ha all-extensions).
   api-test:
     needs: changes
     if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg17-ts2.17-all
+        env:
+          POSTGRES_USER: lora
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: lora_coverage
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lora -d lora_coverage"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     env:
       DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
     steps:
       - uses: actions/checkout@v4
-
-      - name: Cache Postgres image
-        uses: ScribeMD/docker-cache@0.5.0
-        with:
-          key: docker-${{ runner.os }}-timescaledb-ha-pg17-ts2.17-all-v1
-
-      - name: Start Postgres
-        run: |
-          docker run -d --name postgres-ci \
-            -e POSTGRES_USER=lora \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_DB=lora_coverage \
-            -p 5432:5432 \
-            --health-cmd "pg_isready -U lora -d lora_coverage" \
-            --health-interval 2s \
-            --health-timeout 5s \
-            --health-retries 20 \
-            timescale/timescaledb-ha:pg17-ts2.17-all
-          # Đợi container healthy (max 60s) thay vì sleep mù.
-          timeout 60 bash -c \
-            'until [ "$(docker inspect -f {{.State.Health.Status}} postgres-ci)" = healthy ]; do sleep 1; done'
-
       - uses: ./.github/actions/setup-python-uv
 
       - name: Migrate + seed
@@ -147,10 +138,6 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -v
-
-      - name: Stop Postgres
-        if: always()
-        run: docker rm -f postgres-ci || true
 
   docker-build:
     needs: changes
