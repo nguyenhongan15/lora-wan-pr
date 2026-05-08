@@ -1,13 +1,13 @@
 // @ts-check
-// Filter theo source_type (column ts.survey_training.source_type). Hiện chỉ
-// có 1 giá trị thực tế "lpwanmapper" (manual upload chưa có) — list cố
-// định, mở rộng khi adapter mới ra mắt.
+// Filter theo source_type (column ts.survey_training.source_type). List cố
+// định khớp registry adapter ở backend (sources/__init__.py) — mở rộng khi
+// adapter mới ra mắt.
 
 import { strings } from "../../strings.js";
 
 const t = strings.coverageMap.filters.source;
 
-const OPTIONS = /** @type {const} */ (["lpwanmapper"]);
+const OPTIONS = /** @type {const} */ (["lpwanmapper", "chirpstack"]);
 
 /**
  * @param {{

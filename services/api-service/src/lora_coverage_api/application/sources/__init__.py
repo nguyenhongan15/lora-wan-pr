@@ -9,7 +9,7 @@ modules dưới sources/<provider>/.
 
 # Side effect: built-in adapters self-register vào registry. Caller chỉ cần
 # import package này; không phải biết tên adapter module nào tồn tại.
-from . import lpwanmapper  # noqa: F401
+from . import chirpstack, lpwanmapper  # noqa: F401
 from .base import (
     ConnectionHandle,
     DataSource,

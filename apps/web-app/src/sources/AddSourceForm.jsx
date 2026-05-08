@@ -1,17 +1,14 @@
 // @ts-check
-// Add lpwanmapper source form.
+// Add source form — chọn loại nguồn rồi nhập credential tương ứng.
 //
-// V1 chỉ hỗ trợ source_type="lpwanmapper" — hardcode dropdown 1 option để
-// future-proof (Step v2 thêm chirpstack / csv chỉ cần thêm option).
+// Source types match backend registry (sources/__init__.py): "lpwanmapper",
+// "chirpstack". Credential shape khác nhau giữa adapter — switch fields
+// theo state.sourceType. Backend `linking.test()` gọi adapter.connect ⇒ sai
+// → 400 credential_test_failed (KHÔNG persist).
 //
-// Credential lpwanmapper = {email, password}. Plan §3.2 + adapter.connect
-// validate shape. Backend `linking.test()` gọi adapter.connect — sai email/
-// password → 400 credential_test_failed (KHÔNG persist).
-//
-// Privacy: password input dùng autoComplete="off" thay vì "new-password" —
-// "new-password" semantic = gợi ý mật khẩu mạnh khi đăng ký, sai context
-// (đây là credential bên thứ 3 user đã có sẵn). Sau khi mutation success,
-// reset state ngay → password không lingering trong React state.
+// Privacy: password/api_token dùng autoComplete="off" — đây là credential
+// bên thứ 3 user đã có sẵn, không phải tạo mới. Reset state ngay sau success
+// hoặc khi đổi loại nguồn → không lingering.
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -22,10 +19,22 @@ import { strings } from "../strings.js";
 const t = strings.sources.addForm;
 const tErr = strings.sources.errors;
 
+/** @typedef {"lpwanmapper" | "chirpstack"} SourceType */
+
+const EMPTY_CREDS = Object.freeze({
+  email: "",
+  password: "",
+  api_url: "",
+  api_token: "",
+  tenant_id: "",
+});
+
 export function AddSourceForm() {
+  const [sourceType, setSourceType] = useState(
+    /** @type {SourceType} */ ("lpwanmapper"),
+  );
   const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [creds, setCreds] = useState({ ...EMPTY_CREDS });
   const qc = useQueryClient();
 
   const m = useMutation({
@@ -33,19 +42,42 @@ export function AddSourceForm() {
     onSuccess: () => {
       // Clear credential ngay khỏi state — không lingering.
       setLabel("");
-      setEmail("");
-      setPassword("");
+      setCreds({ ...EMPTY_CREDS });
       qc.invalidateQueries({ queryKey: ["sources"] });
     },
   });
 
+  /** @param {SourceType} next */
+  function onChangeSourceType(next) {
+    if (next === sourceType) return;
+    setSourceType(next);
+    // Đổi adapter = đổi shape credential → reset để tránh nhầm field cũ.
+    setCreds({ ...EMPTY_CREDS });
+    m.reset();
+  }
+
   /** @param {import("react").FormEvent} e */
   function onSubmit(e) {
     e.preventDefault();
+    /** @type {Record<string, string>} */
+    let credentials;
+    if (sourceType === "lpwanmapper") {
+      credentials = {
+        email: creds.email.trim(),
+        password: creds.password,
+      };
+    } else {
+      credentials = {
+        api_url: creds.api_url.trim(),
+        api_token: creds.api_token.trim(),
+      };
+      const tenant = creds.tenant_id.trim();
+      if (tenant) credentials.tenant_id = tenant;
+    }
     m.mutate({
-      source_type: "lpwanmapper",
+      source_type: sourceType,
       label: label.trim(),
-      credentials: { email: email.trim(), password },
+      credentials,
     });
   }
 
@@ -64,11 +96,14 @@ export function AddSourceForm() {
           </label>
           <select
             id="src-type"
-            value="lpwanmapper"
-            disabled
-            className="mt-1 w-full rounded-md border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-sm"
+            value={sourceType}
+            onChange={(e) =>
+              onChangeSourceType(/** @type {SourceType} */ (e.target.value))
+            }
+            className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
           >
             <option value="lpwanmapper">lpwanmapper</option>
+            <option value="chirpstack">chirpstack</option>
           </select>
         </div>
 
@@ -92,41 +127,27 @@ export function AddSourceForm() {
           />
         </div>
 
-        <div>
-          <label
-            htmlFor="src-email"
-            className="block text-sm font-medium text-slate-700"
-          >
-            {t.emailLabel}
-          </label>
-          <input
-            id="src-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="off"
-            className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        {sourceType === "lpwanmapper" ? (
+          <LpwanmapperFields
+            email={creds.email}
+            password={creds.password}
+            onChangeEmail={(v) => setCreds((c) => ({ ...c, email: v }))}
+            onChangePassword={(v) => setCreds((c) => ({ ...c, password: v }))}
           />
-        </div>
-
-        <div>
-          <label
-            htmlFor="src-password"
-            className="block text-sm font-medium text-slate-700"
-          >
-            {t.passwordLabel}
-          </label>
-          <input
-            id="src-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="off"
-            className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        ) : (
+          <ChirpStackFields
+            apiUrl={creds.api_url}
+            apiToken={creds.api_token}
+            tenantId={creds.tenant_id}
+            onChangeApiUrl={(v) => setCreds((c) => ({ ...c, api_url: v }))}
+            onChangeApiToken={(v) =>
+              setCreds((c) => ({ ...c, api_token: v }))
+            }
+            onChangeTenantId={(v) =>
+              setCreds((c) => ({ ...c, tenant_id: v }))
+            }
           />
-        </div>
+        )}
 
         <div className="sm:col-span-2">
           <button
@@ -150,6 +171,142 @@ export function AddSourceForm() {
 
       {m.isError && <FormError error={m.error} />}
     </section>
+  );
+}
+
+/**
+ * @param {{
+ *   email: string,
+ *   password: string,
+ *   onChangeEmail: (v: string) => void,
+ *   onChangePassword: (v: string) => void,
+ * }} props
+ */
+function LpwanmapperFields({
+  email,
+  password,
+  onChangeEmail,
+  onChangePassword,
+}) {
+  const tt = t.lpwanmapper;
+  return (
+    <>
+      <div>
+        <label
+          htmlFor="src-email"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {tt.emailLabel}
+        </label>
+        <input
+          id="src-email"
+          type="email"
+          value={email}
+          onChange={(e) => onChangeEmail(e.target.value)}
+          required
+          autoComplete="off"
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        />
+      </div>
+
+      <div>
+        <label
+          htmlFor="src-password"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {tt.passwordLabel}
+        </label>
+        <input
+          id="src-password"
+          type="password"
+          value={password}
+          onChange={(e) => onChangePassword(e.target.value)}
+          required
+          autoComplete="off"
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * @param {{
+ *   apiUrl: string,
+ *   apiToken: string,
+ *   tenantId: string,
+ *   onChangeApiUrl: (v: string) => void,
+ *   onChangeApiToken: (v: string) => void,
+ *   onChangeTenantId: (v: string) => void,
+ * }} props
+ */
+function ChirpStackFields({
+  apiUrl,
+  apiToken,
+  tenantId,
+  onChangeApiUrl,
+  onChangeApiToken,
+  onChangeTenantId,
+}) {
+  const tt = t.chirpstack;
+  return (
+    <>
+      <div className="sm:col-span-2">
+        <label
+          htmlFor="src-cs-url"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {tt.apiUrlLabel}
+        </label>
+        <input
+          id="src-cs-url"
+          type="url"
+          value={apiUrl}
+          onChange={(e) => onChangeApiUrl(e.target.value)}
+          placeholder={tt.apiUrlPlaceholder}
+          required
+          autoComplete="off"
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        />
+      </div>
+
+      <div className="sm:col-span-2">
+        <label
+          htmlFor="src-cs-token"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {tt.apiTokenLabel}
+        </label>
+        <input
+          id="src-cs-token"
+          type="password"
+          value={apiToken}
+          onChange={(e) => onChangeApiToken(e.target.value)}
+          required
+          autoComplete="off"
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        />
+        <p className="mt-1 text-xs text-slate-500">{tt.apiTokenHint}</p>
+      </div>
+
+      <div className="sm:col-span-2">
+        <label
+          htmlFor="src-cs-tenant"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {tt.tenantIdLabel}
+        </label>
+        <input
+          id="src-cs-tenant"
+          type="text"
+          value={tenantId}
+          onChange={(e) => onChangeTenantId(e.target.value)}
+          autoComplete="off"
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        />
+        <p className="mt-1 text-xs text-slate-500">{tt.tenantIdHint}</p>
+      </div>
+    </>
   );
 }
 

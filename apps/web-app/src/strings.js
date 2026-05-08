@@ -439,24 +439,34 @@ export const strings = {
     page: {
       title: "Nguồn dữ liệu của tôi",
       subtitle:
-        "Liên kết tài khoản bên ngoài (vd. lpwanmapper) để đóng góp dữ liệu khảo sát lên bản đồ cộng đồng.",
+        "Liên kết tài khoản bên ngoài (vd. lpwanmapper, ChirpStack) để đóng góp dữ liệu khảo sát lên bản đồ cộng đồng.",
       empty: "Chưa liên kết nguồn nào. Dùng form bên trên để thêm.",
       loading: "Đang tải danh sách…",
       errorLoad: "Không tải được danh sách nguồn.",
     },
     addForm: {
-      title: "Thêm nguồn lpwanmapper",
+      title: "Thêm nguồn dữ liệu",
       subtitle:
-        "Credential dùng để pull dữ liệu định kỳ. Mật khẩu được mã hoá trước khi lưu.",
+        "Credential dùng để pull dữ liệu định kỳ. Được mã hoá trước khi lưu.",
       sourceTypeLabel: "Loại nguồn",
       labelLabel: "Nhãn (gợi nhớ)",
       labelPlaceholder: "vd. Tài khoản cá nhân",
-      emailLabel: "Email lpwanmapper",
-      passwordLabel: "Mật khẩu lpwanmapper",
       submit: "Liên kết",
       submitPending: "Đang xác thực…",
       successHint:
         "Đã liên kết. Mặc định CHƯA đóng góp lên cộng đồng — bấm \"Đóng góp\" trong thẻ bên dưới khi sẵn sàng.",
+      lpwanmapper: {
+        emailLabel: "Email lpwanmapper",
+        passwordLabel: "Mật khẩu lpwanmapper",
+      },
+      chirpstack: {
+        apiUrlLabel: "API URL",
+        apiUrlPlaceholder: "https://chirpstack.example.com:8080",
+        apiTokenLabel: "API Token",
+        apiTokenHint: "Tạo trong ChirpStack UI → API keys.",
+        tenantIdLabel: "Tenant ID (tuỳ chọn)",
+        tenantIdHint: "Để trống nếu API key đã scope sẵn theo tenant.",
+      },
     },
     card: {
       statusActive: "Đang sync",
@@ -487,7 +497,7 @@ export const strings = {
       byCode: (code) => {
         switch (code) {
           case "credential_test_failed":
-            return "Email/mật khẩu lpwanmapper không đúng.";
+            return "Credential không hợp lệ — kiểm tra lại thông tin đăng nhập / API token.";
           case "linked_source_not_found":
             return "Nguồn không tồn tại hoặc đã bị xoá.";
           case "linking_error":
