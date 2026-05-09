@@ -23,7 +23,7 @@ from ..application.identity import (
     User,
 )
 from ..application.linking import CredentialCipher, LinkingService
-from ..application.path_loss import Stage1LogDistanceModel
+from ..application.path_loss import Stage1LogDistanceModel, resolve_environment_profile
 from ..application.repositories import (
     AddressResolution,
     CoverageQuery,
@@ -68,7 +68,10 @@ def coverage_query() -> CoverageQuery:
     settings = _settings()
     return CoverageQueryService(
         directory=gateway_directory(),
-        model=Stage1LogDistanceModel(model_version=settings.ml_model_version),
+        model=Stage1LogDistanceModel(
+            model_version=settings.ml_model_version,
+            env_profile=resolve_environment_profile(settings.lora_env_profile),
+        ),
     )
 
 

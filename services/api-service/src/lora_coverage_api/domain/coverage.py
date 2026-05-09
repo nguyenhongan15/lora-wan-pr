@@ -30,14 +30,28 @@ class ConfidenceMethod(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Confidence:
-    """Mọi Prediction PHẢI kèm Confidence (hard invariant)."""
+    """Mọi Prediction PHẢI kèm Confidence (hard invariant).
+
+    Variance fields default 0.0 — Stage 1 set aleatoric từ shadow fading σ²;
+    Stage 2/3 set epistemic từ ensemble/GP. Đơn vị dB² (variance của RSSI dB).
+    """
 
     score: float  # [0, 1]
     method: ConfidenceMethod
+    epistemic_variance_db2: float = 0.0
+    aleatoric_variance_db2: float = 0.0
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.score <= 1.0:
             raise ValueError(f"Confidence.score must be in [0,1], got {self.score}")
+        if self.epistemic_variance_db2 < 0:
+            raise ValueError(
+                f"Confidence.epistemic_variance_db2 must be >= 0, got {self.epistemic_variance_db2}"
+            )
+        if self.aleatoric_variance_db2 < 0:
+            raise ValueError(
+                f"Confidence.aleatoric_variance_db2 must be >= 0, got {self.aleatoric_variance_db2}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

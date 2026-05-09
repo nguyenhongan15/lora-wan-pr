@@ -66,6 +66,14 @@ class Settings(BaseSettings):
 
     ml_model_version: str = Field(default="stage1-loglike-v0.1.0")
 
+    # ── Stage 1 path-loss profile (12F III) ──────────────────────────────
+    # One of: urban | suburban | rural. Allowlist enforce ở boundary
+    # `resolve_environment_profile()` (application/path_loss.py).
+    lora_env_profile: str = Field(
+        default="suburban",
+        description="Path loss environment profile: urban|suburban|rural.",
+    )
+
     rate_limit_default: str = Field(default="60/minute")
     rate_limit_anon: str = Field(default="10/minute")
 

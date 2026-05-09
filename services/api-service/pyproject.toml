@@ -30,3 +30,6 @@ packages = ["src/lora_coverage_api"]
 
 [tool.ruff]
 extend = "../../pyproject.toml"
+
+[tool.ruff.lint]
+allowed-confusables = ["σ", "²", "·", "→"]
