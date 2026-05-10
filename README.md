@@ -1,6 +1,6 @@
 # LoRa Coverage Mapping Platform
 
-Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a pure-math log-distance / Friis-hybrid path-loss predictor (Stage 1, AS923-2 / 923 MHz, suburban exponent n=3.0, reference distance d₀ = 100 m); ML stages (residual, ensemble, Bayesian) are planned but not yet implemented. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
+Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a pure-math log-distance / Friis-hybrid path-loss predictor (Stage 1, AS923-2 / 923 MHz, suburban exponent n=3.0, shadow fading σ=6.0 dB, reference distance d₀ = 100 m). Calibration scope is Đà Nẵng-only (9.5k survey records); validity domain is outdoor 5–30 km from gateway (RMSE 4–5 dB in-distribution). Short-range < 2 km has a known +30 dB bias from unmodeled indoor/NLOS — reserved for Stage 2 LightGBM (planned). ML stages (residual, ensemble, Bayesian) are planned but not yet implemented. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
 
 Version: **0.2.0**
 
@@ -48,11 +48,11 @@ packages/
   sdk-js/           ⏳ JavaScript client SDK
   sdk-go/           ⏳ Go client SDK
 
-migrations/         ✅ Alembic — 5 versions (PostGIS + TimescaleDB hypertables) + seed_gateways.sql
+migrations/         ✅ Alembic — 9 versions (PostGIS + TimescaleDB hypertables) + seed_gateways.sql (11 DNIIT + 2 HP gateways)
 ops/                Nginx reverse-proxy template; Docker / Grafana dirs reserved
-docs/               Architecture & ADR docs
+docs/               Architecture & ADR docs · ml-annguyen/ Stage 1 validation report
 core-logic/         Design playbooks (system architecture, skill rules, philosophy notes)
-scripts/            seed_gateways.py, backfill_rdt.py
+scripts/            seed_gateways.py, backfill_rdt.py, fit_path_loss_exponent.sql, validate_stage1_danang.sql
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
@@ -124,6 +124,9 @@ Three jobs run on push and PR to `main`:
 
 - Every `Prediction` carries a `Confidence` (enforced in `domain.coverage.Prediction.__post_init__`)
 - Every survey upload passes through `quarantine` before entering `training` (two separate hypertables)
+- Stage 1 calibration data is Đà Nẵng-only (bbox lat 15.8–16.3, lon 107.9–108.5); Hải Phòng & other regions are validation-only, never enter the fit
+- Stage 1 validity domain: outdoor 5–30 km — predictions inside this domain are validated, predictions at < 2 km have a known +30 dB optimistic bias
+- Dataset split for ML hygiene: train+val random from Nov–Dec 2025 (88/12), test = Jan–Feb 2026 temporal hold-out — derived in-query, not persisted
 - General donations never hit Google APIs
 - `model_version` is part of the S3 key prefix
 - v1 deployment target: Hetzner CPX31 (~$16/mo), Docker Compose, total infra under $100/mo
@@ -133,6 +136,7 @@ Three jobs run on push and PR to `main`:
 - `services/api-service/README.md` — API service details and test DB setup
 - `migrations/README.md` — migration conventions
 - `docs/` — architecture notes and ADRs
+- `docs/ml-annguyen/validation-tang1.md` — Stage 1 validation report, validity domain, per-split metrics
 - `core-logic/main-logic/` — system architecture, business logic, design philosophy
 - `core-logic/skills/` — REST/CRUD/DB/container/security/logging design rules
 
