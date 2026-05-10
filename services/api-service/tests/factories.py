@@ -46,9 +46,9 @@ def make_gateway(
     longitude: float = DA_NANG_LNG,
     altitude_m: float = 10.0,
     antenna_height_m: float = 15.0,
-    antenna_gain_dbi: float = 5.0,
+    antenna_gain_dbi: float = 2.0,
     tx_power_dbm: float = 14.0,
-    frequency_mhz: float = 868.0,
+    frequency_mhz: float = 923.0,
 ) -> Gateway:
     return Gateway(
         id=gateway_id or make_gateway_id(),
@@ -69,7 +69,7 @@ def make_target(
     latitude: float = DA_NANG_LAT,
     longitude: float = DA_NANG_LNG,
     spreading_factor: int = 7,
-    frequency_mhz: float = 868.0,
+    frequency_mhz: float = 923.0,
 ) -> Target:
     return Target(
         latitude=latitude,
@@ -109,7 +109,7 @@ def make_survey_record(
     rssi_dbm: float = -95.0,
     snr_db: float = 7.5,
     spreading_factor: int = 7,
-    frequency_mhz: float = 868.0,
+    frequency_mhz: float = 923.0,
     device_id: str | None = "test-device-001",
     serving_gateway_id: GatewayId | None = None,
 ) -> SurveyRecord:

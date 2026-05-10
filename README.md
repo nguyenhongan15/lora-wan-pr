@@ -1,6 +1,6 @@
 # LoRa Coverage Mapping Platform
 
-Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a pure-math log-distance path-loss predictor; ML stages (residual, ensemble, Bayesian) are planned but not yet implemented.
+Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a pure-math log-distance / Friis-hybrid path-loss predictor (Stage 1, AS923-2 / 923 MHz, suburban exponent n=3.0, reference distance d₀ = 100 m); ML stages (residual, ensemble, Bayesian) are planned but not yet implemented. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
 
 Version: **0.2.0**
 

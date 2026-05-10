@@ -24,7 +24,7 @@ export function PredictForm() {
       latitude: Number(lat),
       longitude: Number(lng),
       spreading_factor: sf,
-      frequency_mhz: 868,
+      frequency_mhz: 923,
     });
   }
 

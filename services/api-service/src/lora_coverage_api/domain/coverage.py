@@ -56,12 +56,17 @@ class Confidence:
 
 @dataclass(frozen=True, slots=True)
 class Target:
-    """Điểm cần predict coverage. WGS84."""
+    """Điểm cần predict coverage. WGS84.
+
+    rx_antenna_gain_dbi: gain anten thu (Gᵣ) của end-device. Default 0 dBi
+    (PCB tích hợp). Mote rời thường 1-3 dBi; sensor công nghiệp 2-5 dBi.
+    """
 
     latitude: float
     longitude: float
     spreading_factor: int  # 7..12
-    frequency_mhz: float = 868.0
+    frequency_mhz: float = 923.0
+    rx_antenna_gain_dbi: float = 0.0
 
     def __post_init__(self) -> None:
         if not -90.0 <= self.latitude <= 90.0:

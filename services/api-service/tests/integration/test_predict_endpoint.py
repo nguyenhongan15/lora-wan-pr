@@ -104,7 +104,7 @@ def test_predict_no_gateway_in_pacific(client: TestClient) -> None:
             "latitude": 0.0,
             "longitude": -150.0,
             "spreading_factor": 7,
-            "frequency_mhz": 868.0,
+            "frequency_mhz": 923.0,
         },
     )
     assert r.status_code == 404

@@ -3,8 +3,13 @@
 Pure math — không I/O, không infra. Sống ở application layer vì là business logic.
 
 Stage 1: log-distance / Friis hybrid.
-  PL(d) = PL(d0) + 10·n·log10(d/d0)
-  với PL(d0) free-space tại d0=1m, exponent n theo môi trường.
+  PL(d) = Friis(d) + 10·(n-2)·log10(d/d0)  với d > d0
+        = Friis(d)                          với d ≤ d0
+  d0 = 100 m (outdoor micro-cell convention, IEEE 802.16).
+  Friis(d) = 32.45 + 20·log10(d_km) + 20·log10(f_MHz).
+  Exponent n theo EnvironmentProfile (urban/suburban/rural).
+  Tương đương dạng chuẩn PL(d) = Friis(d0) + 10·n·log10(d/d0)
+  vì Friis(d) - Friis(d0) = 20·log10(d/d0).
 
 Khi Stage 2+ ra đời, model sẽ chuyển sang ml-service riêng. Interface giữ nguyên.
 """
@@ -24,7 +29,7 @@ from ..domain.coverage import (
     Target,
 )
 
-# ── Constants (LoRa EU868 conservative defaults) ─────────────────────────
+# ── Constants (LoRa AS923-2 conservative defaults) ─────────────────────────
 NOISE_FLOOR_DBM_125KHZ = -117.0  # -174 + 10·log10(125e3) + NF(6dB)
 SF_SNR_LIMITS_DB: dict[int, float] = {
     7: -7.5,
@@ -161,7 +166,10 @@ class Stage1LogDistanceModel:
         excess = 10.0 * (exponent - 2.0) * math.log10(d_km_eff / d0_km) if d_km_eff > d0_km else 0.0
         pl_db = pl_fs_db + excess
 
-        rssi_dbm = gateway.tx_power_dbm + gateway.antenna_gain_dbi - pl_db
+        # Friis chuẩn: Pr = Pt + Gt + Gr - PL
+        rssi_dbm = (
+            gateway.tx_power_dbm + gateway.antenna_gain_dbi + target.rx_antenna_gain_dbi - pl_db
+        )
         snr_db = rssi_dbm - NOISE_FLOOR_DBM_125KHZ
 
         status = _classify(rssi_dbm, snr_db, target.spreading_factor)

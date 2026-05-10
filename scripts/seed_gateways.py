@@ -60,12 +60,17 @@ def _normalize(row: dict[str, Any], freq_mhz: float) -> dict[str, Any]:
     if lat is None or lon is None:
         raise ValueError(f"thiếu latitude/longitude: {row!r}")
 
+    # Antenna metadata: outdoor LoRa thực tế phổ biến (khớp seed_gateways.sql).
+    # Operator phải verify khi có spec thật.
     return {
         "code": gw_id,
         "name": f"Gateway {gw_id[-6:]}",  # last 6 hex để đọc cho người
         "lat": float(lat),
         "lon": float(lon),
         "altitude_m": float(row.get("altitude") or 0.0),
+        "antenna_height_m": 15.0,
+        "antenna_gain_dbi": 5.0,
+        "tx_power_dbm": 14.0,
         "freq": freq_mhz,
     }
 
@@ -75,16 +80,21 @@ def _normalize(row: dict[str, Any], freq_mhz: float) -> dict[str, Any]:
 _UPSERT_SQL = text(
     """
     INSERT INTO geo.gateways (
-        code, name, location, altitude_m, frequency_mhz, is_public
+        code, name, location, altitude_m, antenna_height_m, antenna_gain_dbi,
+        tx_power_dbm, frequency_mhz, is_public
     ) VALUES (
         :code, :name,
         ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
-        :altitude_m, :freq, true
+        :altitude_m, :antenna_height_m, :antenna_gain_dbi,
+        :tx_power_dbm, :freq, true
     )
     ON CONFLICT (code) DO UPDATE SET
         name = EXCLUDED.name,
         location = EXCLUDED.location,
         altitude_m = EXCLUDED.altitude_m,
+        antenna_height_m = EXCLUDED.antenna_height_m,
+        antenna_gain_dbi = EXCLUDED.antenna_gain_dbi,
+        tx_power_dbm = EXCLUDED.tx_power_dbm,
         frequency_mhz = EXCLUDED.frequency_mhz
     RETURNING (xmax = 0) AS inserted, id;
     """

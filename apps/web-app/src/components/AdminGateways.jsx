@@ -288,7 +288,7 @@ function CreateGatewayModal({ onClose, onCreated }) {
   const [antennaHeightM, setAntennaHeightM] = useState("10");
   const [antennaGainDbi, setAntennaGainDbi] = useState("2");
   const [txPowerDbm, setTxPowerDbm] = useState("14");
-  const [freq, setFreq] = useState(/** @type {433|868|915|923} */ (868));
+  const [freq, setFreq] = useState(/** @type {433|868|915|923} */ (923));
 
   const m = useMutation({
     mutationFn: createGateway,

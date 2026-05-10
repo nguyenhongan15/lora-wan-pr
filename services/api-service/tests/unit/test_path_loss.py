@@ -27,12 +27,12 @@ def _gateway(lat: float = 16.05, lon: float = 108.20) -> Gateway:
         antenna_height_m=10,
         antenna_gain_dbi=2.0,
         tx_power_dbm=14.0,
-        frequency_mhz=868.0,
+        frequency_mhz=923.0,
     )
 
 
 def _target(lat: float, lon: float, sf: int = 7) -> Target:
-    return Target(latitude=lat, longitude=lon, spreading_factor=sf, frequency_mhz=868.0)
+    return Target(latitude=lat, longitude=lon, spreading_factor=sf, frequency_mhz=923.0)
 
 
 def test_predict_at_close_range_is_strong() -> None:

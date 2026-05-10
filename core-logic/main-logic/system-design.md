@@ -364,7 +364,7 @@ The model is **not a fixed artifact** — it is a four-stage progression governe
 
 | Stage | Adopt when | Approach |
 |---|---|---|
-| **Stage 1** — Empirical (log-distance) | < 500 ground-truth points | Locally-calibrated log-distance path-loss model. No ML training. Sub-millisecond inference. Fully explainable. |
+| **Stage 1** — Empirical (log-distance / Friis hybrid) | < 500 ground-truth points | `PL(d) = Friis(d) + 10·(n−2)·log10(d/d₀)` for `d > d₀ = 100 m`; `PL(d) = Friis(d)` otherwise. Friis = `32.45 + 20·log10(d_km) + 20·log10(f_MHz)`. RSSI = `Pₜ + Gₜ + Gᵣ − PL`. Default tuning: AS923-2 / 923 MHz, suburban (n=3.0, σ=6 dB). No ML training. Sub-millisecond inference. Fully explainable. |
 | **Stage 2** — Hybrid + LightGBM residual | ≥ 500 points across ≥ 2 terrain classes | Stage 1 predicts physical baseline; LightGBM learns the residual from a 15–25 column engineered feature vector. |
 | **Stage 3** — Hybrid + CNN residual | ≥ 30,000 points **AND** Stage 3 RMSE improves ≥ 10% over Stage 2 on a spatial test set | ResNet-18 modified for regression on a 6-channel raster slice (DEM, building height, land cover, NDVI, distance encoding, Fresnel zone mask). |
 | **Stage 4** — Bayesian Hybrid | ≥ 30,000 points **AND** NLL improves **AND** ECE < 0.05 | Stage 3 plus calibrated probabilistic uncertainty (deep ensembles or MC-dropout). |

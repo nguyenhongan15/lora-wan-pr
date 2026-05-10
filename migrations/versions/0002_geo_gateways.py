@@ -32,7 +32,7 @@ def upgrade() -> None:
             antenna_height_m double precision NOT NULL DEFAULT 10,
             antenna_gain_dbi double precision NOT NULL DEFAULT 2.0,
             tx_power_dbm    double precision NOT NULL DEFAULT 14.0,
-            frequency_mhz   double precision NOT NULL DEFAULT 868.0,
+            frequency_mhz   double precision NOT NULL DEFAULT 923.0,
             owner_org       text,
             is_public       boolean NOT NULL DEFAULT true,
             created_at      timestamptz NOT NULL DEFAULT now(),

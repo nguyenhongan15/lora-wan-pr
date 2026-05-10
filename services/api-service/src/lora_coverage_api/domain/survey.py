@@ -39,7 +39,7 @@ class SurveyRecord:
     rssi_dbm: float
     snr_db: float
     spreading_factor: int
-    frequency_mhz: float = 868.0
+    frequency_mhz: float = 923.0
     device_id: str | None = None
     serving_gateway_id: GatewayId | None = None
 

@@ -21,7 +21,7 @@ class PredictRequest(BaseModel):
     latitude: float = Field(..., ge=-90, le=90, examples=[16.0544])
     longitude: float = Field(..., ge=-180, le=180, examples=[108.2022])
     spreading_factor: int = Field(..., ge=7, le=12, examples=[7])
-    frequency_mhz: float = Field(default=868.0, examples=[868.0])
+    frequency_mhz: float = Field(default=923.0, examples=[923.0])
 
 
 class ConfidenceResponse(BaseModel):
@@ -103,7 +103,7 @@ class GatewayCreateRequest(BaseModel):
     # mypy: Python's Literal[...] không chính thức hỗ trợ float, nhưng
     # Pydantic v2 validate đúng runtime + sinh OpenAPI enum đúng.
     # Tham khảo: https://docs.pydantic.dev/latest/concepts/types/#literal
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 923.0  # type: ignore[valid-type]
 
 
 class GatewayPatchRequest(BaseModel):
@@ -178,7 +178,7 @@ class AddressLookupRequest(BaseModel):
         ],
     )
     spreading_factor: int = Field(default=7, ge=7, le=12)
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 923.0  # type: ignore[valid-type]
 
 
 class ResolvedAddressResponse(BaseModel):
@@ -217,7 +217,7 @@ class CoverageBatchRequest(BaseModel):
 
     items: list[CoverageBatchItem] = Field(..., min_length=1, max_length=500)
     spreading_factor: int = Field(default=7, ge=7, le=12)
-    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 868.0  # type: ignore[valid-type]
+    frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 923.0  # type: ignore[valid-type]
 
 
 class CoverageBatchItemResult(BaseModel):
