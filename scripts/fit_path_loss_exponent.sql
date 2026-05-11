@@ -1,5 +1,11 @@
 -- OLS-through-origin fit cho path-loss exponent n từ ts.survey_training.
 --
+-- Reciprocity: PL(d) ở 923 MHz là as-the-photon-flies, không phụ thuộc direction.
+-- Survey records là UPLINK (device→gateway) nhưng n̂ fit ra dùng được cho cả
+-- DOWNLINK (gateway→device) trong bidirectional link budget — chỉ Pt/Gt/Gr/sens
+-- swap theo hướng, còn PL(d) shared. Refactor bidirectional 2026-05-11 KHÔNG
+-- invalidate baseline (n=3.0, σ=23 dB).
+--
 -- Mô hình: y = 10·(n−2)·log10(d/d0) + ε,  d0 = 100 m
 --   y_i = (Pₜ + Gₜ + Gᵣ − Friis(d_i)) − RSSI_measured_i
 --   Friis(d) = 32.45 + 20·log10(d_km) + 20·log10(f_MHz)

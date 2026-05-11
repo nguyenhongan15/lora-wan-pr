@@ -53,6 +53,11 @@ export const STATUS_COLOR = {
 // Fallback khi backend trả status mới chưa map (defensive default).
 export const STATUS_COLOR_FALLBACK = "#7c3aed";
 
+// Khoảng dB dùng để scale visual bar trong popup UL/DL block.
+// −10 dB = sát chết; +20 dB = decode dư margin. Bar 100% rộng nếu margin ≥ max,
+// 0% nếu ≤ min. Đổi 2 số này để bar nhạy hơn / tổng quát hơn.
+export const MARGIN_BAR_RANGE = { min: -10, max: 20 };
+
 /* ─────────────────────────────────────────────────────────────────────────
  * Basemap raster tiles (CARTO Voyager — free for OSM-attributed use)
  * ─────────────────────────────────────────────────────────────────────── */

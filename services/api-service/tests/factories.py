@@ -15,6 +15,7 @@ from lora_coverage_api.domain.coverage import (
     CoverageStatus,
     Gateway,
     GatewayId,
+    LinkBottleneck,
     Prediction,
     Target,
 )
@@ -49,6 +50,8 @@ def make_gateway(
     antenna_gain_dbi: float = 2.0,
     tx_power_dbm: float = 14.0,
     frequency_mhz: float = 923.0,
+    rx_antenna_gain_dbi: float | None = None,
+    rx_sensitivity_dbm: float | None = None,
 ) -> Gateway:
     return Gateway(
         id=gateway_id or make_gateway_id(),
@@ -61,6 +64,8 @@ def make_gateway(
         antenna_gain_dbi=antenna_gain_dbi,
         tx_power_dbm=tx_power_dbm,
         frequency_mhz=frequency_mhz,
+        rx_antenna_gain_dbi=rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=rx_sensitivity_dbm,
     )
 
 
@@ -70,12 +75,20 @@ def make_target(
     longitude: float = DA_NANG_LNG,
     spreading_factor: int = 7,
     frequency_mhz: float = 923.0,
+    tx_power_dbm: float = 14.0,
+    tx_antenna_gain_dbi: float = 2.0,
+    rx_antenna_gain_dbi: float = 0.0,
+    rx_sensitivity_dbm: float | None = None,
 ) -> Target:
     return Target(
         latitude=latitude,
         longitude=longitude,
         spreading_factor=spreading_factor,
         frequency_mhz=frequency_mhz,
+        tx_power_dbm=tx_power_dbm,
+        tx_antenna_gain_dbi=tx_antenna_gain_dbi,
+        rx_antenna_gain_dbi=rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=rx_sensitivity_dbm,
     )
 
 
@@ -89,7 +102,21 @@ def make_prediction(
     confidence_method: ConfidenceMethod = ConfidenceMethod.EMPIRICAL,
     model_version: str = "stage1-test-v0",
     recommended_sf: int = 7,
+    uplink_rssi_dbm: float | None = None,
+    uplink_snr_db: float | None = None,
+    uplink_margin_db: float = 30.0,
+    uplink_status: CoverageStatus | None = None,
+    downlink_rssi_dbm: float | None = None,
+    downlink_snr_db: float | None = None,
+    downlink_margin_db: float = 30.0,
+    downlink_status: CoverageStatus | None = None,
+    bottleneck: LinkBottleneck = "both_ok",
 ) -> Prediction:
+    """Defaults: UL = DL = top-level rssi/snr/status. Bottleneck "both_ok".
+
+    Test bodies test bidirectional behavior override UL/DL/bottleneck explicit;
+    legacy tests chỉ assert top-level fields không cần đụng.
+    """
     return Prediction(
         rssi_dbm=rssi_dbm,
         snr_db=snr_db,
@@ -98,6 +125,15 @@ def make_prediction(
         confidence=Confidence(score=confidence_score, method=confidence_method),
         model_version=model_version,
         recommended_sf=recommended_sf,
+        uplink_rssi_dbm=rssi_dbm if uplink_rssi_dbm is None else uplink_rssi_dbm,
+        uplink_snr_db=snr_db if uplink_snr_db is None else uplink_snr_db,
+        uplink_margin_db=uplink_margin_db,
+        uplink_status=coverage_status if uplink_status is None else uplink_status,
+        downlink_rssi_dbm=rssi_dbm if downlink_rssi_dbm is None else downlink_rssi_dbm,
+        downlink_snr_db=snr_db if downlink_snr_db is None else downlink_snr_db,
+        downlink_margin_db=downlink_margin_db,
+        downlink_status=coverage_status if downlink_status is None else downlink_status,
+        bottleneck=bottleneck,
     )
 
 

@@ -7,6 +7,8 @@ import { strings } from "../strings.js";
 const t = strings.bulkLookup;
 /** @type {Record<string, string>} */
 const STATUS_LABEL = strings.coverageStatus;
+/** @type {Record<string, string>} */
+const BOTTLENECK_LABEL = t.bottleneck;
 
 const SAMPLE_CSV = `label,address,latitude,longitude
 "Nhà Đà Nẵng",,16.0544,108.2022
@@ -155,6 +157,11 @@ export function BulkLookup() {
       "snr_db",
       "coverage_status",
       "recommended_sf",
+      "bottleneck",
+      "uplink_rssi_dbm",
+      "uplink_margin_db",
+      "downlink_rssi_dbm",
+      "downlink_margin_db",
       "error_code",
       "error_message",
     ];
@@ -168,6 +175,11 @@ export function BulkLookup() {
       it.prediction?.snr_db?.toFixed(1) ?? "",
       it.prediction?.coverage_status ?? "",
       it.prediction?.recommended_sf?.toString() ?? "",
+      it.prediction?.bottleneck ?? "",
+      it.prediction?.uplink?.rssi_dbm?.toFixed(1) ?? "",
+      it.prediction?.uplink?.margin_db?.toFixed(1) ?? "",
+      it.prediction?.downlink?.rssi_dbm?.toFixed(1) ?? "",
+      it.prediction?.downlink?.margin_db?.toFixed(1) ?? "",
       csvEscape(it.error_code ?? ""),
       csvEscape(it.error_message ?? ""),
     ]);
@@ -326,6 +338,21 @@ export function BulkLookup() {
                       <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">
                         {it.error_code ?? t.table.error}
                       </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {it.prediction?.bottleneck ? (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs ${
+                          it.prediction.bottleneck === "both_ok"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-800"
+                        }`}
+                      >
+                        {BOTTLENECK_LABEL[it.prediction.bottleneck]}
+                      </span>
+                    ) : (
+                      "—"
                     )}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">

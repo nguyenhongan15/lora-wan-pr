@@ -25,8 +25,14 @@ _UPDATABLE_COLUMNS = frozenset(
         "frequency_mhz",
         "owner_org",
         "is_public",
+        "rx_antenna_gain_dbi",
+        "rx_sensitivity_dbm",
     }
 )
+
+
+def _opt_float(v: Any) -> float | None:
+    return float(v) if v is not None else None
 
 
 def _row_to_gateway(r: dict[str, Any]) -> Gateway:
@@ -41,6 +47,8 @@ def _row_to_gateway(r: dict[str, Any]) -> Gateway:
         antenna_gain_dbi=float(r["antenna_gain_dbi"]),
         tx_power_dbm=float(r["tx_power_dbm"]),
         frequency_mhz=float(r["frequency_mhz"]),
+        rx_antenna_gain_dbi=_opt_float(r.get("rx_antenna_gain_dbi")),
+        rx_sensitivity_dbm=_opt_float(r.get("rx_sensitivity_dbm")),
     )
 
 
@@ -49,7 +57,8 @@ _SELECT_COLS = """
     ST_Y(location::geometry) AS lat,
     ST_X(location::geometry) AS lon,
     altitude_m, antenna_height_m, antenna_gain_dbi,
-    tx_power_dbm, frequency_mhz
+    tx_power_dbm, frequency_mhz,
+    rx_antenna_gain_dbi, rx_sensitivity_dbm
 """
 
 
@@ -135,7 +144,8 @@ class PgGatewayDirectory:
             ST_Y(g.location::geometry) AS lat,
             ST_X(g.location::geometry) AS lon,
             g.altitude_m, g.antenna_height_m, g.antenna_gain_dbi,
-            g.tx_power_dbm, g.frequency_mhz
+            g.tx_power_dbm, g.frequency_mhz,
+            g.rx_antenna_gain_dbi, g.rx_sensitivity_dbm
         """
         sql = text(
             f"""
@@ -170,13 +180,15 @@ class PgGatewayDirectory:
             INSERT INTO geo.gateways (
                 code, name, location,
                 altitude_m, antenna_height_m, antenna_gain_dbi,
-                tx_power_dbm, frequency_mhz, owner_org, is_public
+                tx_power_dbm, frequency_mhz, owner_org, is_public,
+                rx_antenna_gain_dbi, rx_sensitivity_dbm
             )
             VALUES (
                 :code, :name,
                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                 :altitude_m, :antenna_height_m, :antenna_gain_dbi,
-                :tx_power_dbm, :frequency_mhz, :owner_org, true
+                :tx_power_dbm, :frequency_mhz, :owner_org, true,
+                :rx_antenna_gain_dbi, :rx_sensitivity_dbm
             )
             RETURNING id
             """
@@ -196,6 +208,8 @@ class PgGatewayDirectory:
                         "tx_power_dbm": gateway.tx_power_dbm,
                         "frequency_mhz": gateway.frequency_mhz,
                         "owner_org": None,
+                        "rx_antenna_gain_dbi": gateway.rx_antenna_gain_dbi,
+                        "rx_sensitivity_dbm": gateway.rx_sensitivity_dbm,
                     },
                 )
                 .mappings()
@@ -214,6 +228,8 @@ class PgGatewayDirectory:
             antenna_gain_dbi=gateway.antenna_gain_dbi,
             tx_power_dbm=gateway.tx_power_dbm,
             frequency_mhz=gateway.frequency_mhz,
+            rx_antenna_gain_dbi=gateway.rx_antenna_gain_dbi,
+            rx_sensitivity_dbm=gateway.rx_sensitivity_dbm,
         )
 
     def update(self, gateway_id: GatewayId, patch: dict[str, object]) -> Gateway | None:

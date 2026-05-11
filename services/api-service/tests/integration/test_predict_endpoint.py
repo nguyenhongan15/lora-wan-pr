@@ -84,6 +84,16 @@ def test_predict_near_danang_gateway(client: TestClient, _seed_danang_gateway: N
     assert body["coverage_status"] in ("strong", "marginal")
     assert body["confidence"]["method"] == "empirical"
     assert body["model_version"].startswith("stage1-")
+    # Bidirectional fields
+    assert body["bottleneck"] in ("uplink", "downlink", "both_ok")
+    for direction in ("uplink", "downlink"):
+        link = body[direction]
+        assert link["status"] in ("strong", "marginal", "weak", "no_coverage")
+        assert isinstance(link["rssi_dbm"], (int, float))
+        assert isinstance(link["margin_db"], (int, float))
+    # Top-level rssi/snr = downlink (backward compat semantic)
+    assert body["rssi_dbm"] == body["downlink"]["rssi_dbm"]
+    assert body["snr_db"] == body["downlink"]["snr_db"]
 
 
 def test_predict_validation_error(client: TestClient) -> None:
@@ -110,3 +120,43 @@ def test_predict_no_gateway_in_pacific(client: TestClient) -> None:
     assert r.status_code == 404
     body = r.json()
     assert body["code"] == "NO_GATEWAY_NEARBY"
+
+
+def test_predict_rejects_tx_power_above_as923_cap(client: TestClient) -> None:
+    """tx_power_dbm > 14 → 422 ở schema (Field le=14), không vào domain."""
+    r = client.post(
+        "/api/v1/coverage/predict",
+        json={
+            "latitude": 16.115,
+            "longitude": 108.278,
+            "spreading_factor": 7,
+            "frequency_mhz": 923.0,
+            "tx_power_dbm": 17.0,
+        },
+    )
+    assert r.status_code == 422
+    body = r.json()
+    assert body["code"] == "VALIDATION_ERROR"
+
+
+def test_predict_accepts_device_overrides_within_bounds(
+    client: TestClient, _seed_danang_gateway: None
+) -> None:
+    """Override 4 device-side fields trong giới hạn → 200 + response shape full."""
+    r = client.post(
+        "/api/v1/coverage/predict",
+        json={
+            "latitude": 16.115,
+            "longitude": 108.278,
+            "spreading_factor": 7,
+            "frequency_mhz": 923.0,
+            "tx_power_dbm": 10.0,
+            "tx_antenna_gain_dbi": 3.0,
+            "rx_antenna_gain_dbi": 1.0,
+            "rx_sensitivity_dbm": -125.0,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "uplink" in body and "downlink" in body
+    assert body["bottleneck"] in ("uplink", "downlink", "both_ok")

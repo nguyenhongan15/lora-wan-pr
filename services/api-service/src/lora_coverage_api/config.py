@@ -74,6 +74,30 @@ class Settings(BaseSettings):
         description="Path loss environment profile: urban|suburban|rural.",
     )
 
+    # ── Bidirectional link budget device defaults (Stage 1 v0) ───────────
+    # Áp dụng khi PredictRequest không gửi field tương ứng. Cho phép operator
+    # tune theo dòng device chủ đạo của triển khai (vd cảm biến nông nghiệp
+    # rời antenna 3 dBi vs PCB 0 dBi). tx_power capped 14 dBm bởi domain
+    # validation (AS923-2 cap) — đặt > 14 sẽ raise tại Target boundary.
+    default_device_tx_power_dbm: float = Field(
+        default=14.0,
+        ge=-10.0,
+        le=14.0,
+        description="Device EIRP fallback khi request không gửi tx_power_dbm.",
+    )
+    default_device_tx_antenna_gain_dbi: float = Field(
+        default=2.0,
+        ge=-10.0,
+        le=30.0,
+        description="Device TX antenna gain fallback (dBi).",
+    )
+    default_device_rx_antenna_gain_dbi: float = Field(
+        default=0.0,
+        ge=-10.0,
+        le=30.0,
+        description="Device RX antenna gain fallback (dBi). 0 = PCB integrated.",
+    )
+
     rate_limit_default: str = Field(default="60/minute")
     rate_limit_anon: str = Field(default="10/minute")
 

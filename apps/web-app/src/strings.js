@@ -90,6 +90,28 @@ export const strings = {
         show: "Xem chi tiết kỹ thuật ▾",
         hide: "Ẩn chi tiết ▴",
       },
+      // Bottleneck pill ở Layer 1 — siêu ngắn để fit cạnh status badge.
+      bottleneckShort: {
+        uplink: "Bottleneck: Up Link",
+        downlink: "Bottleneck: Down Link",
+        both_ok: "Cân bằng 2 chiều",
+      },
+      // UL/DL mini-table trong Layer 2.
+      bidir: {
+        sectionTitle: "Dự đoán 2 chiều",
+        ul: "UL(device→GW)",
+        dl: "DL(GW→device)",
+        colDir: "",
+        colRssi: "RSSI",
+        colSnr: "SNR",
+        colMargin: "Margin",
+        /** @param {number} db */
+        marginValue: (db) => `${db >= 0 ? "+" : ""}${db.toFixed(1)} dB`,
+      },
+      copyLink: {
+        label: "Sao chép liên kết",
+        done: "Đã copy!",
+      },
     },
     apiError:
       "Không tải được dữ liệu API. Kiểm tra api-service đang chạy chưa (http://localhost:8000/healthz).",
@@ -173,6 +195,7 @@ export const strings = {
       submit: "Dự đoán",
       submitting: "Đang dự đoán…",
       error: "Dự đoán thất bại — thử lại.",
+      clearAll: "Xoá tất cả điểm dự đoán",
     },
   },
 
@@ -231,6 +254,22 @@ export const strings = {
       hide: "Ẩn chi tiết ▴",
     },
     gatewayNone: "không xác định",
+    // Bidirectional link budget block
+    bidirectional: {
+      sectionTitle: "Cân bằng 2 chiều",
+      directionUplink: "Lên (device → gateway)",
+      directionDownlink: "Xuống (gateway → device)",
+      colRssi: "RSSI",
+      colSnr: "SNR",
+      colMargin: "Margin",
+      colStatus: "Trạng thái",
+      bottleneckLabel: "Nút thắt",
+      bottleneck: {
+        uplink: "Chiều LÊN — device TX/anten là điểm yếu.",
+        downlink: "Chiều XUỐNG — device RX là điểm yếu.",
+        both_ok: "Cân bằng — cả 2 chiều đều khoẻ.",
+      },
+    },
   },
 
   adminGateways: {
@@ -303,9 +342,14 @@ export const strings = {
       counts: (ok, err) => `${ok} thành công · ${err} lỗi`,
     },
     table: {
-      headers: ["#", "Label", "Địa chỉ / Toạ độ", "Trạng thái", "RSSI", "SNR", "SF gợi ý"],
+      headers: ["#", "Label", "Địa chỉ / Toạ độ", "Trạng thái", "Nút thắt", "RSSI", "SNR", "SF gợi ý"],
       ok: "OK",
       error: "Lỗi",
+    },
+    bottleneck: {
+      uplink: "Lên",
+      downlink: "Xuống",
+      both_ok: "Cân bằng",
     },
     parse: {
       headerRequired: "CSV cần ít nhất header + 1 dòng dữ liệu.",

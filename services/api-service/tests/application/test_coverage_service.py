@@ -72,3 +72,26 @@ def test_predict_carries_model_version_from_path_loss_model():
 
     assert isinstance(result, Ok)
     assert result.value.model_version == "fake-test-v0"
+
+
+def test_predict_picks_gateway_by_min_uplink_downlink_margin_not_top_level_rssi():
+    """Bidirectional select: gateway thắng theo bottleneck margin = min(UL,DL).
+
+    FakePathLossModel set UL=DL=injected RSSI nên test này bằng đẳng cấp với
+    rank-by-RSSI. Mở rộng fake để asymmetric khi cần test edge case khác.
+    """
+    gw_high_rssi = make_gateway(gateway_id=make_gateway_id(seed=1), code="GW-HIGH")
+    gw_low_rssi = make_gateway(gateway_id=make_gateway_id(seed=2), code="GW-LOW")
+    model = FakePathLossModel(default_rssi_dbm=-100.0)
+    model.rssi_for[gw_high_rssi.id] = -85.0  # margin = 35 dB
+    model.rssi_for[gw_low_rssi.id] = -110.0  # margin = 10 dB
+    service = CoverageQueryService(
+        directory=FakeGatewayDirectory([gw_high_rssi, gw_low_rssi]), model=model
+    )
+
+    result = service.predict(make_target())
+
+    assert isinstance(result, Ok)
+    assert result.value.serving_gateway_id == gw_high_rssi.id
+    # min(UL,DL) margin của winner phải > của loser
+    assert min(result.value.uplink_margin_db, result.value.downlink_margin_db) == 35.0

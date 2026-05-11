@@ -8,8 +8,13 @@ Stage 1: log-distance / Friis hybrid.
   d0 = 100 m (outdoor micro-cell convention, IEEE 802.16).
   Friis(d) = 32.45 + 20·log10(d_km) + 20·log10(f_MHz).
   Exponent n theo EnvironmentProfile (urban/suburban/rural).
-  Tương đương dạng chuẩn PL(d) = Friis(d0) + 10·n·log10(d/d0)
-  vì Friis(d) - Friis(d0) = 20·log10(d/d0).
+
+Bidirectional link budget:
+  PL(d) tính 1 lần (radio reciprocity). Áp Friis cả 2 chiều:
+    UL: RSSI_gw  = P_dev_tx + G_dev_tx + G_gw_rx - PL  (so với gateway sensitivity)
+    DL: RSSI_dev = P_gw_tx  + G_gw_tx  + G_dev_rx - PL (so với device sensitivity)
+  Top-level rssi_dbm/snr_db = downlink (backward compat). coverage_status =
+  worst-of(UL, DL). Bottleneck = direction có margin nhỏ hơn (thresh 1 dB).
 
 Khi Stage 2+ ra đời, model sẽ chuyển sang ml-service riêng. Interface giữ nguyên.
 """
@@ -18,13 +23,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..domain.coverage import (
     Confidence,
     ConfidenceMethod,
     CoverageStatus,
     Gateway,
+    LinkBottleneck,
     Prediction,
     Target,
 )
@@ -41,6 +47,42 @@ SF_SNR_LIMITS_DB: dict[int, float] = {
 }
 PATH_LOSS_EXPONENT_SUBURBAN = 3.0
 SHADOW_FADING_STD_DB = 6.0  # σ log-normal shadow fading (suburban baseline)
+
+# Gateway RX sensitivity per SF @ 125 kHz BW (Semtech SX1302 datasheet).
+# Dùng cho UL link budget khi Gateway.rx_sensitivity_dbm is None.
+GW_SENSITIVITY_DBM_125KHZ: dict[int, float] = {
+    7: -123.0,
+    8: -126.0,
+    9: -129.0,
+    10: -132.0,
+    11: -134.5,
+    12: -137.0,
+}
+
+# Device RX sensitivity per SF @ 125 kHz BW (Semtech SX1276 datasheet).
+# Frontend RF tệ hơn GW ~3 dB do BOM rẻ. Dùng cho DL khi Target.rx_sensitivity_dbm is None.
+DEVICE_SENSITIVITY_DBM_125KHZ: dict[int, float] = {
+    7: -120.0,
+    8: -123.0,
+    9: -126.0,
+    10: -129.0,
+    11: -131.5,
+    12: -134.0,
+}
+
+# Status ordering theo "tốt → xấu" (cao = tốt). StrEnum dùng so sánh string
+# alphabetic → SAI (marginal < no_coverage). Bảng explicit này là source of truth.
+_STATUS_RANK: dict[CoverageStatus, int] = {
+    CoverageStatus.NO_COVERAGE: 0,
+    CoverageStatus.WEAK: 1,
+    CoverageStatus.MARGINAL: 2,
+    CoverageStatus.STRONG: 3,
+}
+
+# Ngưỡng dB chênh margin để coi là "cân bằng" giữa UL và DL.
+_BOTTLENECK_TIE_THRESHOLD_DB = 1.0
+
+LinkDirection = Literal["uplink", "downlink"]
 
 
 # ── Environment profile (12F III: config qua env) ────────────────────────
@@ -113,6 +155,11 @@ def _classify(rssi_dbm: float, snr_db: float, sf: int) -> CoverageStatus:
     return CoverageStatus.NO_COVERAGE
 
 
+def _status_worse_of(a: CoverageStatus, b: CoverageStatus) -> CoverageStatus:
+    """Trả status tệ hơn theo _STATUS_RANK (NO_COVERAGE worst, STRONG best)."""
+    return a if _STATUS_RANK[a] <= _STATUS_RANK[b] else b
+
+
 # 3 dB margin trên SF limit để đảm bảo decode tin cậy (LoRa SNR có jitter).
 _SF_MARGIN_DB = 3.0
 
@@ -130,6 +177,82 @@ def _recommend_sf(snr_db: float) -> int:
     return 12  # Beyond SF12 limit — vẫn report SF12 (caller xử lý NO_COVERAGE).
 
 
+def _compute_path_loss(
+    target: Target, gateway: Gateway, env_profile: EnvironmentProfile
+) -> tuple[float, float]:
+    """PL_db + d_km. Pure math, reciprocal — dùng chung cho UL và DL."""
+    d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
+    d_km_eff = max(d_km, 0.001)
+    pl_fs_db = _free_space_pl_db(d_km_eff, target.frequency_mhz)
+    d0_km = 0.1
+    exponent = env_profile.path_loss_exponent
+    excess = 10.0 * (exponent - 2.0) * math.log10(d_km_eff / d0_km) if d_km_eff > d0_km else 0.0
+    return pl_fs_db + excess, d_km
+
+
+def _resolve_gateway_rx_gain(gateway: Gateway) -> float:
+    """None = duplex symmetric (= antenna_gain_dbi). Resolution tại app layer."""
+    return (
+        gateway.antenna_gain_dbi
+        if gateway.rx_antenna_gain_dbi is None
+        else gateway.rx_antenna_gain_dbi
+    )
+
+
+def _resolve_sensitivity(
+    provided: float | None, defaults_table: dict[int, float], sf: int
+) -> float:
+    """None → tra SF table. Boundary nhỏ — dataclass-or-default fallback."""
+    return defaults_table[sf] if provided is None else provided
+
+
+@dataclass(frozen=True, slots=True)
+class _LinkBudget:
+    direction: LinkDirection
+    rssi_dbm: float
+    snr_db: float
+    margin_db: float
+    status: CoverageStatus
+
+
+def _compute_link_budget(
+    direction: LinkDirection,
+    pl_db: float,
+    tx_power_dbm: float,
+    tx_gain_dbi: float,
+    rx_gain_dbi: float,
+    rx_sensitivity_dbm: float,
+    sf: int,
+) -> _LinkBudget:
+    """Friis: Pr = Pt + Gt + Gr - PL. SNR = Pr - noise_floor.
+
+    Caveat v0: dùng cùng NOISE_FLOOR_DBM_125KHZ cho cả 2 chiều. Thực tế device
+    side NF có thể khác (~3 dB) — Stage 2 sẽ refine khi có DL telemetry.
+    """
+    rssi_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - pl_db
+    snr_db = rssi_dbm - NOISE_FLOOR_DBM_125KHZ
+    margin_db = rssi_dbm - rx_sensitivity_dbm
+    status = _classify(rssi_dbm, snr_db, sf)
+    return _LinkBudget(
+        direction=direction,
+        rssi_dbm=rssi_dbm,
+        snr_db=snr_db,
+        margin_db=margin_db,
+        status=status,
+    )
+
+
+def _resolve_bottleneck(ul: _LinkBudget, dl: _LinkBudget) -> LinkBottleneck:
+    """Bottleneck = chiều có margin nhỏ hơn. "both_ok" khi cân bằng và đều STRONG."""
+    if (
+        abs(ul.margin_db - dl.margin_db) <= _BOTTLENECK_TIE_THRESHOLD_DB
+        and ul.status == CoverageStatus.STRONG
+        and dl.status == CoverageStatus.STRONG
+    ):
+        return "both_ok"
+    return "uplink" if ul.margin_db <= dl.margin_db else "downlink"
+
+
 class PathLossModel(Protocol):
     """Tất cả model qua các Stage chia sẻ interface này."""
 
@@ -141,8 +264,11 @@ class PathLossModel(Protocol):
 class Stage1LogDistanceModel:
     """Empirical log-distance — không cần training data.
 
-    What: predict(target, gateway) → Prediction theo Friis + log-distance excess.
-    Hidden: công thức Friis, exponent theo profile, shadow fading σ², SF margin.
+    What: predict(target, gateway) → Prediction theo Friis + log-distance excess
+        cho cả UL và DL. coverage_status = worst-of(UL, DL). Top-level
+        rssi_dbm/snr_db = DL (backward compat).
+    Hidden: công thức Friis, exponent theo profile, shadow fading σ², SF margin,
+        sensitivity SF table fallback, bottleneck resolution.
     Failure mode: không có — pure math; SF không hợp lệ raise tại Target boundary.
     """
 
@@ -155,24 +281,38 @@ class Stage1LogDistanceModel:
         self._env_profile = env_profile
 
     def predict(self, target: Target, gateway: Gateway) -> Prediction:
-        d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
-        # Tránh chia cho 0 ở khoảng cách cực gần
-        d_km_eff = max(d_km, 0.001)
+        sf = target.spreading_factor
+        pl_db, d_km = _compute_path_loss(target, gateway, self._env_profile)
 
-        pl_fs_db = _free_space_pl_db(d_km_eff, target.frequency_mhz)
-        # Bù exponent khi distance > d0 = 100m
-        d0_km = 0.1
-        exponent = self._env_profile.path_loss_exponent
-        excess = 10.0 * (exponent - 2.0) * math.log10(d_km_eff / d0_km) if d_km_eff > d0_km else 0.0
-        pl_db = pl_fs_db + excess
-
-        # Friis chuẩn: Pr = Pt + Gt + Gr - PL
-        rssi_dbm = (
-            gateway.tx_power_dbm + gateway.antenna_gain_dbi + target.rx_antenna_gain_dbi - pl_db
+        gw_rx_gain = _resolve_gateway_rx_gain(gateway)
+        gw_sens = _resolve_sensitivity(gateway.rx_sensitivity_dbm, GW_SENSITIVITY_DBM_125KHZ, sf)
+        dev_sens = _resolve_sensitivity(
+            target.rx_sensitivity_dbm, DEVICE_SENSITIVITY_DBM_125KHZ, sf
         )
-        snr_db = rssi_dbm - NOISE_FLOOR_DBM_125KHZ
 
-        status = _classify(rssi_dbm, snr_db, target.spreading_factor)
+        ul = _compute_link_budget(
+            direction="uplink",
+            pl_db=pl_db,
+            tx_power_dbm=target.tx_power_dbm,
+            tx_gain_dbi=target.tx_antenna_gain_dbi,
+            rx_gain_dbi=gw_rx_gain,
+            rx_sensitivity_dbm=gw_sens,
+            sf=sf,
+        )
+        dl = _compute_link_budget(
+            direction="downlink",
+            pl_db=pl_db,
+            tx_power_dbm=gateway.tx_power_dbm,
+            tx_gain_dbi=gateway.antenna_gain_dbi,
+            rx_gain_dbi=target.rx_antenna_gain_dbi,
+            rx_sensitivity_dbm=dev_sens,
+            sf=sf,
+        )
+
+        coverage_status = _status_worse_of(ul.status, dl.status)
+        bottleneck = _resolve_bottleneck(ul, dl)
+        # recommended_sf bám SNR chiều worst (chiều quyết định decode-ability).
+        worst_snr = ul.snr_db if ul.margin_db <= dl.margin_db else dl.snr_db
 
         # Confidence giảm khi distance lớn (uncertainty từ shadow fading).
         # Heuristic: score = exp(-d_km / 20). Tuned lỏng cho v0.
@@ -180,9 +320,9 @@ class Stage1LogDistanceModel:
         sigma = self._env_profile.shadow_fading_std_db
 
         return Prediction(
-            rssi_dbm=round(rssi_dbm, 2),
-            snr_db=round(snr_db, 2),
-            coverage_status=status,
+            rssi_dbm=round(dl.rssi_dbm, 2),
+            snr_db=round(dl.snr_db, 2),
+            coverage_status=coverage_status,
             serving_gateway_id=gateway.id,
             confidence=Confidence(
                 score=round(score, 3),
@@ -191,5 +331,14 @@ class Stage1LogDistanceModel:
                 aleatoric_variance_db2=sigma * sigma,
             ),
             model_version=self.model_version,
-            recommended_sf=_recommend_sf(snr_db),
+            recommended_sf=_recommend_sf(worst_snr),
+            uplink_rssi_dbm=round(ul.rssi_dbm, 2),
+            uplink_snr_db=round(ul.snr_db, 2),
+            uplink_margin_db=round(ul.margin_db, 2),
+            uplink_status=ul.status,
+            downlink_rssi_dbm=round(dl.rssi_dbm, 2),
+            downlink_snr_db=round(dl.snr_db, 2),
+            downlink_margin_db=round(dl.margin_db, 2),
+            downlink_status=dl.status,
+            bottleneck=bottleneck,
         )

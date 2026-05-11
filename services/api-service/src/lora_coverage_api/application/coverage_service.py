@@ -28,12 +28,19 @@ class CoverageQueryService:
                 )
             )
 
-        # Predict trên mọi candidate, lấy RSSI cao nhất làm serving.
+        # Predict trên mọi candidate, chọn gateway có bottleneck margin lớn
+        # nhất (= min(UL margin, DL margin)). Bottleneck-aware vì link 2 chiều
+        # phải đảm bảo: 1 GW có DL strong nhưng UL chết do RX gain thấp sẽ
+        # KHÔNG phục vụ được — chọn theo top-level rssi_dbm (DL only) sẽ
+        # bias sai. Behavioral change so với v0 chỉ-DL.
         best: Prediction | None = None
+        best_margin: float = float("-inf")
         for gw in candidates:
             p = self._model.predict(target, gw)
-            if best is None or p.rssi_dbm > best.rssi_dbm:
+            margin = min(p.uplink_margin_db, p.downlink_margin_db)
+            if margin > best_margin:
                 best = p
+                best_margin = margin
 
         assert best is not None  # candidates không rỗng → best có giá trị
         return Ok(best)

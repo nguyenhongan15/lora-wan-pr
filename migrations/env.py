@@ -9,9 +9,16 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
+
+# Load repo-root .env nếu có — alembic CLI từ shell thường (PowerShell/bash)
+# không auto-inject env. api-service/docker-compose tự load qua Pydantic /
+# compose `env_file:`, alembic standalone thì phải tự lo.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 config = context.config
 if config.config_file_name is not None:

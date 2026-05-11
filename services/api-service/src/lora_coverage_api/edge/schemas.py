@@ -22,6 +22,12 @@ class PredictRequest(BaseModel):
     longitude: float = Field(..., ge=-180, le=180, examples=[108.2022])
     spreading_factor: int = Field(..., ge=7, le=12, examples=[7])
     frequency_mhz: float = Field(default=923.0, examples=[923.0])
+    # Bidirectional link budget device-side overrides. None → fallback Settings
+    # default ở router. tx_power_dbm capped 14 dBm theo AS923-2 regional params.
+    tx_power_dbm: float | None = Field(default=None, ge=-10, le=14)
+    tx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
+    rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
+    rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
 
 
 class ConfidenceResponse(BaseModel):
@@ -29,7 +35,20 @@ class ConfidenceResponse(BaseModel):
     method: Literal["empirical", "residual", "ensemble", "bayesian"]
 
 
+class LinkBudgetResponse(BaseModel):
+    """Per-direction link budget (UL hoặc DL)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rssi_dbm: float
+    snr_db: float
+    margin_db: float  # rssi - rx_sensitivity (>0 = decodable)
+    status: Literal["strong", "marginal", "weak", "no_coverage"]
+
+
 class PredictionResponse(BaseModel):
+    # rssi_dbm/snr_db giữ nghĩa = downlink để backward compat (clients vẽ marker
+    # từ field này). coverage_status = worst-of(uplink, downlink).
     rssi_dbm: float
     snr_db: float
     coverage_status: Literal["strong", "marginal", "weak", "no_coverage"]
@@ -37,6 +56,9 @@ class PredictionResponse(BaseModel):
     confidence: ConfidenceResponse
     model_version: str
     recommended_sf: int = Field(..., ge=7, le=12)
+    uplink: LinkBudgetResponse
+    downlink: LinkBudgetResponse
+    bottleneck: Literal["uplink", "downlink", "both_ok"]
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -77,9 +99,13 @@ class GatewayResponse(BaseModel):
     longitude: float
     altitude_m: float
     antenna_height_m: float
-    antenna_gain_dbi: float
+    antenna_gain_dbi: float  # TX gain
     tx_power_dbm: float
     frequency_mhz: float
+    # rx_antenna_gain_dbi None = duplex symmetric; rx_sensitivity_dbm None =
+    # derive từ SF table ở application layer.
+    rx_antenna_gain_dbi: float | None = None
+    rx_sensitivity_dbm: float | None = None
 
 
 class GatewayListResponse(BaseModel):
@@ -98,12 +124,14 @@ class GatewayCreateRequest(BaseModel):
     longitude: float = Field(..., ge=-180, le=180)
     altitude_m: float = Field(default=0.0)
     antenna_height_m: float = Field(default=10.0, ge=0)
-    antenna_gain_dbi: float = Field(default=2.0)
+    antenna_gain_dbi: float = Field(default=2.0)  # TX gain
     tx_power_dbm: float = Field(default=14.0, ge=-10, le=30)
     # mypy: Python's Literal[...] không chính thức hỗ trợ float, nhưng
     # Pydantic v2 validate đúng runtime + sinh OpenAPI enum đúng.
     # Tham khảo: https://docs.pydantic.dev/latest/concepts/types/#literal
     frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 923.0  # type: ignore[valid-type]
+    rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
+    rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
 
 
 class GatewayPatchRequest(BaseModel):
@@ -115,6 +143,8 @@ class GatewayPatchRequest(BaseModel):
     antenna_gain_dbi: float | None = None
     tx_power_dbm: float | None = Field(default=None, ge=-10, le=30)
     is_public: bool | None = None
+    rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
+    rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
 
 
 # ── Survey training (read-only) ───────────────────────────────────────────

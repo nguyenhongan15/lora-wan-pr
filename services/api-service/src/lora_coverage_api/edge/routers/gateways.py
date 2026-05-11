@@ -36,6 +36,8 @@ def _to_response(g: Gateway) -> GatewayResponse:
         antenna_gain_dbi=g.antenna_gain_dbi,
         tx_power_dbm=g.tx_power_dbm,
         frequency_mhz=g.frequency_mhz,
+        rx_antenna_gain_dbi=g.rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=g.rx_sensitivity_dbm,
     )
 
 
@@ -55,6 +57,8 @@ def _etag_for(g: Gateway) -> str:
             g.antenna_gain_dbi,
             g.tx_power_dbm,
             g.frequency_mhz,
+            g.rx_antenna_gain_dbi,
+            g.rx_sensitivity_dbm,
         )
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
@@ -173,6 +177,8 @@ async def create_gateway(
         antenna_gain_dbi=payload.antenna_gain_dbi,
         tx_power_dbm=payload.tx_power_dbm,
         frequency_mhz=payload.frequency_mhz,
+        rx_antenna_gain_dbi=payload.rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=payload.rx_sensitivity_dbm,
     )
     try:
         created = directory.create(candidate)

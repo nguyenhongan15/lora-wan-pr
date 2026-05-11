@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LoRa Coverage Platform API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     Public REST API cho LoRa network coverage querying, gateway directory &
     survey ingestion.
@@ -216,15 +216,51 @@ components:
         latitude:  { type: number, format: double, minimum: -90,  maximum: 90,  example: 16.0544 }
         longitude: { type: number, format: double, minimum: -180, maximum: 180, example: 108.2022 }
         spreading_factor: { type: integer, enum: [7, 8, 9, 10, 11, 12], example: 7 }
-        frequency_mhz: { type: number, format: double, default: 868.0, example: 868.0 }
+        frequency_mhz: { type: number, format: double, default: 923.0, example: 923.0 }
+        # Bidirectional link budget device-side overrides (optional). None →
+        # fallback Settings defaults ở router. tx_power_dbm capped 14 dBm
+        # theo AS923-2 regional params.
+        tx_power_dbm: { type: number, format: double, minimum: -10, maximum: 14, nullable: true, example: 14.0 }
+        tx_antenna_gain_dbi: { type: number, format: double, minimum: -10, maximum: 30, nullable: true, example: 2.0 }
+        rx_antenna_gain_dbi: { type: number, format: double, minimum: -10, maximum: 30, nullable: true, example: 0.0 }
+        rx_sensitivity_dbm: { type: number, format: double, minimum: -150, maximum: -50, nullable: true }
+
+    LinkBudget:
+      type: object
+      description: Per-direction link budget (uplink hoặc downlink).
+      additionalProperties: false
+      required: [rssi_dbm, snr_db, margin_db, status]
+      properties:
+        rssi_dbm: { type: number, format: double }
+        snr_db: { type: number, format: double }
+        margin_db:
+          type: number
+          format: double
+          description: rssi - rx_sensitivity. >0 = decodable.
+        status: { type: string, enum: [strong, marginal, weak, no_coverage] }
 
     Prediction:
       type: object
+      description: |
+        Bidirectional link budget. Top-level `rssi_dbm`/`snr_db` = downlink
+        (backward compat). `coverage_status` = worst-of(uplink, downlink).
+        `bottleneck` = chiều có margin nhỏ hơn (`uplink`/`downlink`) hoặc
+        `both_ok` khi cân bằng và đều STRONG.
       additionalProperties: false
-      required: [rssi_dbm, snr_db, coverage_status, serving_gateway_id, confidence, model_version]
+      required:
+        - rssi_dbm
+        - snr_db
+        - coverage_status
+        - serving_gateway_id
+        - confidence
+        - model_version
+        - recommended_sf
+        - uplink
+        - downlink
+        - bottleneck
       properties:
-        rssi_dbm: { type: number, format: double, example: -105.4 }
-        snr_db: { type: number, format: double, example: 2.1 }
+        rssi_dbm: { type: number, format: double, example: -77.8 }
+        snr_db: { type: number, format: double, example: 39.2 }
         coverage_status: { type: string, enum: [strong, marginal, weak, no_coverage] }
         serving_gateway_id: { type: string, format: uuid, nullable: true }
         confidence:
@@ -234,6 +270,10 @@ components:
             score: { type: number, minimum: 0, maximum: 1 }
             method: { type: string, enum: [empirical, residual, ensemble, bayesian] }
         model_version: { type: string, example: "stage1-loglike-v0.1.0" }
+        recommended_sf: { type: integer, enum: [7, 8, 9, 10, 11, 12] }
+        uplink: { $ref: "#/components/schemas/LinkBudget" }
+        downlink: { $ref: "#/components/schemas/LinkBudget" }
+        bottleneck: { type: string, enum: [uplink, downlink, both_ok] }
 
     Gateway:
       type: object
@@ -257,9 +297,30 @@ components:
         longitude: { type: number, format: double }
         altitude_m: { type: number, format: double }
         antenna_height_m: { type: number, format: double }
-        antenna_gain_dbi: { type: number, format: double }
+        antenna_gain_dbi:
+          type: number
+          format: double
+          description: TX antenna gain (Gt) khi gateway phát downlink.
         tx_power_dbm: { type: number, format: double }
         frequency_mhz: { type: number, format: double, enum: [433.0, 868.0, 915.0, 923.0] }
+        rx_antenna_gain_dbi:
+          type: number
+          format: double
+          minimum: -10
+          maximum: 30
+          nullable: true
+          description: |
+            RX antenna gain (Gr) khi gateway thu uplink. NULL = duplex
+            symmetric (= antenna_gain_dbi); resolution ở application layer.
+        rx_sensitivity_dbm:
+          type: number
+          format: double
+          minimum: -150
+          maximum: -50
+          nullable: true
+          description: |
+            Gateway RX sensitivity per chain. NULL = derive từ SF table
+            (Semtech SX1302 datasheet) ở application layer.
 
     GatewayList:
       type: object
@@ -280,9 +341,11 @@ components:
         longitude: { type: number, format: double, minimum: -180, maximum: 180 }
         altitude_m: { type: number, format: double, default: 0 }
         antenna_height_m: { type: number, format: double, minimum: 0, default: 10 }
-        antenna_gain_dbi: { type: number, format: double, default: 2.0 }
+        antenna_gain_dbi: { type: number, format: double, default: 2.0, description: TX antenna gain (Gt). }
         tx_power_dbm: { type: number, format: double, minimum: -10, maximum: 30, default: 14 }
-        frequency_mhz: { type: number, format: double, enum: [433.0, 868.0, 915.0, 923.0], default: 868.0 }
+        frequency_mhz: { type: number, format: double, enum: [433.0, 868.0, 915.0, 923.0], default: 923.0 }
+        rx_antenna_gain_dbi: { type: number, format: double, minimum: -10, maximum: 30, nullable: true }
+        rx_sensitivity_dbm: { type: number, format: double, minimum: -150, maximum: -50, nullable: true }
 
     GatewayPatch:
       type: object
@@ -294,6 +357,8 @@ components:
         antenna_gain_dbi: { type: number, format: double }
         tx_power_dbm: { type: number, format: double, minimum: -10, maximum: 30 }
         is_public: { type: boolean }
+        rx_antenna_gain_dbi: { type: number, format: double, minimum: -10, maximum: 30, nullable: true }
+        rx_sensitivity_dbm: { type: number, format: double, minimum: -150, maximum: -50, nullable: true }
 
     SurveyTrainingPoint:
       type: object

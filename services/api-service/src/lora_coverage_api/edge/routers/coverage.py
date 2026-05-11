@@ -23,6 +23,7 @@ from ..schemas import (
     CoverageBatchRequest,
     CoverageBatchResponse,
     CoverageLookupResponse,
+    LinkBudgetResponse,
     PredictionResponse,
     PredictRequest,
     ResolvedAddressResponse,
@@ -46,11 +47,15 @@ async def predict(
     request: Request,
     service: CoverageQuery = Depends(coverage_query),
 ) -> PredictionResponse | JSONResponse:
-    target = Target(
+    target = _build_target(
         latitude=payload.latitude,
         longitude=payload.longitude,
-        spreading_factor=payload.spreading_factor,
-        frequency_mhz=payload.frequency_mhz,
+        sf=payload.spreading_factor,
+        freq_mhz=payload.frequency_mhz,
+        tx_power_dbm=payload.tx_power_dbm,
+        tx_antenna_gain_dbi=payload.tx_antenna_gain_dbi,
+        rx_antenna_gain_dbi=payload.rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=payload.rx_sensitivity_dbm,
     )
     result = service.predict(target)
 
@@ -74,6 +79,41 @@ async def predict(
     return _to_prediction_response(result.value)
 
 
+def _build_target(
+    *,
+    latitude: float,
+    longitude: float,
+    sf: int,
+    freq_mhz: float,
+    tx_power_dbm: float | None = None,
+    tx_antenna_gain_dbi: float | None = None,
+    rx_antenna_gain_dbi: float | None = None,
+    rx_sensitivity_dbm: float | None = None,
+) -> Target:
+    """Construct Target. None field → fallback Settings env defaults.
+
+    rx_sensitivity_dbm None đi thẳng vào Target → application layer derive từ
+    SF table (không expose qua env vì đã hardcode SX1276 datasheet).
+    """
+    settings = get_settings()
+    return Target(
+        latitude=latitude,
+        longitude=longitude,
+        spreading_factor=sf,
+        frequency_mhz=freq_mhz,
+        tx_power_dbm=tx_power_dbm
+        if tx_power_dbm is not None
+        else settings.default_device_tx_power_dbm,
+        tx_antenna_gain_dbi=tx_antenna_gain_dbi
+        if tx_antenna_gain_dbi is not None
+        else settings.default_device_tx_antenna_gain_dbi,
+        rx_antenna_gain_dbi=rx_antenna_gain_dbi
+        if rx_antenna_gain_dbi is not None
+        else settings.default_device_rx_antenna_gain_dbi,
+        rx_sensitivity_dbm=rx_sensitivity_dbm,
+    )
+
+
 def _to_prediction_response(p: object) -> PredictionResponse:
     """Map domain Prediction → wire schema."""
     # Lazy attr access — tránh import cycle với domain ở module top.
@@ -88,6 +128,19 @@ def _to_prediction_response(p: object) -> PredictionResponse:
         ),
         model_version=p.model_version,  # type: ignore[attr-defined]
         recommended_sf=p.recommended_sf,  # type: ignore[attr-defined]
+        uplink=LinkBudgetResponse(
+            rssi_dbm=p.uplink_rssi_dbm,  # type: ignore[attr-defined]
+            snr_db=p.uplink_snr_db,  # type: ignore[attr-defined]
+            margin_db=p.uplink_margin_db,  # type: ignore[attr-defined]
+            status=p.uplink_status.value,  # type: ignore[attr-defined]
+        ),
+        downlink=LinkBudgetResponse(
+            rssi_dbm=p.downlink_rssi_dbm,  # type: ignore[attr-defined]
+            snr_db=p.downlink_snr_db,  # type: ignore[attr-defined]
+            margin_db=p.downlink_margin_db,  # type: ignore[attr-defined]
+            status=p.downlink_status.value,  # type: ignore[attr-defined]
+        ),
+        bottleneck=p.bottleneck,  # type: ignore[attr-defined]
     )
 
 
@@ -149,11 +202,12 @@ async def lookup(
 
     resolved = addr_result.value
     provider_label = resolved.provider.value
-    target = Target(
+    # AddressLookupRequest chưa expose device-side overrides — dùng Target defaults.
+    target = _build_target(
         latitude=resolved.latitude,
         longitude=resolved.longitude,
-        spreading_factor=payload.spreading_factor,
-        frequency_mhz=payload.frequency_mhz,
+        sf=payload.spreading_factor,
+        freq_mhz=payload.frequency_mhz,
     )
     pred_result = service.predict(target)
     if isinstance(pred_result, Err):
@@ -283,11 +337,11 @@ def _process_batch_item(
             confidence=resolved.confidence,
         )
 
-    target = Target(
+    target = _build_target(
         latitude=resolved_dto.latitude,
         longitude=resolved_dto.longitude,
-        spreading_factor=sf,
-        frequency_mhz=freq_mhz,
+        sf=sf,
+        freq_mhz=freq_mhz,
     )
     pred_result = service.predict(target)
     if isinstance(pred_result, Err):

@@ -22,6 +22,7 @@ import {
   GATEWAY_MARKER_STYLE,
   INITIAL_CENTER,
   INITIAL_ZOOM,
+  MARGIN_BAR_RANGE,
   PREDICT_MARKER_STYLE,
   SF_OPTIONS,
   STATUS_COLOR,
@@ -267,6 +268,177 @@ function writeFilterUrlState(state) {
 const SURVEYS_SOURCE_ID = "surveys-src";
 const SURVEYS_LAYER_ID = "surveys-circle";
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * Popup vanilla-DOM helpers (predict marker)
+ *
+ * Maplibre popup nhận DOM node thuần — không phải React tree — nên các block
+ * UI bidirectional viết trực tiếp bằng `document.createElement`. Tách ra
+ * module-level để buildPopupNode đọc được, đồng thời tránh re-create function
+ * mỗi render.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Pill nút thắt 2 chiều cạnh status badge ở Layer 1.
+ * No-op nếu BE trả response cũ (bottleneck === undefined).
+ * @param {HTMLElement} parent
+ * @param {("uplink" | "downlink" | "both_ok") | undefined} bn
+ */
+function appendBottleneckPill(parent, bn) {
+  if (!bn) return;
+  /** @type {Record<string, string>} */
+  const labels = t.popup.bottleneckShort;
+  const label = labels[bn];
+  if (!label) return;
+  const balanced = bn === "both_ok";
+  const bg = balanced ? "#ecfdf5" : "#fffbeb";
+  const fg = balanced ? "#047857" : "#b45309";
+  const border = balanced ? "#a7f3d0" : "#fde68a";
+  const pill = document.createElement("span");
+  pill.style.cssText = `display:inline-block;background:${bg};color:${fg};border:1px solid ${border};padding:1px 6px;border-radius:9999px;font-weight:500;font-size:10px`;
+  pill.textContent = label;
+  parent.appendChild(pill);
+}
+
+/**
+ * Margin bar: width tỉ lệ với margin trong khoảng MARGIN_BAR_RANGE,
+ * màu nền theo STATUS_COLOR[status]. Numeric label nằm cạnh thanh bar.
+ * @param {number} marginDb
+ * @param {string} status
+ * @returns {HTMLDivElement}
+ */
+function buildMarginCell(marginDb, status) {
+  const { min, max } = MARGIN_BAR_RANGE;
+  const pct = Math.max(0, Math.min(100, ((marginDb - min) / (max - min)) * 100));
+  const color = STATUS_COLOR[status] ?? STATUS_COLOR_FALLBACK;
+
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "display:flex;align-items:center;gap:4px;min-width:96px";
+
+  const num = document.createElement("span");
+  num.style.cssText =
+    "font-variant-numeric:tabular-nums;color:#334155;min-width:48px";
+  num.textContent = t.popup.bidir.marginValue(marginDb);
+  wrap.appendChild(num);
+
+  const track = document.createElement("div");
+  track.style.cssText =
+    "flex:1;height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden";
+  const fill = document.createElement("div");
+  fill.style.cssText = `width:${pct.toFixed(1)}%;height:100%;background:${color}`;
+  track.appendChild(fill);
+  wrap.appendChild(track);
+
+  return wrap;
+}
+
+/**
+ * @param {string} label
+ * @param {import("../api/client.js").LinkBudgetT} lb
+ * @returns {HTMLTableRowElement}
+ */
+function buildBidirRow(label, lb) {
+  const tr = document.createElement("tr");
+
+  const tdLabel = document.createElement("td");
+  tdLabel.style.cssText = "padding:3px 4px;color:#334155;white-space:nowrap";
+  tdLabel.textContent = label;
+  tr.appendChild(tdLabel);
+
+  const tdRssi = document.createElement("td");
+  tdRssi.style.cssText =
+    "padding:3px 4px;font-variant-numeric:tabular-nums;white-space:nowrap";
+  tdRssi.textContent = `${lb.rssi_dbm.toFixed(1)} dBm`;
+  tr.appendChild(tdRssi);
+
+  const tdSnr = document.createElement("td");
+  tdSnr.style.cssText =
+    "padding:3px 4px;font-variant-numeric:tabular-nums;white-space:nowrap";
+  tdSnr.textContent = `${lb.snr_db.toFixed(1)} dB`;
+  tr.appendChild(tdSnr);
+
+  const tdMargin = document.createElement("td");
+  tdMargin.style.cssText = "padding:3px 4px";
+  tdMargin.appendChild(buildMarginCell(lb.margin_db, lb.status));
+  tr.appendChild(tdMargin);
+
+  return tr;
+}
+
+/**
+ * Section UL/DL trong Layer 2 — bảng 2×4 (UL/DL × label/RSSI/SNR/Margin)
+ * với margin bar visual. Chỉ append khi BE trả đủ uplink + downlink.
+ * @param {HTMLElement} parent
+ * @param {import("../api/client.js").LinkBudgetT} ul
+ * @param {import("../api/client.js").LinkBudgetT} dl
+ */
+function appendBidirectionalSection(parent, ul, dl) {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0";
+
+  const head = document.createElement("div");
+  head.style.cssText =
+    "font-weight:600;color:#0f172a;margin-bottom:4px;font-size:11px";
+  head.textContent = t.popup.bidir.sectionTitle;
+  wrap.appendChild(head);
+
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px";
+
+  const thead = document.createElement("thead");
+  thead.innerHTML =
+    `<tr style="color:#64748b;text-align:left">
+       <th style="padding:2px 4px;font-weight:500"></th>
+       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colRssi}</th>
+       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colSnr}</th>
+       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colMargin}</th>
+     </tr>`;
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  tbody.appendChild(buildBidirRow(t.popup.bidir.ul, ul));
+  tbody.appendChild(buildBidirRow(t.popup.bidir.dl, dl));
+  table.appendChild(tbody);
+
+  wrap.appendChild(table);
+  parent.appendChild(wrap);
+}
+
+/**
+ * Nút copy permalink (`?lat=&lng=&sf=`) — feedback "Đã copy!" 2s rồi reset.
+ * Clipboard API không có ở SSR → guard `window` tồn tại.
+ * @param {HTMLElement} parent
+ * @param {number} lat
+ * @param {number} lng
+ * @param {number} sf
+ */
+function appendCopyLinkButton(parent, lat, lng, sf) {
+  if (typeof window === "undefined") return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.style.cssText =
+    "margin-top:8px;font-size:11px;color:#0369a1;background:#f0f9ff;border:1px solid #bae6fd;border-radius:4px;padding:3px 8px;cursor:pointer";
+  btn.textContent = t.popup.copyLink.label;
+
+  let resetTimer = /** @type {number | null} */ (null);
+  btn.addEventListener("click", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("lat", lat.toFixed(6));
+    url.searchParams.set("lng", lng.toFixed(6));
+    url.searchParams.set("sf", String(sf));
+    void navigator.clipboard.writeText(url.toString()).then(() => {
+      btn.textContent = t.popup.copyLink.done;
+      if (resetTimer != null) window.clearTimeout(resetTimer);
+      resetTimer = window.setTimeout(() => {
+        btn.textContent = t.popup.copyLink.label;
+        resetTimer = null;
+      }, 2000);
+    });
+  });
+
+  parent.appendChild(btn);
+}
+
 
 /**
  * @param {{ mode?: "points" | "heatmap" | "predict" }} props
@@ -282,14 +454,13 @@ export function CoverageMap({ mode = "points" }) {
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const [mapLoaded, setMapLoaded] = useState(false);
   const gatewayMarkersRef = useRef(/** @type {maplibregl.Marker[]} */ ([]));
-  const searchMarkerRef = useRef(/** @type {maplibregl.Marker | null} */ (null));
+  // Mảng marker dự đoán — predict mỗi điểm append 1 marker, không xoá cũ.
+  // Re-render qua bumpMarkerCount() để nút "Xoá tất cả" disable đúng lúc.
+  const searchMarkersRef = useRef(/** @type {maplibregl.Marker[]} */ ([]));
+  const [predictMarkerCount, setPredictMarkerCount] = useState(0);
   const gatewaysRef = useRef(
     /** @type {import("../api/client.js").GatewayT[]} */ ([]),
   );
-  const lastSearchRef = useRef(
-    /** @type {{ lat: number, lng: number } | null} */ (null),
-  );
-  const skipFirstSfEffect = useRef(true);
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
   const initialPointsFilterRef = useRef(readPointsFilterUrlState());
@@ -609,7 +780,7 @@ export function CoverageMap({ mode = "points" }) {
    */
   const buildPopupNode = useCallback((lat, lng, prediction, sfUsed) => {
     const root = document.createElement("div");
-    root.style.cssText = "font:12px/1.4 system-ui;max-width:280px";
+    root.style.cssText = "font:12px/1.4 system-ui;max-width:360px;min-width:320px";
 
     const status = prediction.coverage_status;
     const color = STATUS_COLOR[status] ?? STATUS_COLOR_FALLBACK;
@@ -625,10 +796,15 @@ export function CoverageMap({ mode = "points" }) {
     subtitle.textContent = t.popup.coords(lat, lng);
     root.appendChild(subtitle);
 
+    // Layer 1: status badge + bottleneck pill (cùng hàng).
+    const badgeRow = document.createElement("div");
+    badgeRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center";
     const badge = document.createElement("span");
     badge.style.cssText = `display:inline-block;background:${color};color:white;padding:2px 8px;border-radius:9999px;font-weight:600;font-size:11px`;
     badge.textContent = STATUS_LABEL[status] ?? status;
-    root.appendChild(badge);
+    badgeRow.appendChild(badge);
+    appendBottleneckPill(badgeRow, prediction.bottleneck);
+    root.appendChild(badgeRow);
 
     const sentence = document.createElement("div");
     sentence.style.cssText = "margin-top:6px;color:#475569";
@@ -646,7 +822,7 @@ export function CoverageMap({ mode = "points" }) {
 
     const layer2 = document.createElement("div");
     layer2.style.cssText =
-      "display:none;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#334155";
+      "display:none;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#334155;max-height:55vh;overflow-y:auto";
 
     const rec = prediction.recommended_sf;
     const sfMismatch = rec !== sfUsed;
@@ -654,16 +830,22 @@ export function CoverageMap({ mode = "points" }) {
       ? `<strong>${t.popup.recommendedSf.value(rec)}</strong> <span style="color:#b45309">${t.popup.sfMismatchHint}</span>`
       : `<strong>${t.popup.recommendedSf.value(rec)}</strong>`;
     const techRows = document.createElement("div");
+    // RSSI/SNR tổng đã hiện chi tiết per-direction trong mini-table UL/DL
+    // bên dưới — không lặp lại ở đây để tránh trùng abstraction (philosophy
+    // ch.7: "each layer provides a different abstraction").
     techRows.innerHTML =
       `<div>${t.popup.usedSf.label}: <strong>${t.popup.usedSf.value(sfUsed)}</strong></div>` +
       `<div>${t.popup.recommendedSf.label}: ${recCellHtml}</div>` +
-      `<div>${t.popup.rssiLabel}: <strong>${prediction.rssi_dbm.toFixed(1)} dBm</strong></div>` +
-      `<div>${t.popup.snrLabel}: <strong>${prediction.snr_db.toFixed(1)} dB</strong></div>` +
       `<div>${t.popup.searchConfidence}: <strong>${(prediction.confidence.score * 100).toFixed(0)}%</strong> <span style="color:#94a3b8">(${prediction.confidence.method})</span></div>`;
     layer2.appendChild(techRows);
 
+    // UL/DL table — chỉ render khi BE có trả 2 chiều (backward-compat).
+    if (prediction.uplink && prediction.downlink) {
+      appendBidirectionalSection(layer2, prediction.uplink, prediction.downlink);
+    }
+
     const gwRow = document.createElement("div");
-    gwRow.style.cssText = "margin-top:4px";
+    gwRow.style.cssText = "margin-top:6px";
     const gw = prediction.serving_gateway_id
       ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
       : null;
@@ -687,6 +869,8 @@ export function CoverageMap({ mode = "points" }) {
       gwRow.textContent = `${t.popup.nearestGateway.label}: ${t.popup.nearestGateway.none}`;
     }
     layer2.appendChild(gwRow);
+
+    appendCopyLinkButton(layer2, lat, lng, sfUsed);
 
     root.appendChild(layer2);
 
@@ -712,11 +896,6 @@ export function CoverageMap({ mode = "points" }) {
     const map = mapRef.current;
     if (!map) return;
 
-    if (searchMarkerRef.current) {
-      searchMarkerRef.current.remove();
-      searchMarkerRef.current = null;
-    }
-
     const color =
       STATUS_COLOR[prediction.coverage_status] ?? STATUS_COLOR_FALLBACK;
     const el = document.createElement("div");
@@ -728,20 +907,28 @@ export function CoverageMap({ mode = "points" }) {
     el.style.border = PREDICT_MARKER_STYLE.border;
     el.style.boxShadow = PREDICT_MARKER_STYLE.boxShadow;
 
-    const popup = new maplibregl.Popup({ offset: 16 }).setDOMContent(
-      buildPopupNode(lat, lng, prediction, sfUsed),
-    );
+    const popup = new maplibregl.Popup({
+      offset: 16,
+      maxWidth: "380px",
+    }).setDOMContent(buildPopupNode(lat, lng, prediction, sfUsed));
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat])
       .setPopup(popup)
       .addTo(map);
     marker.togglePopup();
-    searchMarkerRef.current = marker;
+    searchMarkersRef.current.push(marker);
+    setPredictMarkerCount(searchMarkersRef.current.length);
 
-    map.flyTo({ center: [lng, lat], zoom: 14 });
+    map.flyTo({ center: [lng, lat] });
   }, [buildPopupNode]);
   // Phụ thuộc buildPopupNode (đã stable nhờ useCallback ở trên).
+
+  const clearAllSearchMarkers = useCallback(() => {
+    for (const m of searchMarkersRef.current) m.remove();
+    searchMarkersRef.current = [];
+    setPredictMarkerCount(0);
+  }, []);
 
   // Initial URL deep-link: predict 1 lần sau khi map mount.
   // Chỉ tab "Dự đoán điểm" mới tiêu thụ URL state — tab "Bản đồ điểm đo" và
@@ -761,7 +948,6 @@ export function CoverageMap({ mode = "points" }) {
     })
       .then((prediction) => {
         if (cancelled) return;
-        lastSearchRef.current = { lat: url.lat, lng: url.lng };
         drawSearchMarker(url.lat, url.lng, prediction, sfForUrl);
       })
       .catch((e) => {
@@ -788,7 +974,6 @@ export function CoverageMap({ mode = "points" }) {
         spreading_factor: sf,
         frequency_mhz: DEFAULT_FREQ_MHZ,
       });
-      lastSearchRef.current = { lat, lng };
       drawSearchMarker(lat, lng, prediction, sf);
       writeUrlState(lat, lng, sf);
     } catch (e) {
@@ -799,33 +984,8 @@ export function CoverageMap({ mode = "points" }) {
     }
   }
 
-  // Khi user đổi SF: re-predict ở vị trí search gần nhất + cập nhật URL.
-  useEffect(() => {
-    if (skipFirstSfEffect.current) {
-      skipFirstSfEffect.current = false;
-      return;
-    }
-    const last = lastSearchRef.current;
-    if (!last) return;
-    let cancelled = false;
-    predictCoverage({
-      latitude: last.lat,
-      longitude: last.lng,
-      spreading_factor: sf,
-      frequency_mhz: DEFAULT_FREQ_MHZ,
-    })
-      .then((prediction) => {
-        if (cancelled) return;
-        drawSearchMarker(last.lat, last.lng, prediction, sf);
-        writeUrlState(last.lat, last.lng, sf);
-      })
-      .catch((e) => {
-        console.error("SF re-predict failed:", e);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sf, drawSearchMarker]);
+  // SF dropdown = input cho lần predict tiếp theo. Không auto re-predict
+  // marker đã có (multi-marker thì semantic ambiguous: re-predict cái nào?).
 
   return (
     <div className="h-full w-full">
@@ -893,6 +1053,16 @@ export function CoverageMap({ mode = "points" }) {
                 {predictBusy
                   ? t.predictPanel.submitting
                   : t.predictPanel.submit}
+              </button>
+
+              <button
+                type="button"
+                onClick={clearAllSearchMarkers}
+                disabled={predictMarkerCount === 0}
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+              >
+                {t.predictPanel.clearAll}
+                {predictMarkerCount > 0 ? ` (${predictMarkerCount})` : ""}
               </button>
 
               {predictError && (

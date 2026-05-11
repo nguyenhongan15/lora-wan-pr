@@ -17,7 +17,17 @@ export const Confidence = z.object({
   method: z.enum(["empirical", "residual", "ensemble", "bayesian"]),
 });
 
+export const LinkBudget = z.object({
+  rssi_dbm: z.number(),
+  snr_db: z.number(),
+  margin_db: z.number(),
+  status: z.enum(["strong", "marginal", "weak", "no_coverage"]),
+});
+
 export const Prediction = z.object({
+  // rssi_dbm/snr_db giữ nghĩa = downlink (backward compat); coverage_status =
+  // worst-of(uplink, downlink). Field uplink/downlink/bottleneck là optional
+  // để gracefully degrade với BE chưa rebuild.
   rssi_dbm: z.number(),
   snr_db: z.number(),
   coverage_status: z.enum(["strong", "marginal", "weak", "no_coverage"]),
@@ -25,6 +35,9 @@ export const Prediction = z.object({
   confidence: Confidence,
   model_version: z.string(),
   recommended_sf: z.number().int().min(7).max(12),
+  uplink: LinkBudget.optional(),
+  downlink: LinkBudget.optional(),
+  bottleneck: z.enum(["uplink", "downlink", "both_ok"]).optional(),
 });
 
 export const ProblemDetails = z.object({
@@ -40,6 +53,7 @@ export const ProblemDetails = z.object({
 /**
  * @typedef {z.infer<typeof PredictRequest>} PredictRequestT
  * @typedef {z.infer<typeof Prediction>} PredictionT
+ * @typedef {z.infer<typeof LinkBudget>} LinkBudgetT
  * @typedef {z.infer<typeof ProblemDetails>} ProblemDetailsT
  */
 
