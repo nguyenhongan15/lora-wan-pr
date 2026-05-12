@@ -121,6 +121,14 @@ export const strings = {
       /** @param {number} sf */
       option: (sf) => `SF${sf}`,
     },
+    viewModePicker: {
+      title: "Loại bản đồ",
+      ariaLabel: "Chọn loại bản đồ",
+      modes: {
+        points: "Bản đồ điểm đo",
+        heatmap: "Bản đồ nhiệt mật độ",
+      },
+    },
     urlPositionLabel: "Vị trí từ URL",
     filters: {
       contributor: {

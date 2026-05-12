@@ -111,13 +111,16 @@ export const SURVEY_CIRCLE_PAINT = {
  * DOM marker styling
  * ─────────────────────────────────────────────────────────────────────── */
 
-// Gateway marker — chấm tròn xanh.
+// Gateway marker — folium-style drop pin: SVG teardrop (đáy nhọn ở dưới)
+// fill đen, viền trắng, icon tower-cell trắng trong vòng tròn trên cùng.
+// Render bằng SVG path để tip luôn ở giữa-đáy → kết hợp anchor='bottom'
+// đặt tip đúng tọa độ gateway. Width/height tỷ lệ 28:37 giống Leaflet default.
 export const GATEWAY_MARKER_STYLE = {
-  size: "20px",
-  background: "#1d4ed8",
-  border: "2px solid white",
-  boxShadow: "0 0 4px rgba(0,0,0,0.5)",
-  borderRadius: "50%",
+  width: 20,
+  height: 26,
+  fill: "#ffffff",
+  stroke: "#000000",
+  iconColor: "#0284c7",
 };
 
 // Search/Predict marker — drop pin (border-radius 50% 50% 50% 0 + xoay -45°).

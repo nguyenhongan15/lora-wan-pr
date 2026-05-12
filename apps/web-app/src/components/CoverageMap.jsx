@@ -12,6 +12,7 @@ import {
 import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
+import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
 import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
 import {
   BASEMAP_STYLE,
@@ -29,6 +30,10 @@ import {
   STATUS_COLOR_FALLBACK,
   SURVEY_CIRCLE_PAINT,
 } from "./CoverageMap.config.js";
+import {
+  addSurveyHeatmapLayer,
+  setSurveyHeatmapVisible,
+} from "./SurveyHeatmapLayer.js";
 
 const t = strings.coverageMap;
 /** @type {Record<string, string>} */
@@ -264,9 +269,23 @@ function writeFilterUrlState(state) {
   window.history.replaceState(null, "", next);
 }
 
-// Survey GeoJSON source — circle layer (WebGL), không cluster.
+// Survey GeoJSON source — chia sẻ giữa 2 layer (circle + heatmap), không
+// cluster. Toggle visibility ở runtime thay vì add/remove → cùng filter, cùng
+// pipeline cập nhật setData.
+//
+// Heatmap layer + paint encapsulated trong `./SurveyHeatmapLayer.js`. Caller
+// chỉ thấy 2 hàm `addSurveyHeatmapLayer` / `setSurveyHeatmapVisible`.
 const SURVEYS_SOURCE_ID = "surveys-src";
 const SURVEYS_LAYER_ID = "surveys-circle";
+
+/** @typedef {import("./MapViewModeToggle.jsx").ViewMode} ViewMode */
+
+// Predict-line GeoJSON source — line layer nối điểm dự đoán → serving gateway.
+// 1 source duy nhất cho cả tab "Dự đoán điểm": mỗi lần predict push 1 feature,
+// `clearAllSearchMarkers` reset features = []. Màu line đọc từ feature property
+// `color` (set runtime từ STATUS_COLOR theo coverage_status).
+const PREDICT_LINES_SOURCE_ID = "predict-lines-src";
+const PREDICT_LINES_LAYER_ID = "predict-lines";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
@@ -457,6 +476,11 @@ export function CoverageMap({ mode = "points" }) {
   // Mảng marker dự đoán — predict mỗi điểm append 1 marker, không xoá cũ.
   // Re-render qua bumpMarkerCount() để nút "Xoá tất cả" disable đúng lúc.
   const searchMarkersRef = useRef(/** @type {maplibregl.Marker[]} */ ([]));
+  // Line features song song với searchMarkersRef — index N có thể không 1-1 vì
+  // marker mà serving_gateway_id == null sẽ không có line. clearAll reset cả 2.
+  const searchLineFeaturesRef = useRef(
+    /** @type {GeoJSON.Feature<GeoJSON.LineString>[]} */ ([]),
+  );
   const [predictMarkerCount, setPredictMarkerCount] = useState(0);
   const gatewaysRef = useRef(
     /** @type {import("../api/client.js").GatewayT[]} */ ([]),
@@ -477,6 +501,12 @@ export function CoverageMap({ mode = "points" }) {
   );
   const [sf, setSf] = useState(
     () => initialUrlRef.current?.sf ?? DEFAULT_SF,
+  );
+  // Visualization mode cho tab "points": circle (RSSI) ↔ heatmap (mật độ).
+  // Mặc định circle để không đổi behavior hiện tại. State chỉ ý nghĩa khi
+  // mode === "points"; các tab khác không render toggle nên giá trị bị bỏ qua.
+  const [viewMode, setViewMode] = useState(
+    /** @type {ViewMode} */ ("points"),
   );
 
   const [contributor, setContributor] = useState(
@@ -650,6 +680,26 @@ export function CoverageMap({ mode = "points" }) {
     map.on("load", () => {
       setMapLoaded(true);
 
+      // Predict-line source + layer — add 1 lần khi map load, drawSearchMarker
+      // chỉ setData. Line render dưới DOM marker tự nhiên (DOM luôn trên WebGL).
+      if (mode === "predict") {
+        map.addSource(PREDICT_LINES_SOURCE_ID, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: PREDICT_LINES_LAYER_ID,
+          type: "line",
+          source: PREDICT_LINES_SOURCE_ID,
+          paint: /** @type {any} */ ({
+            "line-color": ["get", "color"],
+            "line-width": 2,
+            "line-opacity": 0.85,
+          }),
+          layout: { "line-cap": "round", "line-join": "round" },
+        });
+      }
+
       // Survey layer chỉ add cho "points" mode. "heatmap" sẽ add raster
       // source ở Phase 2; "predict" không cần điểm đo nền.
       if (mode !== "points") return;
@@ -659,6 +709,9 @@ export function CoverageMap({ mode = "points" }) {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+      // Thứ tự add quan trọng: heatmap thêm trước → nằm dưới circle trong
+      // render stack. Khi đổi viewMode chỉ flip visibility, không reorder.
+      addSurveyHeatmapLayer(map, SURVEYS_SOURCE_ID);
       map.addLayer({
         id: SURVEYS_LAYER_ID,
         type: "circle",
@@ -729,6 +782,22 @@ export function CoverageMap({ mode = "points" }) {
     ).setData(buildSurveyGeoJson(surveysQ.data.items));
   }, [surveysQ.data, mode, mapLoaded]);
 
+  // Toggle visibility 2 layer điểm đo theo viewMode — circle ↔ heatmap. Cả 2
+  // dùng chung source nên filter (sf/rssi/...) auto-apply cho cả 2 mode.
+  useEffect(() => {
+    if (mode !== "points") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getLayer(SURVEYS_LAYER_ID)) return;
+    const showCircle = viewMode === "points";
+    map.setLayoutProperty(
+      SURVEYS_LAYER_ID,
+      "visibility",
+      showCircle ? "visible" : "none",
+    );
+    setSurveyHeatmapVisible(map, !showCircle);
+  }, [viewMode, mode, mapLoaded]);
+
   // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
   // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
   useEffect(() => {
@@ -741,12 +810,21 @@ export function CoverageMap({ mode = "points" }) {
 
     for (const g of gatewaysQ.data.items) {
       const el = document.createElement("div");
-      el.style.width = GATEWAY_MARKER_STYLE.size;
-      el.style.height = GATEWAY_MARKER_STYLE.size;
-      el.style.background = GATEWAY_MARKER_STYLE.background;
-      el.style.border = GATEWAY_MARKER_STYLE.border;
-      el.style.boxShadow = GATEWAY_MARKER_STYLE.boxShadow;
-      el.style.borderRadius = GATEWAY_MARKER_STYLE.borderRadius;
+      el.style.cursor = "pointer";
+      el.style.filter = "drop-shadow(0 1px 2px rgba(0,0,0,0.5))";
+      // SVG teardrop pin: viewBox 24x32, tip ở (12, 32) = giữa-đáy SVG.
+      // Path: nửa trên là vòm tròn r=12, nửa dưới thót dần xuống tip.
+      // Icon tower-cell đặt trong vòm trên (scale 0.5 từ 24×24 → 12×12).
+      el.innerHTML = `<svg width="${GATEWAY_MARKER_STYLE.width}" height="${GATEWAY_MARKER_STYLE.height}" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 0 C 5.4 0 0 5.4 0 12 C 0 21 12 32 12 32 C 12 32 24 21 24 12 C 24 5.4 18.6 0 12 0 Z" fill="${GATEWAY_MARKER_STYLE.fill}" stroke="${GATEWAY_MARKER_STYLE.stroke}" stroke-width="1.5"/>
+        <g transform="translate(6 5) scale(0.5)" fill="none" stroke="${GATEWAY_MARKER_STYLE.iconColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 8a7 7 0 0 1 14 0"/>
+          <path d="M9 8a3 3 0 0 1 6 0"/>
+          <line x1="12" y1="8" x2="12" y2="21"/>
+          <line x1="9" y1="21" x2="15" y2="21"/>
+          <line x1="9" y1="14" x2="15" y2="14"/>
+        </g>
+      </svg>`;
       const popup = new maplibregl.Popup({ offset: 12 }).setHTML(
         `<div style="font:12px/1.4 system-ui">
            <div><strong>${g.code}</strong> — ${g.name}</div>
@@ -755,7 +833,9 @@ export function CoverageMap({ mode = "points" }) {
            <div>${t.popup.gatewayFreq}: ${g.frequency_mhz} MHz</div>
          </div>`,
       );
-      const marker = new maplibregl.Marker({ element: el })
+      // anchor='bottom' → đáy SVG (tip teardrop) đặt đúng tại tọa độ gateway,
+      // giống folium.Marker (Leaflet default behavior).
+      const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
         .setLngLat([g.longitude, g.latitude])
         .setPopup(popup)
         .addTo(map);
@@ -920,6 +1000,33 @@ export function CoverageMap({ mode = "points" }) {
     searchMarkersRef.current.push(marker);
     setPredictMarkerCount(searchMarkersRef.current.length);
 
+    // Vẽ line nối điểm dự đoán → serving gateway, cùng màu badge trạng thái.
+    // Bỏ qua nếu BE không gán gateway (serving_gateway_id null) hoặc gateway
+    // chưa load (gatewaysRef rỗng — race với deep-link predict khi mới mount).
+    const gw = prediction.serving_gateway_id
+      ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
+      : null;
+    if (gw) {
+      searchLineFeaturesRef.current.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [lng, lat],
+            [gw.longitude, gw.latitude],
+          ],
+        },
+        properties: { color },
+      });
+      const src = map.getSource(PREDICT_LINES_SOURCE_ID);
+      if (src && "setData" in src) {
+        /** @type {maplibregl.GeoJSONSource} */ (src).setData({
+          type: "FeatureCollection",
+          features: searchLineFeaturesRef.current,
+        });
+      }
+    }
+
     map.flyTo({ center: [lng, lat] });
   }, [buildPopupNode]);
   // Phụ thuộc buildPopupNode (đã stable nhờ useCallback ở trên).
@@ -927,6 +1034,14 @@ export function CoverageMap({ mode = "points" }) {
   const clearAllSearchMarkers = useCallback(() => {
     for (const m of searchMarkersRef.current) m.remove();
     searchMarkersRef.current = [];
+    searchLineFeaturesRef.current = [];
+    const src = mapRef.current?.getSource(PREDICT_LINES_SOURCE_ID);
+    if (src && "setData" in src) {
+      /** @type {maplibregl.GeoJSONSource} */ (src).setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+    }
     setPredictMarkerCount(0);
   }, []);
 
@@ -989,8 +1104,31 @@ export function CoverageMap({ mode = "points" }) {
 
   return (
     <div className="h-full w-full">
-      <div className="relative h-full w-full overflow-hidden">
+      {/* Pad maplibre top-right control container (pt-10 = 40px) khi tab
+          points để chừa chỗ cho icon view-mode toggle ngồi trên zoom. Tab
+          khác (predict/heatmap) không có toggle nên giữ control sát mép. */}
+      <div
+        className={
+          mode === "points"
+            ? "relative h-full w-full overflow-hidden [&_.maplibregl-ctrl-top-right]:pt-10"
+            : "relative h-full w-full overflow-hidden"
+        }
+      >
         <div ref={containerRef} className="h-full w-full" />
+
+        {/* View-mode toggle — chỉ tab "points" mới có circles↔heatmap. Đặt
+            top-right, anchor pixel-offset dưới NavigationControl của
+            maplibre (3 nút zoom/compass ~95px + margin 10px). */}
+        {mode === "points" && (
+          <MapViewModeToggle
+            mode={viewMode}
+            onChange={setViewMode}
+            options={[
+              { value: "points", label: t.viewModePicker.modes.points },
+              { value: "heatmap", label: t.viewModePicker.modes.heatmap },
+            ]}
+          />
+        )}
 
         {/* Container anchor cả trên + dưới: `bottom-44` (=11rem) chừa zone
             cho legend ở góc dưới-trái. `pointer-events-none` để vùng trống
