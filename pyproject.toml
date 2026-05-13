@@ -24,7 +24,8 @@ dev = [
 [tool.uv.workspace]
 members = [
     "services/api-service",
-    "services/ml-service",
+    "services/ml-service-hmap",
+    "services/ml-service-predict",
     "services/worker-service",
     "packages/sdk-python",
 ]
@@ -40,6 +41,7 @@ ignore = ["E501", "RUF001", "RUF003",]  # line-length handled by formatter
 [tool.ruff.lint.per-file-ignores]
 # FastAPI Depends() trong default argument là pattern chính thức của framework
 "services/api-service/src/lora_coverage_api/edge/routers/*.py" = ["B008"]
+"services/ml-service-predict/src/lora_ml_predict/serving/*.py" = ["B008"]
 # conftest phải load_dotenv() trước khi import modules đọc env vars
 "services/api-service/tests/conftest.py" = ["E402"]
 
@@ -52,7 +54,17 @@ strict = true
 exclude = ["legacy/", "migrations/versions/"]
 plugins = ["pydantic.mypy"]
 
+[[tool.mypy.overrides]]
+# 3rd-party packages thiếu type stub. ML service phụ thuộc nặng — không cần
+# fail strict mypy vì lib upstream.
+module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["services/api-service/tests", "services/ml-service/tests"]
+testpaths = [
+    "services/api-service/tests",
+    "services/ml-service-hmap/tests",
+    "services/ml-service-predict/tests",
+]
 addopts = "-ra --strict-markers --strict-config"

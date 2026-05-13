@@ -30,7 +30,6 @@ export function PredictionView({ prediction }) {
     snr_db,
     coverage_status,
     confidence,
-    model_version,
     recommended_sf,
     serving_gateway_id,
     uplink,
@@ -94,12 +93,6 @@ export function PredictionView({ prediction }) {
               <dt className="text-slate-500">{t.fields.gateway}</dt>
               <dd className="mt-1 truncate font-mono text-xs text-slate-700">
                 {serving_gateway_id ?? t.gatewayNone}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">{t.fields.model}</dt>
-              <dd className="mt-1 font-mono text-xs text-slate-700">
-                {model_version}
               </dd>
             </div>
           </dl>

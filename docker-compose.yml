@@ -70,6 +70,9 @@ services:
       DEFAULT_DEVICE_TX_POWER_DBM: ${DEFAULT_DEVICE_TX_POWER_DBM:-14.0}
       DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI: ${DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI:-2.0}
       DEFAULT_DEVICE_RX_ANTENNA_GAIN_DBI: ${DEFAULT_DEVICE_RX_ANTENNA_GAIN_DBI:-0.0}
+      STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-http://ml-service-predict:8001}
+      STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
+      STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
     ports:
       - "8000:8000"
     healthcheck:
@@ -77,6 +80,44 @@ services:
       interval: 30s
       timeout: 5s
       start_period: 10s
+      retries: 3
+
+  ml-service-predict:
+    # Predict-ML serving (Stage 2 LightGBM residual). Context = repo root vì
+    # Dockerfile cần workspace pyproject + sdk-python + lora-coverage-api source
+    # (workspace dep).
+    build:
+      context: .
+      dockerfile: services/ml-service-predict/Dockerfile
+    container_name: lora-wan-ml-predict
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      LORA_DB_URL: postgresql://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
+      LORA_DEM_PATH: /data/dem/copernicus_glo30_danang.tif
+      LORA_DEM_PATH_NORTH_VN: /data/dem/copernicus_glo30_north_vn.tif
+      LORA_URBANIZATION_PATH: /data/osm/urbanization_vn.tif
+      LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
+      LORA_STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
+      # Mirror host artifact dir vị trí trong container → artifact_uri trong DB
+      # (relative path từ repo root) resolve giống host. Cùng layout = không
+      # cần rewrite path khi train host → load container.
+      LORA_STAGE2_ARTIFACT_DIR: services/ml-service-predict/artifacts/stage2
+    volumes:
+      # Raster files (DEM + urbanization) live on host. Read-only mount.
+      - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
+      # Stage 2 artifacts: mount mirror đường dẫn host để relative path
+      # `services/ml-service-predict/artifacts/...` từ CWD=/app resolve OK.
+      - ./services/ml-service-predict/artifacts:/app/services/ml-service-predict/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
       retries: 3
 
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──

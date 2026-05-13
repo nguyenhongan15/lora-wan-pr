@@ -1,6 +1,6 @@
 # LoRa Coverage Mapping Platform
 
-Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a pure-math log-distance / Friis-hybrid path-loss predictor (Stage 1, AS923-2 / 923 MHz, suburban exponent n=3.0, shadow fading σ=6.0 dB, reference distance d₀ = 100 m). Calibration scope is Đà Nẵng-only (9.5k survey records); validity domain is outdoor 5–30 km from gateway (RMSE 4–5 dB in-distribution). Short-range < 2 km has a known +30 dB bias from unmodeled indoor/NLOS — reserved for Stage 2 LightGBM (planned). ML stages (residual, ensemble, Bayesian) are planned but not yet implemented. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
+Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a Stage 1 + Stage 2 hybrid path-loss predictor: Stage 1 is a pure-math log-distance / Friis baseline (AS923-2 / 923 MHz, suburban exponent n=3.0, shadow fading σ=6.0 dB, reference distance d₀ = 100 m) and Stage 2 is a LightGBM residual model (Huber loss, Optuna 100-trial TPE, grid-based spatial GroupKFold CV) served by `ml-service-predict` over an internal bearer-authed HTTP. Calibration scope is Đà Nẵng-only (9.5k survey records); Stage 1 validity domain is outdoor 5–30 km (RMSE 4–5 dB in-distribution); Stage 2 corrects the <2 km bias and learns shadow-fading residuals (CV RMSE 4.58 dB). Stage 3 SVGP uncertainty quantification is deferred. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
 
 Version: **0.2.0**
 
@@ -37,10 +37,11 @@ apps/
   docs/             ⏳ User-facing docs site (planned)
 
 services/
-  api-service/      ✅ FastAPI (Python 3.12) — 5-layer architecture, Stage-1 log-distance predictor
-  ml-service/       🟡 ONNX/LightGBM/PyTorch scaffold — no models trained yet
-  worker-service/   ⏳ Celery + Redis/Valkey (planned)
-  tile-server/      ⏳ Go PMTiles server (planned)
+  api-service/         ✅ FastAPI (Python 3.12) — 5-layer architecture, Stage-1 log-distance predictor
+  ml-service-predict/  ✅ Predict-ML (Option C: Physics → LightGBM → SVGP) — Stage 2 LightGBM residual live (Huber, Optuna, spatial GroupKFold), Phase 4+5 done; serves internal /residual called by api-service for /coverage/predict + /coverage/batch
+  ml-service-hmap/     🟡 Map-ML (heatmap, for /map) — skeleton placeholder; owned by future contributor
+  worker-service/      ⏳ Celery + Redis/Valkey (planned)
+  tile-server/         ⏳ Go PMTiles server (planned)
 
 packages/
   api-types/        ⏳ OpenAPI-generated type defs (not yet generated)
@@ -81,7 +82,7 @@ Client → edge            (FastAPI router/middleware/serialization)
 OpenAPI 3.1 spec at `openapi.yaml`. Live endpoints:
 
 - `GET /healthz`, `GET /readyz`
-- `POST /api/v1/coverage/predict` — Stage-1 log-distance prediction (RSSI/SNR/coverage/confidence/model_version)
+- `POST /api/v1/coverage/predict` — Stage 1 + Stage 2 hybrid prediction (RSSI/SNR/coverage/confidence/model_version). `model_version` is `stage1-...+stage2-...` when Stage 2 active, plain `stage1-...` on Stage 2 failure (degraded mode)
 - `GET /api/v1/gateways` — gateway directory
 - ChirpStack webhook ingestion
 
@@ -126,7 +127,9 @@ Three jobs run on push and PR to `main`:
 - Every survey upload passes through `quarantine` before entering `training` (two separate hypertables)
 - Stage 1 calibration data is Đà Nẵng-only (bbox lat 15.8–16.3, lon 107.9–108.5); Hải Phòng & other regions are validation-only, never enter the fit
 - Stage 1 validity domain: outdoor 5–30 km — predictions inside this domain are validated, predictions at < 2 km have a known +30 dB optimistic bias
+- Stage 2 training scope mirrors Stage 1 (Đà Nẵng bbox, same time-split); residual target = `rssi_measured − rssi_stage1`; 11 features (geometry + DEM + OSM + pass-through device/gateway params); spatial CV uses grid-cell GroupKFold (0.025° cells) to prevent spatial autocorrelation leak
 - Dataset split for ML hygiene: train+val random from Nov–Dec 2025 (88/12), test = Jan–Feb 2026 temporal hold-out — derived in-query, not persisted
+- Stage 2 fail-safe: every Stage 2 failure path (timeout, 503, auth, network) falls back to Stage 1 prediction — Stage 2 never blocks `/coverage/predict`
 - General donations never hit Google APIs
 - `model_version` is part of the S3 key prefix
 - v1 deployment target: Hetzner CPX31 (~$16/mo), Docker Compose, total infra under $100/mo
@@ -134,6 +137,8 @@ Three jobs run on push and PR to `main`:
 ## Documentation
 
 - `services/api-service/README.md` — API service details and test DB setup
+- `services/ml-service-predict/README.md` — Predict-ML pipeline (Stage 2/3) build status and layout
+- `u-work/ml-plan/plan-v1.md` — Predict-ML pipeline plan v1 (deep modules, phases, tradeoffs)
 - `migrations/README.md` — migration conventions
 - `docs/` — architecture notes and ADRs
 - `docs/ml-annguyen/validation-tang1.md` — Stage 1 validation report, validity domain, per-split metrics

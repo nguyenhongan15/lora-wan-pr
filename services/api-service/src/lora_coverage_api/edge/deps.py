@@ -8,6 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, Header
 from sqlalchemy import Engine
 
@@ -24,6 +25,7 @@ from ..application.identity import (
 )
 from ..application.linking import CredentialCipher, LinkingService
 from ..application.path_loss import Stage1LogDistanceModel, resolve_environment_profile
+from ..application.prediction_service import PredictionOrchestrator
 from ..application.repositories import (
     AddressResolution,
     CoverageQuery,
@@ -37,6 +39,7 @@ from ..infrastructure.db import make_engine
 from ..infrastructure.gateway_directory_pg import PgGatewayDirectory
 from ..infrastructure.goong_client import GoongHttpClient
 from ..infrastructure.nominatim_client import NominatimHttpClient
+from ..infrastructure.stage2_client import Stage2Client
 from ..infrastructure.survey_repository_pg import PgSurveyRepository
 from ..infrastructure.vietmap_client import VietmapHttpClient
 
@@ -72,6 +75,46 @@ def coverage_query() -> CoverageQuery:
             model_version=settings.ml_model_version,
             env_profile=resolve_environment_profile(settings.lora_env_profile),
         ),
+    )
+
+
+@lru_cache(maxsize=1)
+def _stage2_http_client() -> httpx.AsyncClient | None:
+    """Shared AsyncClient cho Stage 2. None khi stage2 disabled (base_url rỗng).
+
+    Lifespan = process; FastAPI shutdown sẽ giữ tham chiếu — chấp nhận leak
+    nhỏ vì client là singleton, không có connection rotation logic.
+    """
+    s = _settings()
+    if not s.stage2_predict_base_url:
+        return None
+    return httpx.AsyncClient(timeout=s.stage2_timeout_seconds)
+
+
+@lru_cache(maxsize=1)
+def _stage2_client() -> Stage2Client | None:
+    s = _settings()
+    if not s.stage2_predict_base_url:
+        return None
+    http_client = _stage2_http_client()
+    if http_client is None:
+        return None
+    return Stage2Client(
+        base_url=s.stage2_predict_base_url,
+        bearer_token=s.stage2_auth_token,
+        client=http_client,
+    )
+
+
+def prediction_orchestrator() -> PredictionOrchestrator:
+    """Wired: Stage 1 CoverageQueryService + optional Stage 2 client.
+
+    Stage 2 disabled (base_url empty) → orchestrator dùng Stage 1 only.
+    """
+    return PredictionOrchestrator(
+        query=coverage_query(),
+        directory=gateway_directory(),
+        stage2=_stage2_client(),
     )
 
 

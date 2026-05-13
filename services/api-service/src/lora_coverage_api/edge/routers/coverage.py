@@ -7,13 +7,14 @@ import time
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
 
-from ...application.repositories import AddressResolution, CoverageQuery
+from ...application.prediction_service import PredictionOrchestrator
+from ...application.repositories import AddressResolution
 from ...config import get_settings
 from ...domain.address import Address
 from ...domain.coverage import Target
 from ...domain.errors import AddressLookupErrorCode, PredictionErrorCode
 from ...domain.result import Err
-from ..deps import address_resolution, coverage_query
+from ..deps import address_resolution, prediction_orchestrator
 from ..metrics import LOOKUP_LATENCY_SECONDS, LOOKUP_SLO_VIOLATIONS_TOTAL
 from ..schemas import (
     AddressLookupRequest,
@@ -45,7 +46,7 @@ router = APIRouter(prefix="/api/v1/coverage", tags=["coverage"])
 async def predict(
     payload: PredictRequest,
     request: Request,
-    service: CoverageQuery = Depends(coverage_query),
+    service: PredictionOrchestrator = Depends(prediction_orchestrator),
 ) -> PredictionResponse | JSONResponse:
     target = _build_target(
         latitude=payload.latitude,
@@ -57,7 +58,7 @@ async def predict(
         rx_antenna_gain_dbi=payload.rx_antenna_gain_dbi,
         rx_sensitivity_dbm=payload.rx_sensitivity_dbm,
     )
-    result = service.predict(target)
+    result = await service.predict(target)
 
     if isinstance(result, Err):
         # Map domain error → HTTP status (RFC 7807).
@@ -168,7 +169,7 @@ async def lookup(
     payload: AddressLookupRequest,
     request: Request,
     geocoder: AddressResolution = Depends(address_resolution),
-    service: CoverageQuery = Depends(coverage_query),
+    service: PredictionOrchestrator = Depends(prediction_orchestrator),
 ) -> CoverageLookupResponse | JSONResponse:
     # F2 SLA §8.2: P95 < 3s end-to-end. Đo từ entry endpoint, ghi vào
     # LOOKUP_LATENCY_SECONDS với label provider+outcome để alert được tách.
@@ -209,7 +210,7 @@ async def lookup(
         sf=payload.spreading_factor,
         freq_mhz=payload.frequency_mhz,
     )
-    pred_result = service.predict(target)
+    pred_result = await service.predict(target)
     if isinstance(pred_result, Err):
         status_code = (
             404 if pred_result.error.code == PredictionErrorCode.NO_GATEWAY_NEARBY else 422
@@ -262,7 +263,7 @@ async def lookup(
 async def lookup_batch(
     payload: CoverageBatchRequest,
     geocoder: AddressResolution = Depends(address_resolution),
-    service: CoverageQuery = Depends(coverage_query),
+    service: PredictionOrchestrator = Depends(prediction_orchestrator),
 ) -> CoverageBatchResponse:
     """Mỗi item được xử lý độc lập: 1 item lỗi không làm fail cả batch.
 
@@ -276,7 +277,7 @@ async def lookup_batch(
     err = 0
 
     for item in payload.items:
-        result = _process_batch_item(
+        result = await _process_batch_item(
             item, payload.spreading_factor, payload.frequency_mhz, geocoder, service
         )
         results.append(result)
@@ -288,12 +289,12 @@ async def lookup_batch(
     return CoverageBatchResponse(items=results, ok_count=ok, error_count=err)
 
 
-def _process_batch_item(
+async def _process_batch_item(
     item: CoverageBatchItem,
     sf: int,
     freq_mhz: float,
     geocoder: AddressResolution,
-    service: CoverageQuery,
+    service: PredictionOrchestrator,
 ) -> CoverageBatchItemResult:
     has_coords = item.latitude is not None and item.longitude is not None
     has_addr = bool(item.address and item.address.strip())
@@ -343,7 +344,7 @@ def _process_batch_item(
         sf=sf,
         freq_mhz=freq_mhz,
     )
-    pred_result = service.predict(target)
+    pred_result = await service.predict(target)
     if isinstance(pred_result, Err):
         return CoverageBatchItemResult(
             label=item.label,

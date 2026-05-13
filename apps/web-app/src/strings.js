@@ -245,7 +245,6 @@ export const strings = {
       rssi: "RSSI",
       snr: "SNR",
       confidence: "Confidence",
-      model: "Model",
       recommendedSf: "SF khuyến nghị",
       gateway: "Gateway phục vụ",
     },

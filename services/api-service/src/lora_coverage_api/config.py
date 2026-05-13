@@ -121,6 +121,24 @@ class Settings(BaseSettings):
         description="Goong geocoding API key. Empty = disabled.",
     )
 
+    # ── Stage 2 residual (Predict-ML) ─────────────────────────────────────
+    # base_url rỗng → Stage 2 disabled (Stage1-only response). Khi set + có
+    # active model, mọi /predict + /lookup được refine bằng residual_db.
+    stage2_predict_base_url: str = Field(
+        default="",
+        description="Internal URL tới ml-service-predict (vd http://ml-predict:8001). Rỗng = disabled.",
+    )
+    stage2_auth_token: str = Field(
+        default="",
+        description="Bearer token gửi tới ml-service-predict. Phải khớp LORA_STAGE2_AUTH_TOKEN bên ml-service-predict.",
+    )
+    stage2_timeout_seconds: float = Field(
+        default=0.5,
+        ge=0.05,
+        le=5.0,
+        description="Per-request timeout. Quá thời gian → fallback Stage1.",
+    )
+
     # ── F2 SLO ────────────────────────────────────────────────────────────
     # P95 lookup end-to-end latency (geocode + predict + render). Theo
     # business-logic.md §8.2 — operating-level SLA, không phải target.

@@ -55,13 +55,21 @@ Thumbs.db
 
 # ── Dữ liệu lớn (không commit) ─────────────────
 # DEM tiles: kích thước ~25MB/file, lấy từ NASA SRTM, không cần lưu git
-services/ml-service/data/dem/*.hgt
-services/ml-service/data/dem/*.tif
+services/ml-service-hmap/data/dem/*.hgt
+services/ml-service-hmap/data/dem/*.tif
 
 # ML model artifacts: lưu trên S3/R2, key prefix có model_version
-services/ml-service/models/*.onnx
-services/ml-service/models/*.joblib
-services/ml-service/models/*.pkl
+services/ml-service-hmap/models/*.onnx
+services/ml-service-hmap/models/*.joblib
+services/ml-service-hmap/models/*.pkl
+
+# Stage 2 Predict-ML artifacts (LightGBM booster + meta) — local cache,
+# canonical store là S3/R2 + ml.model_runs registry.
+services/ml-service-predict/artifacts/
+
+# Stage 2 evaluation report output (PNG + summary.txt) — sinh từ
+# `python -m evaluation.generate_report`, có thể tái tạo bất kỳ lúc nào.
+services/ml-service-predict/evaluation/reports/
 
 # Tile cache (worker output)
 services/tile-server/cache/

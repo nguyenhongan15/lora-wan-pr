@@ -1,0 +1,64 @@
+[project]
+name = "lora-ml-predict"
+version = "0.1.0"
+description = "LoRa Coverage Predict-ML service — Stage 2 (LightGBM residual) cho /coverage/predict + /coverage/batch."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Runtime feature pipeline: DEM + urbanization là GeoTIFF, đọc qua rasterio.
+    # rasterio kéo theo numpy + GDAL (binary wheel trên Win/Linux).
+    "rasterio>=1.4,<2.0",
+    # Stage 1 sharing qua uv workspace (Q3, plan §20). Cho phép import
+    # `lora_coverage_api.application.path_loss.Stage1LogDistanceModel`.
+    "lora-coverage-api",
+    # Stage 2 model — CPU only (Q5).
+    "lightgbm>=4.5,<5.0",
+    # Hyperparameter search — TPE sampler, 100 trial budget (Q8).
+    "optuna>=4.0,<5.0",
+    # Training data DataFrame + serialization.
+    "pandas>=2.2,<3.0",
+    "joblib>=1.4,<2.0",
+    # Spatial CV: KMeans K=5 (Q7).
+    "scikit-learn>=1.5,<2.0",
+    # Async Postgres cho training data collection (reuse psycopg như api-service).
+    "psycopg[binary]>=3.2,<4.0",
+    # Stage 2 HTTP serving (Phase 5).
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+    "pydantic>=2.9,<3.0",
+    "pydantic-settings>=2.6,<3.0",
+    "structlog>=24.4,<26.0",
+]
+
+[tool.uv.sources]
+# Workspace dep — uv resolve qua local path khi run trong workspace.
+lora-coverage-api = { workspace = true }
+
+[project.optional-dependencies]
+# Offline build script: OSM PBF → urbanization GeoTIFF. KHÔNG cần ở runtime
+# service. Cài qua `uv pip install -e .[build]` khi precompute.
+build = [
+    # PyPI tên là `osmium` (repo `pyosmium`). Python import: `import osmium`.
+    "osmium>=4.0,<5.0",    # PBF parser, C++ binding, đủ nhanh cho VN dump 1GB
+    "shapely>=2.0,<3.0",   # Building polygon → footprint area
+    "scipy>=1.13,<2.0",    # uniform_filter cho radius-200m smoothing kernel
+]
+# Offline evaluation: sinh biểu đồ chất lượng (scatter/residual/CM/ROC/PR/SHAP).
+# KHÔNG cần ở runtime serving. Cài qua `uv pip install -e .[eval]`.
+eval = [
+    "matplotlib>=3.9,<4.0",
+    "seaborn>=0.13,<1.0",
+    "shap>=0.46,<1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lora_ml_predict"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint]
+allowed-confusables = ["σ", "²", "·", "→", "π"]
