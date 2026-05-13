@@ -2,12 +2,12 @@
 root_packages =
     lora_coverage_api
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Hard invariant: 5-layer architecture trong api-service.
-# domain  ←  application  ←  infrastructure  ←  edge
-# (mũi tên = chiều phụ thuộc cho phép)
-# Vi phạm = build fail trong CI. Không ngoại lệ.
-# ──────────────────────────────────────────────────────────────────────
+# domain  <-  application  <-  infrastructure  <-  edge
+# (mui ten = chieu phu thuoc cho phep)
+# Vi pham = build fail trong CI. Khong ngoai le.
+# ----------------------------------------------------------------------
 
 [importlinter:contract:layers]
 name = api-service 5-layer separation
@@ -36,9 +36,9 @@ forbidden_modules =
     lora_coverage_api.edge
 
 [importlinter:contract:no-leaky-strings]
-# Note: import-linter không grep string. Việc cấm các string
+# Note: import-linter khong grep string. Viec cam cac string
 # ("postgres", "redis", "valkey", "s3", "stage_4", "GiST", "BRIN")
-# trong application/ được enforce qua custom ruff rule + grep CI step
+# trong application/ duoc enforce qua custom ruff rule + grep CI step
 # (xem .github/workflows/ci.yml step "no-leaky-strings").
 name = placeholder for string-leakage check (enforced in CI)
 type = forbidden

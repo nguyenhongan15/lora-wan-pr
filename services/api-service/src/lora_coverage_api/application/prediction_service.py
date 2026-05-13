@@ -24,8 +24,8 @@ import logging
 from ..domain.coverage import Prediction, Target
 from ..domain.errors import PredictionUnavailable
 from ..domain.result import Err, Ok, Result
-from ..infrastructure.stage2_client import Stage2Client
 from .repositories import CoverageQuery, GatewayDirectory
+from .stage2 import Stage2Predictor
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class PredictionOrchestrator:
         self,
         query: CoverageQuery,
         directory: GatewayDirectory,
-        stage2: Stage2Client | None,
+        stage2: Stage2Predictor | None,
     ) -> None:
         self._query = query
         self._directory = directory

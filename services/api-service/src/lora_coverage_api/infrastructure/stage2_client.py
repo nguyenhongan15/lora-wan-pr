@@ -15,21 +15,15 @@ Stateless theo 12F VI: httpx.AsyncClient reused trong process lifetime
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import httpx
 
+from ..application.stage2 import Stage2Result
 from ..domain.coverage import Gateway, Target
 
 log = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True, slots=True)
-class Stage2Result:
-    """Output từ Stage 2 service. None khi service unreachable hoặc no active model."""
-
-    residual_db: float
-    model_version: str
+__all__ = ["Stage2Client", "Stage2Result"]
 
 
 class Stage2Client:
