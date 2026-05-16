@@ -1,5 +1,5 @@
 # tile-server (placeholder)
 
-Vector tile server (PMTiles + tippecanoe pipeline) hoặc raster tile (TileServer GL).
+Vector tile server (pipeline PMTiles + tippecanoe) hoặc raster tile (TileServer GL).
 
-Chưa implement ở v0. v1 sẽ pre-generate static tiles và serve qua Nginx + Cloudflare R2.
+Chưa implement ở v0. Ở v1 sẽ pre-generate static tile và serve qua Nginx + Cloudflare R2.

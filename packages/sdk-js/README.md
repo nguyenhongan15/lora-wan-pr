@@ -1,5 +1,5 @@
 # sdk-js (placeholder)
 
-JS/TS client SDK cho frontend apps & 3rd-party integrators.
+Client SDK JS/TS cho frontend apps & các bên tích hợp thứ ba.
 
 Chưa implement ở v0.

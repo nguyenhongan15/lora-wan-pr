@@ -1,33 +1,33 @@
 # api-service
 
-FastAPI 0.115+ trên Python 3.12 với 5-layer architecture.
+FastAPI 0.115+ trên Python 3.12 với kiến trúc 5 tầng.
 
 ## Layout
 
 ```
 src/lora_coverage_api/
-  domain/           # pure types, không I/O
+  domain/           # type thuần, không I/O
     coverage.py     # Target, Prediction, Confidence, Gateway, CoverageStatus
     errors.py       # PredictionUnavailable, PredictionErrorCode
     result.py       # Result[T, E] = Ok | Err
-  application/      # use cases + repository protocols
-    repositories.py # CoverageQuery, GatewayDirectory protocols
+  application/      # use case + repository protocol
+    repositories.py # Protocol CoverageQuery, GatewayDirectory
     coverage_service.py
-    path_loss.py    # Stage1LogDistanceModel (pure-math)
-  infrastructure/   # concrete repo implementations
+    path_loss.py    # Stage1LogDistanceModel (toán thuần)
+  infrastructure/   # cài đặt repo cụ thể
     db.py           # SQLAlchemy engine factory
     gateway_directory_pg.py
   edge/             # FastAPI router/middleware/serialization
     app.py          # create_app()
     deps.py         # DI wiring (chỗ DUY NHẤT biết tới infra)
     schemas.py      # Pydantic v2 request/response
-    errors.py       # RFC 7807 handlers
+    errors.py       # Handler RFC 7807
     middleware.py   # trace_id + structured log
     routers/
       health.py     # /healthz, /readyz
       coverage.py   # POST /api/v1/coverage/predict
-  config.py         # 12-Factor: env-only Settings
-  main.py           # uvicorn entrypoint
+  config.py         # 12-Factor: Settings chỉ từ env
+  main.py           # entrypoint uvicorn
 ```
 
 ## Chạy local
@@ -35,7 +35,7 @@ src/lora_coverage_api/
 ```bash
 # 1. DB lên
 docker compose up -d db
-# 2. Migrations
+# 2. Migration
 uv sync
 uv run alembic -c ../../migrations/alembic.ini upgrade head
 psql $DATABASE_URL -f ../../migrations/seeds/seed_gateways.sql
@@ -47,27 +47,27 @@ OpenAPI docs: http://localhost:8000/docs
 
 ## Test
 
-Test layout mirror production (theo `core-logic/main-logic/unit-test-guide.md`):
+Layout test phản chiếu production (theo `core-logic/main-logic/unit-test-guide.md`):
 
 ```
 tests/
-  factories.py          # Value-object builders (defaults valid + boring)
-  conftest.py           # Shared fixtures + load_dotenv(.env.test)
-  fakes/                # In-memory implementations cho Protocol
-  domain/               # Invariant tests (pure)
-  application/          # Service tests (fakes, không DB)
-  unit/                 # Pure-math: path_loss, Result type
-  integration/          # Hit DB thật (lora_coverage_test)
+  factories.py          # Builder cho value-object (mặc định hợp lệ + tẻ nhạt)
+  conftest.py           # Fixture dùng chung + load_dotenv(.env.test)
+  fakes/                # Cài đặt in-memory cho Protocol
+  domain/               # Test bất biến (thuần)
+  application/          # Test service (dùng fake, không DB)
+  unit/                 # Toán thuần: path_loss, kiểu Result
+  integration/          # Đụng DB thật (lora_coverage_test)
 ```
 
-### Setup test DB (một lần khi clone repo)
+### Setup DB test (một lần khi clone repo)
 
 DB test dùng user/password RIÊNG (`lora_test_user` / `test_only_no_secrets`)
-tách khỏi DB dev — credential này committed vào `.env.test` an toàn vì
+tách khỏi DB dev — credential này commit vào `.env.test` an toàn vì
 chỉ access được DB test rỗng.
 
 ```bash
-# DB container lên (xem README repo root)
+# DB container lên (xem README ở repo root)
 docker compose up -d db
 
 # Tạo role test + DB test (cần SUPERUSER để CREATE EXTENSION postgis/timescaledb)
@@ -76,26 +76,26 @@ docker exec lora-wan-db psql -U lora_user -d postgres -c \
 docker exec lora-wan-db psql -U lora_user -d postgres -c \
   "CREATE DATABASE lora_coverage_test OWNER lora_test_user;"
 
-# Apply migrations + seed gateways vào DB test
+# Áp dụng migration + seed gateway vào DB test
 DATABASE_URL=postgresql+psycopg://lora_test_user:test_only_no_secrets@localhost:5432/lora_coverage_test \
   uv run alembic -c ../../migrations/alembic.ini upgrade head
 docker exec -i lora-wan-db psql -U lora_test_user -d lora_coverage_test \
   < ../../migrations/seeds/seed_gateways.sql
 ```
 
-### Chạy tests
+### Chạy test
 
 ```bash
 # Toàn bộ — conftest tự load .env.test ở repo root
 uv run pytest
 
 # Subset
-uv run pytest tests/domain tests/application   # nhanh, no I/O
+uv run pytest tests/domain tests/application   # nhanh, không I/O
 uv run pytest tests/integration -v             # cần DB test sẵn sàng
 ```
 
 `.env.test` được commit vào git. Credential `lora_test_user:test_only_no_secrets`
-là local-only và chỉ dùng cho DB test — KHÔNG bao giờ tái sử dụng cho DB
+chỉ dùng local và chỉ dành cho DB test — KHÔNG bao giờ tái sử dụng cho DB
 dev hay staging/production.
 
 ## Bootstrap admin (plan-auth-v1 §3.5)
@@ -104,22 +104,22 @@ dev hay staging/production.
 admin đầu tiên phải set thủ công trong DB sau khi register thường:
 
 ```bash
-# 1. Register user qua API như mọi user khác:
+# 1. Register user qua API như mọi user bình thường:
 curl -X POST http://localhost:8000/api/v1/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"<strong-pw>"}'
 
-# 2. Promote bằng SQL (cần DB role có UPDATE quyền lên auth.users):
+# 2. Promote bằng SQL (cần DB role có quyền UPDATE lên auth.users):
 docker exec lora-wan-db psql -U lora_user -d lora_coverage \
   -c "UPDATE auth.users SET is_admin = true WHERE email = 'admin@example.com';"
 ```
 
-Self-protection: admin KHÔNG thể tự sửa `is_admin`/`disabled` của chính
+Tự bảo vệ: admin KHÔNG thể tự sửa `is_admin`/`disabled` của chính
 mình qua API (`AdminSelfModificationError` 400). Demote/disable admin cuối
-cùng → SQL trực tiếp.
+cùng → thao tác SQL trực tiếp.
 
-## Hard invariants (CI enforced)
+## Bất biến cứng (CI enforce)
 
 - `application/` không import `infrastructure/` (import-linter)
-- `application/` không mention các string `postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN` (CI grep)
-- Mọi `Prediction` có `Confidence` (enforce ở `domain.coverage.Prediction.__post_init__`)
+- `application/` không nhắc các string `postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN` (CI grep)
+- Mọi `Prediction` đều có `Confidence` (enforce ở `domain.coverage.Prediction.__post_init__`)

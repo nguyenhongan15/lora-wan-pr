@@ -1,7 +1,4 @@
 # docs
 
-Architectural Decision Records (ADRs), runbooks, design notes.
+Architectural Decision Records (ADR), runbook, ghi chú thiết kế.
 
-- `core-logic/` — source-of-truth design (immutable)
-- `docs/adr/` — ADRs (sẽ thêm dần)
-- `u-work/` — Claude work notes

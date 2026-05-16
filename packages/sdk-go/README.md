@@ -1,5 +1,5 @@
 # sdk-go (placeholder)
 
-Go SDK (Enterprise/OEM tier).
+SDK Go (cấp Enterprise/OEM).
 
 Chưa implement ở v0.

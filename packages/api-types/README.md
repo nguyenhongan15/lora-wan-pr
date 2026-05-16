@@ -1,6 +1,6 @@
 # api-types
 
-Generated TypeScript types from `openapi.yaml`. Chia sẻ giữa `apps/web-app`, `apps/mobile-app`, `packages/sdk-js`.
+Type TypeScript được sinh từ `openapi.yaml`. Dùng chung giữa `apps/web-app`, `apps/mobile-app`, `packages/sdk-js`.
 
 Sinh code:
 ```bash

@@ -1,152 +1,134 @@
-# LoRa Coverage Mapping Platform
+# Nền tảng bản đồ vùng phủ sóng LoRa
 
-Vietnam-first, donation-funded, AGPL-3.0 platform for LoRa network coverage querying, gateway directory and survey ingestion. Current release ships a Stage 1 + Stage 2 hybrid path-loss predictor: Stage 1 is a pure-math log-distance / Friis baseline (AS923-2 / 923 MHz, suburban exponent n=3.0, shadow fading σ=6.0 dB, reference distance d₀ = 100 m) and Stage 2 is a LightGBM residual model (Huber loss, Optuna 100-trial TPE, grid-based spatial GroupKFold CV) served by `ml-service-predict` over an internal bearer-authed HTTP. Calibration scope is Đà Nẵng-only (9.5k survey records); Stage 1 validity domain is outdoor 5–30 km (RMSE 4–5 dB in-distribution); Stage 2 corrects the <2 km bias and learns shadow-fading residuals (CV RMSE 4.58 dB). Stage 3 SVGP uncertainty quantification is deferred. Scope is intentionally Vietnam-only — multi-region (EU868 / US915 / CN470 / AS923-1/3/4) is deferred.
 
-Version: **0.2.0**
 
-## Quick start (dev)
+## Khởi động nhanh (dev)
 
 ```bash
-cp .env.template .env       # fill in values (first time only)
+cp .env.template .env       # điền giá trị (chỉ lần đầu)
 
-# Backend: db → migrate (one-shot) → api — single command, ordered startup
+# Backend: db → migrate (một lần) → api — một lệnh duy nhất, khởi động theo thứ tự
 docker compose up -d
 
-# Frontend (separate terminal)
+# Frontend (terminal khác)
 npm install
 npm run dev:web
 ```
 
-API runs at `http://localhost:8000` (docs at `/docs`), web at `http://localhost:5173`.
-Tail logs with `docker compose logs -f api-service`.
+API chạy ở `http://localhost:8000` (docs ở `/docs`), web ở `http://localhost:5173`.
+Xem log với `docker compose logs -f api-service`.
 
-## Requirements
+## Yêu cầu
 
 - Docker Desktop (compose v2)
-- Node ≥ 22, npm ≥ 10 — npm workspaces cover `apps/*`, `packages/sdk-js`, `packages/api-types`
-- Python 3.12 + [uv](https://docs.astral.sh/uv/) — uv workspace covers `services/*` and `packages/sdk-python`
+- Node ≥ 22, npm ≥ 10 — npm workspaces bao gồm `apps/*`, `packages/sdk-js`, `packages/api-types`
+- Python 3.12 + [uv](https://docs.astral.sh/uv/) — uv workspace bao gồm `services/*` và `packages/sdk-python`
 
-## Repository layout
+## Cấu trúc repository
 
-Status legend: ✅ implemented · 🟡 skeleton/scaffold · ⏳ placeholder
+Chú thích trạng thái: ✅ đã implement · 🟡 khung/scaffold · ⏳ placeholder
 
 ```
 apps/
   web-app/          ✅ React 19 + Vite + JS ES2024 + JSDoc + Zod + Tailwind 4 + MapLibre GL + TanStack Query
-  mobile-app/       ⏳ React Native + Expo (planned)
-  docs/             ⏳ User-facing docs site (planned)
+  mobile-app/       ⏳ React Native + Expo (dự kiến)
+  docs/             ⏳ Site tài liệu cho người dùng (dự kiến)
 
 services/
-  api-service/         ✅ FastAPI (Python 3.12) — 5-layer architecture, Stage-1 log-distance predictor
-  ml-service-predict/  ✅ Predict-ML (Option C: Physics → LightGBM → SVGP) — Stage 2 LightGBM residual live (Huber, Optuna, spatial GroupKFold), Phase 4+5 done; serves internal /residual called by api-service for /coverage/predict + /coverage/batch
-  ml-service-hmap/     🟡 Map-ML (heatmap, for /map) — skeleton placeholder; owned by future contributor
-  worker-service/      ⏳ Celery + Redis/Valkey (planned)
-  tile-server/         ⏳ Go PMTiles server (planned)
+  api-service/         ✅ FastAPI (Python 3.12) — kiến trúc 5 tầng, bộ dự đoán log-distance Stage 1
+  ml-service-predict/  ✅ Predict-ML:  Physics → LightGBM → SVGP
+  ml-service-hmap/     🟡 Map-ML (heatmap, cho /map) — placeholder 
+  worker-service/      ⏳ Celery + Redis/Valkey (dự kiến)
+  tile-server/         ⏳ Go PMTiles server (dự kiến)
 
 packages/
-  api-types/        ⏳ OpenAPI-generated type defs (not yet generated)
+  api-types/        ⏳ Định nghĩa type sinh từ OpenAPI (chưa generate)
   sdk-python/       ⏳ Python client SDK
   sdk-js/           ⏳ JavaScript client SDK
   sdk-go/           ⏳ Go client SDK
 
-migrations/         ✅ Alembic — 9 versions (PostGIS + TimescaleDB hypertables) + seed_gateways.sql (11 DNIIT + 2 HP gateways)
-ops/                Nginx reverse-proxy template; Docker / Grafana dirs reserved
-docs/               Architecture & ADR docs · ml-annguyen/ Stage 1 validation report
-core-logic/         Design playbooks (system architecture, skill rules, philosophy notes)
+migrations/         ✅ Alembic — 9 version (PostGIS + TimescaleDB hypertable) + seed_gateways.sql (11 gateway DNIIT + 2 HP)
+ops/                Template reverse-proxy Nginx; thư mục Docker / Grafana đã chừa chỗ
+docs/               Tài liệu kiến trúc & ADR 
+core-logic/         Playbook thiết kế (kiến trúc hệ thống, quy tắc skill, ghi chú triết lý)
 scripts/            seed_gateways.py, backfill_rdt.py, fit_path_loss_exponent.sql, validate_stage1_danang.sql
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
-## Architecture
+## Kiến trúc
 
-5-layer strict separation, enforced by `import-linter` (see `.importlinter`):
+Tách 5 tầng nghiêm ngặt, enforce bởi `import-linter` (xem `.importlinter`):
 
 ```
 Client → edge            (FastAPI router/middleware/serialization)
-       → application     (use cases, repository Protocols)
-       → domain          (pure types, no I/O)
-       ↑ infrastructure  (concrete repos: PostGIS, R2, Valkey)
+       → application     (use case, repository Protocol)
+       → domain          (type thuần, không I/O)
+       ↑ infrastructure  (repo cụ thể: PostGIS, R2, Valkey)
 ```
 
-`application/` **must never** import `infrastructure/`. `domain/` must not import any other layer. CI also greps for storage-tier strings (`postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN`) inside `application/` and `domain/` — violations fail the build.
+`application/` **không bao giờ** được import `infrastructure/`. `domain/` không được import bất kỳ tầng nào khác. CI cũng grep tìm chuỗi gắn tầng storage (`postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN`) bên trong `application/` và `domain/` — vi phạm sẽ fail build.
 
-## Data stack
+## Stack dữ liệu
 
-- PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17 in a single image (`timescale/timescaledb-ha:pg17-ts2.17-all`)
-- Survey data lands in `quarantine` hypertables; only validated rows are promoted to `training` hypertables
-- Object storage: Cloudflare R2 (S3-compatible) — `model_version` is part of the key prefix
-- Cache: Valkey is commented out in `docker-compose.yml`; enable only when traffic warrants it
+- PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17 trong một image duy nhất (`timescale/timescaledb-ha:pg17-ts2.17-all`)
+- Dữ liệu khảo sát đi vào hypertable `quarantine`; chỉ row đã validated mới được promote lên hypertable `training`
+- Object storage: Cloudflare R2 (S3-compatible) — `model_version` là một phần của key prefix
+- Cache: Valkey đang bị comment trong `docker-compose.yml`; chỉ bật khi traffic đủ lớn
 
 ## API
 
-OpenAPI 3.1 spec at `openapi.yaml`. Live endpoints:
+OpenAPI 3.1 spec ở `openapi.yaml`. Các endpoint đang live:
 
 - `GET /healthz`, `GET /readyz`
-- `POST /api/v1/coverage/predict` — Stage 1 + Stage 2 hybrid prediction (RSSI/SNR/coverage/confidence/model_version). `model_version` is `stage1-...+stage2-...` when Stage 2 active, plain `stage1-...` on Stage 2 failure (degraded mode)
-- `GET /api/v1/gateways` — gateway directory
-- ChirpStack webhook ingestion
+- `POST /api/v1/coverage/predict` — dự đoán lai ghép Stage 1 + Stage 2 (RSSI/SNR/coverage/confidence/model_version). `model_version` là `stage1-...+stage2-...` khi Stage 2 active, là `stage1-...` trơn khi Stage 2 lỗi (chế độ degraded)
+- `GET /api/v1/gateways` — danh mục gateway
+- Ingestion webhook ChirpStack
 
-Errors follow RFC 7807 (`application/problem+json`). Versioning is URI-path (`/api/v1`).
+Lỗi tuân theo RFC 7807 (`application/problem+json`). Versioning theo URI-path (`/api/v1`).
 
 ## Test
 
-`.env.test` is committed on purpose: the credentials (`lora_test_user:test_only_no_secrets`) only grant access to an empty test database that is fully isolated from dev.
+`.env.test` được commit chủ ý: thông tin đăng nhập (`lora_test_user:test_only_no_secrets`) chỉ cho phép truy cập DB test trống hoàn toàn cách ly khỏi dev.
 
 ```bash
-# One-time test DB setup
-# → see services/api-service/README.md §Setup test DB
+# Setup DB test một lần
+# → xem services/api-service/README.md §Setup test DB
 
-# Run tests
-uv run pytest                                  # full suite
-uv run pytest tests/domain tests/application   # fast, no I/O
-uv run pytest tests/integration -v             # needs test DB
+# Chạy test
+uv run pytest                                  # toàn bộ
+uv run pytest tests/domain tests/application   # nhanh, không I/O
+uv run pytest tests/integration -v             # cần DB test
 ```
 
 ## Lint / type-check
 
 ```bash
-uv run ruff check .              # Python lint
-uv run ruff format --check .     # Python format
-uv run mypy services/api-service/src   # strict type-check (run from repo root)
-uv run lint-imports --config .importlinter   # 5-layer separation
-npm run lint                     # ESLint for web-app
-npm run jsdoc-check              # JSDoc verified via tsc --noEmit
+uv run ruff check .              # lint Python
+uv run ruff format --check .     # format Python
+uv run mypy services/api-service/src   # type-check strict (chạy từ repo root)
+uv run lint-imports --config .importlinter   # tách 5 tầng
+npm run lint                     # ESLint cho web-app
+npm run jsdoc-check              # kiểm tra JSDoc qua tsc --noEmit
 ```
 
 ## CI (.github/workflows/ci.yml)
 
-Three jobs run on push and PR to `main`:
+Ba job chạy trên push và PR vào `main`:
 
-1. **api-service** — ruff lint+format, mypy strict, import-linter, no-leaky-strings grep, alembic upgrade against TimescaleDB service container, seed gateways, pytest
-2. **docker-build** — multi-stage Dockerfile build + smoke-start the container
+1. **api-service** — ruff lint+format, mypy strict, import-linter, grep no-leaky-strings, alembic upgrade trên service container TimescaleDB, seed gateway, pytest
+2. **docker-build** — build Dockerfile multi-stage + smoke-start container
 3. **web-app** — npm install, ESLint, JSDoc check (`tsc --checkJs`), Vite build
 
-## Hard invariants
+## Bất biến cứng
 
-- Every `Prediction` carries a `Confidence` (enforced in `domain.coverage.Prediction.__post_init__`)
-- Every survey upload passes through `quarantine` before entering `training` (two separate hypertables)
-- Stage 1 calibration data is Đà Nẵng-only (bbox lat 15.8–16.3, lon 107.9–108.5); Hải Phòng & other regions are validation-only, never enter the fit
-- Stage 1 validity domain: outdoor 5–30 km — predictions inside this domain are validated, predictions at < 2 km have a known +30 dB optimistic bias
-- Stage 2 training scope mirrors Stage 1 (Đà Nẵng bbox, same time-split); residual target = `rssi_measured − rssi_stage1`; 11 features (geometry + DEM + OSM + pass-through device/gateway params); spatial CV uses grid-cell GroupKFold (0.025° cells) to prevent spatial autocorrelation leak
-- Dataset split for ML hygiene: train+val random from Nov–Dec 2025 (88/12), test = Jan–Feb 2026 temporal hold-out — derived in-query, not persisted
-- Stage 2 fail-safe: every Stage 2 failure path (timeout, 503, auth, network) falls back to Stage 1 prediction — Stage 2 never blocks `/coverage/predict`
-- General donations never hit Google APIs
-- `model_version` is part of the S3 key prefix
-- v1 deployment target: Hetzner CPX31 (~$16/mo), Docker Compose, total infra under $100/mo
+- Mọi `Prediction` đều có `Confidence` (enforce ở `domain.coverage.Prediction.__post_init__`)
+- Mọi survey upload đều đi qua `quarantine` trước khi vào `training` (hai hypertable riêng biệt)
+- Dữ liệu calibration Stage 1 chỉ Đà Nẵng (bbox lat 15.8–16.3, lon 107.9–108.5); Hải Phòng & vùng khác chỉ dùng cho validation, không bao giờ tham gia fit
+- Miền hợp lệ Stage 1: outdoor 5–30 km — dự đoán trong miền này đã được validated, dự đoán < 2 km có bias lạc quan đã biết +30 dB
+- Phạm vi training Stage 2 phản chiếu Stage 1 (Đà Nẵng bbox, cùng time-split); target residual = `rssi_measured − rssi_stage1`; 11 feature (hình học + DEM + OSM + pass-through tham số device/gateway); spatial CV dùng grid-cell GroupKFold (cell 0.025°) để chống rò rỉ do autocorrelation không gian
+- Quy tắc chia dataset cho ML: train+val random từ Nov–Dec 2025 (88/12), test = Jan–Feb 2026 hold-out theo thời gian — derive trong query, không persist
+- Cơ chế fail-safe Stage 2: mọi đường lỗi Stage 2 (timeout, 503, auth, network) đều fallback về dự đoán Stage 1 — Stage 2 không bao giờ chặn `/coverage/predict`
+- Quyên góp chung không bao giờ chạm vào Google API
+- `model_version` là một phần của key prefix S3
+- Mục tiêu triển khai v1: Hetzner CPX31 (~$16/tháng), Docker Compose, tổng infra dưới $100/tháng
 
-## Documentation
-
-- `services/api-service/README.md` — API service details and test DB setup
-- `services/ml-service-predict/README.md` — Predict-ML pipeline (Stage 2/3) build status and layout
-- `u-work/ml-plan/plan-v1.md` — Predict-ML pipeline plan v1 (deep modules, phases, tradeoffs)
-- `migrations/README.md` — migration conventions
-- `docs/` — architecture notes and ADRs
-- `docs/ml-annguyen/validation-tang1.md` — Stage 1 validation report, validity domain, per-split metrics
-- `core-logic/main-logic/` — system architecture, business logic, design philosophy
-- `core-logic/skills/` — REST/CRUD/DB/container/security/logging design rules
-
-## License
-
-AGPL-3.0
-
----

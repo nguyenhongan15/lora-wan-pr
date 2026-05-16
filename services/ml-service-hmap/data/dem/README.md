@@ -1,8 +1,8 @@
-# DEM (Digital Elevation Model) data
+# Dữ liệu DEM (Digital Elevation Model)
 
-SRTM 1 arc-second tiles (~30m resolution) cho khu vực Việt Nam — dùng cho path-loss prediction (terrain profile, line-of-sight, diffraction).
+Tile SRTM 1 arc-second (~30m độ phân giải) cho khu vực Việt Nam — dùng cho dự đoán suy hao đường truyền (terrain profile, line-of-sight, nhiễu xạ).
 
-## Files
+## File
 
 | File | Bbox | Khu vực |
 |------|------|---------|
@@ -30,4 +30,4 @@ with rasterio.open("services/ml-service/data/dem/n16e108.hgt") as src:
 
 ## Mở rộng
 
-Khi cần phủ thêm tỉnh: download tile theo bbox và đặt cùng folder. Đặt tên theo convention SRTM (`n{lat}e{lng}.hgt`).
+Khi cần phủ thêm tỉnh: tải tile theo bbox và đặt cùng folder. Đặt tên theo quy ước SRTM (`n{lat}e{lng}.hgt`).
