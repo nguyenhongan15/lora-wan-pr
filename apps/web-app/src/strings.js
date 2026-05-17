@@ -58,7 +58,18 @@ export const strings = {
       gatewayAntenna: "Antenna",
       gatewayFreq: "Freq",
       searchStatus: "Trạng thái",
-      searchConfidence: "Confidence",
+      // Sai số (1σ ~68% CI) + Độ chính xác (95% CI ~1.96σ) — tính từ σ²
+      // shadow fading của môi trường (urban σ=8, suburban σ=6, rural σ=4).
+      errorMargin: {
+        label: "Sai số",
+        /** @param {number} sigmaDb */
+        value: (sigmaDb) => `±${sigmaDb.toFixed(1)} dB (1σ)`,
+      },
+      accuracy: {
+        label: "Độ chính xác (95%)",
+        /** @param {number} sigmaDb */
+        value: (sigmaDb) => `±${(1.96 * sigmaDb).toFixed(1)} dB`,
+      },
       // Header cho popup ở tab "Dự đoán điểm".
       predictTitle: "Điểm dự đoán",
       /** @param {number} lat @param {number} lng */
@@ -120,6 +131,7 @@ export const strings = {
       label: "SF",
       /** @param {number} sf */
       option: (sf) => `SF${sf}`,
+      auto: "Tự động",
     },
     viewModePicker: {
       title: "Loại bản đồ",

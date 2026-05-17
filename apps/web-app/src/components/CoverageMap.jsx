@@ -61,8 +61,10 @@ function buildSurveyGeoJson(items) {
   };
 }
 
+/** @typedef {number | "auto"} SfValue */
+
 /**
- * @returns {{ lat: number, lng: number, sf: number | null } | null}
+ * @returns {{ lat: number, lng: number, sf: SfValue | null } | null}
  */
 function readUrlState() {
   if (typeof window === "undefined") return null;
@@ -74,16 +76,22 @@ function readUrlState() {
   const lng = Number(lngStr);
   if (!Number.isFinite(lat) || lat < -90 || lat > 90) return null;
   if (!Number.isFinite(lng) || lng < -180 || lng > 180) return null;
-  const sfRaw = Number(p.get("sf"));
-  const sf =
-    Number.isInteger(sfRaw) && sfRaw >= 7 && sfRaw <= 12 ? sfRaw : null;
+  const sfRaw = p.get("sf");
+  /** @type {SfValue | null} */
+  let sf = null;
+  if (sfRaw === "auto") {
+    sf = "auto";
+  } else if (sfRaw != null) {
+    const n = Number(sfRaw);
+    if (Number.isInteger(n) && n >= 7 && n <= 12) sf = n;
+  }
   return { lat, lng, sf };
 }
 
 /**
  * @param {number} lat
  * @param {number} lng
- * @param {number} sf
+ * @param {SfValue} sf
  */
 function writeUrlState(lat, lng, sf) {
   if (typeof window === "undefined") return;
@@ -429,7 +437,7 @@ function appendBidirectionalSection(parent, ul, dl) {
  * @param {HTMLElement} parent
  * @param {number} lat
  * @param {number} lng
- * @param {number} sf
+ * @param {SfValue} sf
  */
 function appendCopyLinkButton(parent, lat, lng, sf) {
   if (typeof window === "undefined") return;
@@ -500,6 +508,7 @@ export function CoverageMap({ mode = "points" }) {
     /** @type {string | null} */ (null),
   );
   const [sf, setSf] = useState(
+    /** @returns {SfValue} */
     () => initialUrlRef.current?.sf ?? DEFAULT_SF,
   );
   // Visualization mode cho tab "points": circle (RSSI) ↔ heatmap (mật độ).
@@ -856,9 +865,9 @@ export function CoverageMap({ mode = "points" }) {
    *    RSSI / SNR / Confidence + link gateway phục vụ.
    * Theo business-logic.md §4.2 — dual-layer rule cho 1 feature phục vụ
    * cả end-user (Layer 1) lẫn kỹ sư P1/P2 (Layer 2).
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number) => HTMLDivElement}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean) => HTMLDivElement}
    */
-  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed) => {
+  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto) => {
     const root = document.createElement("div");
     root.style.cssText = "font:12px/1.4 system-ui;max-width:360px;min-width:320px";
 
@@ -905,7 +914,9 @@ export function CoverageMap({ mode = "points" }) {
       "display:none;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#334155;max-height:55vh;overflow-y:auto";
 
     const rec = prediction.recommended_sf;
-    const sfMismatch = rec !== sfUsed;
+    // Khi user chọn "Tự động": ẩn dòng "SF dùng" và bỏ mismatch hint vì
+    // không có SF input để so sánh.
+    const sfMismatch = !isAuto && rec !== sfUsed;
     const recCellHtml = sfMismatch
       ? `<strong>${t.popup.recommendedSf.value(rec)}</strong> <span style="color:#b45309">${t.popup.sfMismatchHint}</span>`
       : `<strong>${t.popup.recommendedSf.value(rec)}</strong>`;
@@ -913,10 +924,19 @@ export function CoverageMap({ mode = "points" }) {
     // RSSI/SNR tổng đã hiện chi tiết per-direction trong mini-table UL/DL
     // bên dưới — không lặp lại ở đây để tránh trùng abstraction (philosophy
     // ch.7: "each layer provides a different abstraction").
+    const usedSfRow = isAuto
+      ? ""
+      : `<div>${t.popup.usedSf.label}: <strong>${t.popup.usedSf.value(sfUsed)}</strong></div>`;
+    // σ_total = √(epi + ale) — Stage 1 epi=0, ale=σ_shadow² theo env_profile.
+    const sigmaDb = Math.sqrt(
+      prediction.confidence.epistemic_variance_db2 +
+        prediction.confidence.aleatoric_variance_db2,
+    );
     techRows.innerHTML =
-      `<div>${t.popup.usedSf.label}: <strong>${t.popup.usedSf.value(sfUsed)}</strong></div>` +
+      usedSfRow +
       `<div>${t.popup.recommendedSf.label}: ${recCellHtml}</div>` +
-      `<div>${t.popup.searchConfidence}: <strong>${(prediction.confidence.score * 100).toFixed(0)}%</strong> <span style="color:#94a3b8">(${prediction.confidence.method})</span></div>`;
+      `<div>${t.popup.errorMargin.label}: <strong>${t.popup.errorMargin.value(sigmaDb)}</strong></div>` +
+      `<div>${t.popup.accuracy.label}: <strong>${t.popup.accuracy.value(sigmaDb)}</strong></div>`;
     layer2.appendChild(techRows);
 
     // UL/DL table — chỉ render khi BE có trả 2 chiều (backward-compat).
@@ -950,7 +970,7 @@ export function CoverageMap({ mode = "points" }) {
     }
     layer2.appendChild(gwRow);
 
-    appendCopyLinkButton(layer2, lat, lng, sfUsed);
+    appendCopyLinkButton(layer2, lat, lng, isAuto ? "auto" : sfUsed);
 
     root.appendChild(layer2);
 
@@ -970,9 +990,9 @@ export function CoverageMap({ mode = "points" }) {
   /**
    * Pure marker-drawing helper — không phụ thuộc state, chỉ dùng refs.
    * Cho phép gọi từ effect mà không gây stale closure.
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number) => void}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean) => void}
    */
-  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed) => {
+  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto) => {
     const map = mapRef.current;
     if (!map) return;
 
@@ -990,7 +1010,7 @@ export function CoverageMap({ mode = "points" }) {
     const popup = new maplibregl.Popup({
       offset: 16,
       maxWidth: "380px",
-    }).setDOMContent(buildPopupNode(lat, lng, prediction, sfUsed));
+    }).setDOMContent(buildPopupNode(lat, lng, prediction, sfUsed, isAuto));
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat])
@@ -1054,7 +1074,9 @@ export function CoverageMap({ mode = "points" }) {
     const url = initialUrlRef.current;
     if (!url) return;
     let cancelled = false;
-    const sfForUrl = url.sf ?? DEFAULT_SF;
+    const isAuto = url.sf === "auto";
+    /** @type {number} */
+    const sfForUrl = typeof url.sf === "number" ? url.sf : DEFAULT_SF;
     predictCoverage({
       latitude: url.lat,
       longitude: url.lng,
@@ -1063,7 +1085,7 @@ export function CoverageMap({ mode = "points" }) {
     })
       .then((prediction) => {
         if (cancelled) return;
-        drawSearchMarker(url.lat, url.lng, prediction, sfForUrl);
+        drawSearchMarker(url.lat, url.lng, prediction, sfForUrl, isAuto);
       })
       .catch((e) => {
         console.error("Deep-link predict failed:", e);
@@ -1082,14 +1104,18 @@ export function CoverageMap({ mode = "points" }) {
     const { lat, lng } = pickedCoords;
     setPredictBusy(true);
     setPredictError(null);
+    // "Tự động": gửi DEFAULT_SF (max sensitivity) cho BE — recommended_sf
+    // trong response sẽ là SF nên dùng. Popup ẩn dòng "SF dùng".
+    const isAuto = sf === "auto";
+    const sfForApi = isAuto ? DEFAULT_SF : sf;
     try {
       const prediction = await predictCoverage({
         latitude: lat,
         longitude: lng,
-        spreading_factor: sf,
+        spreading_factor: sfForApi,
         frequency_mhz: DEFAULT_FREQ_MHZ,
       });
-      drawSearchMarker(lat, lng, prediction, sf);
+      drawSearchMarker(lat, lng, prediction, sfForApi, isAuto);
       writeUrlState(lat, lng, sf);
     } catch (e) {
       console.error("Predict submit failed:", e);
@@ -1165,9 +1191,13 @@ export function CoverageMap({ mode = "points" }) {
                 <select
                   id="sf-picker"
                   value={sf}
-                  onChange={(e) => setSf(Number(e.target.value))}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSf(v === "auto" ? "auto" : Number(v));
+                  }}
                   className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                 >
+                  <option value="auto">{t.sfPicker.auto}</option>
                   {SF_OPTIONS.map((v) => (
                     <option key={v} value={v}>
                       {t.sfPicker.option(v)}
@@ -1243,7 +1273,7 @@ export function CoverageMap({ mode = "points" }) {
                 </label>
                 <select
                   id="sf-picker"
-                  value={sf}
+                  value={sf === "auto" ? DEFAULT_SF : sf}
                   onChange={(e) => setSf(Number(e.target.value))}
                   className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                 >

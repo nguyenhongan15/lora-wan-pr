@@ -126,6 +126,8 @@ def _to_prediction_response(p: object) -> PredictionResponse:
         confidence=ConfidenceResponse(
             score=p.confidence.score,  # type: ignore[attr-defined]
             method=p.confidence.method.value,  # type: ignore[attr-defined]
+            epistemic_variance_db2=p.confidence.epistemic_variance_db2,  # type: ignore[attr-defined]
+            aleatoric_variance_db2=p.confidence.aleatoric_variance_db2,  # type: ignore[attr-defined]
         ),
         model_version=p.model_version,  # type: ignore[attr-defined]
         recommended_sf=p.recommended_sf,  # type: ignore[attr-defined]

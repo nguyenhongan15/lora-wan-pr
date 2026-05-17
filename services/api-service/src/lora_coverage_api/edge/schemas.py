@@ -33,6 +33,12 @@ class PredictRequest(BaseModel):
 class ConfidenceResponse(BaseModel):
     score: float = Field(..., ge=0, le=1)
     method: Literal["physics", "residual", "ensemble", "bayesian"]
+    # Variance components (dB²). Stage 1 set aleatoric từ shadow fading σ²;
+    # epistemic = 0. Stage 2/3 sẽ điền epistemic từ ensemble/posterior.
+    # Tổng σ = √(epistemic + aleatoric) → FE dùng làm "sai số" (±σ ~ 68% CI,
+    # ±1.96σ ~ 95% CI Gaussian).
+    epistemic_variance_db2: float = Field(default=0.0, ge=0)
+    aleatoric_variance_db2: float = Field(default=0.0, ge=0)
 
 
 class LinkBudgetResponse(BaseModel):

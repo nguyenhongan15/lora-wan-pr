@@ -14,7 +14,11 @@ export const PredictRequest = z.object({
 
 export const Confidence = z.object({
   score: z.number().min(0).max(1),
-  method: z.enum(["empirical", "residual", "ensemble", "bayesian"]),
+  method: z.enum(["physics", "empirical", "residual", "ensemble", "bayesian"]),
+  // σ² components (dB²). Tổng σ = √(epi+ale) là sai số 1σ ~68% CI Gaussian.
+  // Default 0 để gracefully degrade với BE chưa rebuild.
+  epistemic_variance_db2: z.number().nonnegative().default(0),
+  aleatoric_variance_db2: z.number().nonnegative().default(0),
 });
 
 export const LinkBudget = z.object({
