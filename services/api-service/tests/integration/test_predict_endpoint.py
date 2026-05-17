@@ -4,27 +4,64 @@ Yêu cầu DB chạy được + đã apply migrations. Test tự seed 1 gateway 
 Đà Nẵng (code `test-pred-danang`) trong fixture nên không phụ thuộc data
 production sẵn có; cleanup teardown để DB sạch sau khi chạy.
 Dùng FastAPI TestClient.
+
+Backend physics: test override `_itu_backend` thành FakeBackend deterministic
+(free-space + excess) để chạy được trên CI Linux runner — môi trường này không
+có `libcrc-covlib.so` (build trong Dockerfile) và không có DEM tiles thật.
+Scope test này là routing/DB/bidirectional/response shape, không phải physics
+— physics đã có unit test riêng trong tests/unit/test_path_loss.py.
 """
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Generator
+from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from lora_coverage_api.application.itu.backend import LinkGeometry
+from lora_coverage_api.edge import deps
 from lora_coverage_api.edge.app import create_app
 from lora_coverage_api.infrastructure.db import make_engine
 
 _TEST_GATEWAY_CODE = "test-pred-danang"
 
 
+@dataclass(frozen=True, slots=True)
+class _FakeBackend:
+    """PL = free-space + suburban excess (n=3). Mirror tests/unit/test_path_loss.py."""
+
+    model_version: str = "fake-physics-v0"
+    n: float = 3.0
+
+    def basic_transmission_loss_db(self, link: LinkGeometry) -> float:
+        r = 6371.0088
+        p1, p2 = math.radians(link.tx.latitude), math.radians(link.rx.latitude)
+        dp = math.radians(link.rx.latitude - link.tx.latitude)
+        dl = math.radians(link.rx.longitude - link.tx.longitude)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        d_km = max(2 * r * math.asin(math.sqrt(a)), 0.001)
+        free_space = 32.45 + 20 * math.log10(d_km) + 20 * math.log10(link.freq_mhz)
+        excess = 10 * (self.n - 2) * math.log10(d_km / 0.1) if d_km > 0.1 else 0.0
+        return free_space + excess
+
+
 @pytest.fixture(scope="module")
-def client() -> TestClient:
+def client() -> Generator[TestClient, None, None]:
     if "DATABASE_URL" not in os.environ:
         pytest.skip("DATABASE_URL chưa set; skip integration test.")
-    return TestClient(create_app())
+    # Swap real CrcCovlibBackend bằng FakeBackend — coverage_query() lookup
+    # `_itu_backend` qua module namespace tại call time, nên reassignment có hiệu lực.
+    original = deps._itu_backend
+    deps._itu_backend = lambda: _FakeBackend()  # type: ignore[assignment]
+    try:
+        yield TestClient(create_app())
+    finally:
+        deps._itu_backend = original
 
 
 @pytest.fixture(scope="module")
