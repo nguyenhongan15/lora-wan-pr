@@ -92,9 +92,7 @@ def render(bundle: EvalBundle, out_dir: Path) -> None:
     rssi_stage12 = bundle.rssi_pred_test
 
     # 06 — Per distance bucket
-    d_km = np.power(
-        10.0, bundle.test["log10_distance_to_serving_gw_km"].to_numpy(dtype=np.float64)
-    )
+    d_km = np.power(10.0, bundle.test["log10_distance_to_serving_gw_km"].to_numpy(dtype=np.float64))
     buckets = pd.cut(d_km, bins=_DISTANCE_EDGES, labels=_DISTANCE_LABELS, include_lowest=True)
     bucket_arr = np.asarray(buckets)
 

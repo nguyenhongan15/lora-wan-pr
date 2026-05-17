@@ -147,12 +147,10 @@ class CrcCovlibBackend:
         phải thermally-efficient (kính low-E + insulation kiểu hiện đại châu Âu);
         nếu sau này expose tower-mounted IoT → cần extend.
         """
-        from crc_covlib.helper import itur_p2109  # type: ignore[import-untyped]
+        from crc_covlib.helper import itur_p2109
 
         if not 0.0 < probability_percent < 100.0:
-            raise ValueError(
-                f"probability_percent ngoài (0, 100): {probability_percent}"
-            )
+            raise ValueError(f"probability_percent ngoài (0, 100): {probability_percent}")
         bel = itur_p2109.BuildingEntryLoss(
             freq_mhz / 1000.0,
             probability_percent,
