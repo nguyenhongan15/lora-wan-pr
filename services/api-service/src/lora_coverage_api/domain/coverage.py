@@ -28,8 +28,8 @@ class CoverageStatus(StrEnum):
 
 
 class ConfidenceMethod(StrEnum):
-    EMPIRICAL = "empirical"  # Stage 1: log-distance
-    RESIDUAL = "residual"  # Stage 2: empirical + ML residual
+    PHYSICS = "physics"  # Stage 1: ITU-R P.1812 + P.2108 (first-principles)
+    RESIDUAL = "residual"  # Stage 2: Stage1 + ML residual
     ENSEMBLE = "ensemble"  # Stage 3: deep ensemble
     BAYESIAN = "bayesian"  # Stage 4: variational (TRIGGERED)
 

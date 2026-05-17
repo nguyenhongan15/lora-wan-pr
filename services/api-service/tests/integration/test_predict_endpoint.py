@@ -82,7 +82,7 @@ def test_predict_near_danang_gateway(client: TestClient, _seed_danang_gateway: N
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["coverage_status"] in ("strong", "marginal")
-    assert body["confidence"]["method"] == "empirical"
+    assert body["confidence"]["method"] == "physics"
     assert body["model_version"].startswith("stage1-")
     # Bidirectional fields
     assert body["bottleneck"] in ("uplink", "downlink", "both_ok")

@@ -32,7 +32,7 @@ class PredictRequest(BaseModel):
 
 class ConfidenceResponse(BaseModel):
     score: float = Field(..., ge=0, le=1)
-    method: Literal["empirical", "residual", "ensemble", "bayesian"]
+    method: Literal["physics", "residual", "ensemble", "bayesian"]
 
 
 class LinkBudgetResponse(BaseModel):

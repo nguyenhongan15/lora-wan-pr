@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 
-from ..domain.coverage import Prediction, Target
+from ..domain.coverage import Confidence, ConfidenceMethod, Prediction, Target
 from ..domain.errors import PredictionUnavailable
 from ..domain.result import Err, Ok, Result
 from .repositories import CoverageQuery, GatewayDirectory
@@ -79,12 +79,16 @@ class PredictionOrchestrator:
             return result
 
         delta = stage2_out.residual_db
+        refined_confidence = dataclasses.replace(
+            pred.confidence, method=ConfidenceMethod.RESIDUAL
+        ) if isinstance(pred.confidence, Confidence) else pred.confidence
         refined = dataclasses.replace(
             pred,
             rssi_dbm=round(pred.rssi_dbm + delta, 2),
             uplink_rssi_dbm=round(pred.uplink_rssi_dbm + delta, 2),
             downlink_rssi_dbm=round(pred.downlink_rssi_dbm + delta, 2),
             model_version=f"{pred.model_version}+{stage2_out.model_version}",
+            confidence=refined_confidence,
         )
         # NOTE: coverage_status/margins giữ từ Stage 1 — re-classify cần access
         # path_loss._classify (module-private). Phase 7 refactor: expose

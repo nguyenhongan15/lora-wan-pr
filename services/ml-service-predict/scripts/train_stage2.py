@@ -12,7 +12,7 @@ import sys
 from dataclasses import asdict
 
 from lora_ml_predict.config import get_settings
-from lora_ml_predict.training.orchestrator import run_training
+from lora_ml_predict.training.retrain import run_retrain
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging(args.verbose)
 
     settings = get_settings()
-    result = run_training(settings, auto_promote=args.promote)
+    result = run_retrain(settings, auto_promote=args.promote)
 
     summary = asdict(result)
     print(json.dumps(summary, indent=2, default=str))

@@ -1,30 +1,26 @@
-"""Stage 1 recalibration — fit path-loss exponent n + σ trên data hiện tại, emit report.
+"""Stage 1 drift report — bias + σ của (RSSI_measured - RSSI_stage1) trên train.
 
 What:
-  recalibrate(train_df) → Stage1RecalReport (n_obs, sigma_obs, intercept,
-  n_current, delta_n).
+  recalibrate(train_df) → Stage1RecalReport (bias_db, sigma_db, n_samples,
+  recommend_review).
 Hidden:
-  Linear regression rssi_measured ~ a + b * log10(distance_km), với b = -10n.
-  Robust fit: dùng numpy lstsq (least-squares). σ = RMSE residual.
+  Numpy mean/std trên cột residual_db (đã có sẵn từ data.collect()).
 Failure mode:
-  < 30 sample → ValueError (không đủ cho linear fit reliable).
-  All-same distance → singular matrix → ValueError.
+  < 30 sample → ValueError.
 
-Lý do report-only, KHÔNG auto-update Stage 1 config:
-  Stage 1 config được manage manually + version-control hóa. Auto-update sẽ
-  làm "physics baseline" trôi theo data — ngược triết lý "physics làm rào
-  chắn bất biến". Recal output là tín hiệu cho human: nếu Δn > 0.5 hoặc
-  σ > 25 dB, review fit_path_loss_exponent.sql + cân nhắc đổi.
+Lý do report-only, KHÔNG auto-update Stage 1:
+  Stage 1 dùng ITU-R P.1812 (physics first-principles) — không có hyperparameter
+  để "tune" theo data. Bias chỉ phản ánh systematic offset (vd antenna gain
+  config sai, DEM resolution thiếu, P.1812 percent_time chọn sai). Bias > 5 dB
+  hoặc σ > 12 dB là tín hiệu cho ops review, không tự sửa.
 
 Khi nào gọi:
-  Đầu mỗi retrain cycle (monthly cron). Ghi report vào meta.json để track
-  drift theo thời gian.
+  Đầu mỗi retrain cycle. Ghi report vào meta.json để track drift theo thời gian.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -34,121 +30,75 @@ log = logging.getLogger(__name__)
 
 
 _MIN_SAMPLES_FIT = 30
-
-# Cutoff distance khi fit path-loss. Sample d < cutoff bị multipath / near-field
-# distortion (Stage 1 validity domain: outdoor 2-30 km). Smoke run đầu fit trên
-# full data ra n_obs=0.06 (slope ≈ 0) vì DN data tập trung dày đặc < 1 km
-# quanh gateway nên slope dB-vs-log10(d) gần flat. Filter ≥ 0.5 km loại near-
-# field samples → fit phản ánh path-loss thật.
-_DEFAULT_MIN_DISTANCE_KM = 0.5
+_BIAS_REVIEW_THRESHOLD_DB = 5.0
+_SIGMA_REVIEW_THRESHOLD_DB = 12.0
 
 
 @dataclass(frozen=True, slots=True)
 class Stage1RecalReport:
-    """Kết quả fit + so sánh với Stage 1 hiện tại.
+    """Residual drift signal cho Stage 1 ITU-R P.1812.
 
     Trường:
-        n_obs: path-loss exponent fit từ data (≈ 2-4 cho outdoor).
-        sigma_obs: σ của residual sau fit (dB) — gauge shadow fading magnitude.
-        intercept_db: a trong RSSI = a - 10·n·log10(d).
-        n_current: n đang dùng trong Stage 1 EnvironmentalProfile.
-        delta_n: n_obs - n_current. > 0 = data "loss nhanh hơn" model.
-        n_samples: số sample dùng fit (đã lọc d ≥ min_distance_km).
-        min_distance_km: ngưỡng cutoff dùng cho fit.
-        recommend_update: True nếu |delta_n| > 0.5 hoặc sigma_obs > 25.
+        bias_db: mean(residual). > 0 = measured > stage1 (model dự đoán PL quá lớn).
+        sigma_db: std(residual). Gauge shadow fading + lỗi DEM/clutter (idealy ~σ env_profile).
+        n_samples: số sample tham gia fit.
+        bias_review_threshold_db: ngưỡng |bias| để recommend review.
+        sigma_review_threshold_db: ngưỡng σ để recommend review.
+        recommend_review: True nếu |bias_db| > threshold hoặc sigma_db > threshold.
     """
 
-    n_obs: float
-    sigma_obs: float
-    intercept_db: float
-    n_current: float
-    delta_n: float
+    bias_db: float
+    sigma_db: float
     n_samples: int
-    min_distance_km: float
-    recommend_update: bool
+    bias_review_threshold_db: float
+    sigma_review_threshold_db: float
+    recommend_review: bool
 
 
 def recalibrate(
     train_df: pd.DataFrame,
-    n_current: float,
-    distance_col: str = "log10_distance_to_serving_gw_km",
-    rssi_col: str = "rssi_dbm_measured",
-    min_distance_km: float = _DEFAULT_MIN_DISTANCE_KM,
+    residual_col: str = "residual_db",
 ) -> Stage1RecalReport:
-    """Fit log-distance path loss model trên train_df (lọc d ≥ min_distance_km).
-
-    RSSI(d) = a + b · log10(d_km),  với b = -10·n_obs.
+    """Compute bias + σ residual trên train_df.
 
     Args:
-        train_df: training DataFrame (đã filter outdoor + serving GW non-null).
-        n_current: path-loss exponent hiện tại của Stage 1 EnvironmentalProfile.
-        distance_col: tên cột log10(distance km). Default khớp data.py.
-        rssi_col: tên cột RSSI measured (dBm).
-        min_distance_km: cutoff loại near-field samples. Lý do: Stage 1 valid
-            domain là outdoor 2-30 km; gần gateway có multipath + LOS-dominated
-            không tuân log-distance → slope bị flatten.
+        train_df: training DataFrame có cột `residual_col` = measured - stage1.
+        residual_col: tên cột residual.
 
     Returns:
         Stage1RecalReport.
 
     Raises:
-        ValueError: < _MIN_SAMPLES_FIT sample (sau filter) hoặc distance column
-            hằng số (cùng cell).
+        ValueError: < _MIN_SAMPLES_FIT sample finite.
     """
     if len(train_df) < _MIN_SAMPLES_FIT:
         msg = f"Stage 1 recal needs ≥ {_MIN_SAMPLES_FIT} samples; got {len(train_df)}"
         raise ValueError(msg)
 
-    log10_cutoff = math.log10(min_distance_km)
-    x_full = train_df[distance_col].to_numpy(dtype=np.float64)
-    y_full = train_df[rssi_col].to_numpy(dtype=np.float64)
-    mask = np.isfinite(x_full) & np.isfinite(y_full) & (x_full >= log10_cutoff)
-    n_filtered_out = int((~mask).sum())
-    x, y = x_full[mask], y_full[mask]
-    log.info(
-        "Stage1 recal filter: kept %d/%d samples (d ≥ %.2f km dropped %d)",
-        x.size,
-        len(train_df),
-        min_distance_km,
-        n_filtered_out,
-    )
-    if x.size < _MIN_SAMPLES_FIT:
-        msg = (
-            f"After filter d ≥ {min_distance_km} km + non-finite drop: "
-            f"{x.size} < {_MIN_SAMPLES_FIT}"
-        )
-        raise ValueError(msg)
-    if np.std(x) < 1e-9:
-        msg = f"Column {distance_col} is constant → cannot fit slope"
+    residual = train_df[residual_col].to_numpy(dtype=np.float64)
+    mask = np.isfinite(residual)
+    residual = residual[mask]
+    if residual.size < _MIN_SAMPLES_FIT:
+        msg = f"After non-finite drop: {residual.size} < {_MIN_SAMPLES_FIT}"
         raise ValueError(msg)
 
-    # lstsq Ax=b với A = [log10(d), 1] → slope b, intercept a.
-    # Giữ tên A (uppercase) theo convention toán lstsq — design matrix.
-    A = np.column_stack([x, np.ones_like(x)])  # noqa: N806
-    (slope, intercept), *_ = np.linalg.lstsq(A, y, rcond=None)
-    n_obs = float(-slope / 10.0)
-    y_pred = A @ np.array([slope, intercept])
-    sigma_obs = float(np.sqrt(np.mean((y - y_pred) ** 2)))
-    delta_n = n_obs - n_current
-    recommend = (abs(delta_n) > 0.5) or (sigma_obs > 25.0)
+    bias = float(np.mean(residual))
+    sigma = float(np.std(residual, ddof=1))
+    recommend = (abs(bias) > _BIAS_REVIEW_THRESHOLD_DB) or (sigma > _SIGMA_REVIEW_THRESHOLD_DB)
 
     report = Stage1RecalReport(
-        n_obs=n_obs,
-        sigma_obs=sigma_obs,
-        intercept_db=float(intercept),
-        n_current=float(n_current),
-        delta_n=delta_n,
-        n_samples=int(x.size),
-        min_distance_km=float(min_distance_km),
-        recommend_update=bool(recommend),
+        bias_db=bias,
+        sigma_db=sigma,
+        n_samples=int(residual.size),
+        bias_review_threshold_db=_BIAS_REVIEW_THRESHOLD_DB,
+        sigma_review_threshold_db=_SIGMA_REVIEW_THRESHOLD_DB,
+        recommend_review=bool(recommend),
     )
     log.info(
-        "Stage1 recal: n_obs=%.3f (current=%.3f, Δ=%+.3f), σ=%.2f dB, n=%d, recommend=%s",
-        report.n_obs,
-        report.n_current,
-        report.delta_n,
-        report.sigma_obs,
+        "Stage1 recal (ITU): bias=%+.2f dB, σ=%.2f dB, n=%d, recommend_review=%s",
+        report.bias_db,
+        report.sigma_db,
         report.n_samples,
-        report.recommend_update,
+        report.recommend_review,
     )
     return report

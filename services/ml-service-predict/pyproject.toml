@@ -8,8 +8,11 @@ dependencies = [
     # rasterio kéo theo numpy + GDAL (binary wheel trên Win/Linux).
     "rasterio>=1.4,<2.0",
     # Stage 1 sharing qua uv workspace (Q3, plan §20). Cho phép import
-    # `lora_coverage_api.application.path_loss.Stage1LogDistanceModel`.
+    # `lora_coverage_api.application.itu.model.Stage1ItuModel` + backend.
     "lora-coverage-api",
+    # Stage 1 ITU-R P.1812 + P.2108 backend — cùng lib với api-service.
+    # Source: vendored wheel ở `vendor/` (xem [tool.uv.sources] bên dưới).
+    "crc-covlib==4.6.2",
     # Stage 2 model — CPU only (Q5).
     "lightgbm>=4.5,<5.0",
     # Hyperparameter search — TPE sampler, 100 trial budget (Q8).
@@ -32,6 +35,8 @@ dependencies = [
 [tool.uv.sources]
 # Workspace dep — uv resolve qua local path khi run trong workspace.
 lora-coverage-api = { workspace = true }
+# crc-covlib không có trên PyPI — vendor wheel ở repo root.
+crc-covlib = { path = "../../vendor/crc_covlib-4.6.2-py3-none-any.whl" }
 
 [project.optional-dependencies]
 # Offline build script: OSM PBF → urbanization GeoTIFF. KHÔNG cần ở runtime

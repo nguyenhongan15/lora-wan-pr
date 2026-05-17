@@ -99,7 +99,7 @@ def make_prediction(
     coverage_status: CoverageStatus = CoverageStatus.STRONG,
     serving_gateway_id: GatewayId | None = None,
     confidence_score: float = 0.85,
-    confidence_method: ConfidenceMethod = ConfidenceMethod.EMPIRICAL,
+    confidence_method: ConfidenceMethod = ConfidenceMethod.PHYSICS,
     model_version: str = "stage1-test-v0",
     recommended_sf: int = 7,
     uplink_rssi_dbm: float | None = None,

@@ -64,14 +64,37 @@ class Settings(BaseSettings):
     def linking_fernet_keys_list(self) -> list[bytes]:
         return [k.strip().encode("ascii") for k in self.linking_fernet_keys.split(",") if k.strip()]
 
-    ml_model_version: str = Field(default="stage1-loglike-v0.1.0")
+    ml_model_version: str = Field(default="stage1-itu-p1812-v0.1.0")
 
     # ── Stage 1 path-loss profile (12F III) ──────────────────────────────
     # One of: urban | suburban | rural. Allowlist enforce ở boundary
     # `resolve_environment_profile()` (application/path_loss.py).
+    # Lưu ý: ITU-R P.1812 KHÔNG dùng exponent — profile giờ chỉ giữ shadow
+    # fading σ cho Confidence.aleatoric_variance_db2.
     lora_env_profile: str = Field(
         default="suburban",
         description="Path loss environment profile: urban|suburban|rural.",
+    )
+
+    # ── Stage 1 ITU-R P.1812 + P.2108 backend (crc-covlib) ───────────────
+    # dem_directory: path tới folder chứa Copernicus GLO-30 GeoTIFF tiles.
+    # Bắt buộc — không default vì layout deployment khác nhau
+    # (dev local: E:/DATN/lora-data/dem; container: /var/lib/lora/dem).
+    lora_dem_directory: str = Field(
+        ...,
+        description="Folder chứa DEM GeoTIFF tiles cho ITU-R P.1812 (Copernicus GLO-30).",
+    )
+    lora_itu_percent_time: float = Field(
+        default=50.0,
+        gt=0.0,
+        le=100.0,
+        description="P.1812 percent_time (1..100). 50 = median, 95 = worst-case design.",
+    )
+    lora_itu_percent_location: float = Field(
+        default=50.0,
+        gt=0.0,
+        le=100.0,
+        description="P.1812/P.2108 percent_location. Đối xứng cho cả 2 model.",
     )
 
     # ── Bidirectional link budget device defaults (Stage 1 v0) ───────────

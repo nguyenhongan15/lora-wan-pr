@@ -19,6 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         curl \
         ca-certificates \
+        cmake \
+        libtiff-dev \
+        libgeotiff-dev \
+        libgeographiclib-dev \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (single binary, resolve workspace).
@@ -36,6 +41,8 @@ COPY services/ml-service-predict/scripts /build/services/ml-service-predict/scri
 COPY services/ml-service-hmap/pyproject.toml /build/services/ml-service-hmap/pyproject.toml
 COPY services/worker-service/pyproject.toml /build/services/worker-service/pyproject.toml
 COPY packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.toml
+# Vendored crc-covlib wheel (tool.uv.sources trỏ vào ../../vendor/...).
+COPY vendor /build/vendor
 
 # uv sync ml-service-predict + workspace dep lora-coverage-api. --no-editable để
 # workspace member install ra site-packages (không phải .pth → source dir), tránh
@@ -43,6 +50,15 @@ COPY packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.tom
 ENV UV_LINK_MODE=copy
 RUN uv sync --package lora-ml-predict --no-dev --frozen --no-editable \
     && cp -r .venv /install
+
+# Build libcrc-covlib.so từ source (vendored wheel py3-none-any chỉ chứa .dll
+# Windows). Inject vào site-packages/crc_covlib/bin_64bit/ để ctypes loader
+# tìm thấy trên Linux. Xem comment chi tiết ở services/api-service/Dockerfile.
+RUN git clone --depth 1 https://github.com/ic-crc/crc-covlib.git /tmp/crc-covlib \
+    && make -C /tmp/crc-covlib rebuild \
+    && cp /tmp/crc-covlib/build/release/libcrc-covlib.so \
+          /install/lib/python3.12/site-packages/crc_covlib/bin_64bit/libcrc-covlib.so \
+    && rm -rf /tmp/crc-covlib
 
 # ---- Runtime stage ----
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
@@ -56,6 +72,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libgomp1 \
         libexpat1 \
+        libtiff6 \
+        libgeotiff5 \
+        libgeographiclib23 \
         tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 app \

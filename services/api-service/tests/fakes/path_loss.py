@@ -1,8 +1,8 @@
 """Predictable PathLossModel fake.
 
-Stage1 thật là phép log-distance — tốt cho test path_loss riêng nhưng
-khi test CoverageQueryService ta cần kiểm soát "gateway nào là best".
-Fake này map gateway_id → rssi_dbm cố định, không phụ thuộc geometry.
+Stage1 thật là ITU-R P.1812 + P.2108 (cần DEM + crc-covlib) — không phù hợp
+cho unit test CoverageQueryService. Fake này map gateway_id → rssi_dbm cố định,
+không phụ thuộc geometry, không cần backend.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class FakePathLossModel:
             snr_db=snr,
             coverage_status=status,
             serving_gateway_id=gateway.id,
-            confidence=Confidence(score=0.5, method=ConfidenceMethod.EMPIRICAL),
+            confidence=Confidence(score=0.5, method=ConfidenceMethod.PHYSICS),
             model_version=self.model_version,
             recommended_sf=target.spreading_factor,
             uplink_rssi_dbm=rssi,

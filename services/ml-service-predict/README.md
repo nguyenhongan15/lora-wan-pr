@@ -5,7 +5,7 @@ Service Predict-ML cho LoRa Coverage — phục vụ **truy vấn điểm** + **
 ## Kiến trúc 
 
 ```
-Stage 1 (vật lý, log-distance)     
+Stage 1 (vật lý, ITU-R P.1812 + P.2108)     
    │
    ▼
 Stage 2 (LightGBM residual)       
@@ -108,7 +108,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/coverage/predict \
   -d '{"latitude": 16.06, "longitude": 108.25, "spreading_factor": 10, "frequency_mhz": 923.0}'
 ```
 
-`model_version` trong response phải là `stage1-loglike-v0.1.0+stage2-<timestamp>` khi Stage 2 còn active. `stage1-...` trơn nghĩa là api-service đã fallback (timeout / 503 / network).
+`model_version` trong response phải là `stage1-itu-p1812-v0.1.0+stage2-<timestamp>` khi Stage 2 còn active. `stage1-...` trơn nghĩa là api-service đã fallback (timeout / 503 / network).
 
 ## FeatureVector — 11 cột (Phase 3+)
 

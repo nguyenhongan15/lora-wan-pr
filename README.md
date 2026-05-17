@@ -35,7 +35,7 @@ apps/
   docs/             ⏳ Site tài liệu cho người dùng (dự kiến)
 
 services/
-  api-service/         ✅ FastAPI (Python 3.12) — kiến trúc 5 tầng, bộ dự đoán log-distance Stage 1
+  api-service/         ✅ FastAPI (Python 3.12) — kiến trúc 5 tầng, bộ dự đoán ITU-R P.1812 + P.2108 Stage 1
   ml-service-predict/  ✅ Predict-ML:  Physics → LightGBM → SVGP
   ml-service-hmap/     🟡 Map-ML (heatmap, cho /map) — placeholder 
   worker-service/      ⏳ Celery + Redis/Valkey (dự kiến)
@@ -51,7 +51,7 @@ migrations/         ✅ Alembic — 9 version (PostGIS + TimescaleDB hypertable)
 ops/                Template reverse-proxy Nginx; thư mục Docker / Grafana đã chừa chỗ
 docs/               Tài liệu kiến trúc & ADR 
 core-logic/         Playbook thiết kế (kiến trúc hệ thống, quy tắc skill, ghi chú triết lý)
-scripts/            seed_gateways.py, backfill_rdt.py, fit_path_loss_exponent.sql, validate_stage1_danang.sql
+scripts/            seed_gateways.py, backfill_rdt.py, validate_stage1_itu.py
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
@@ -119,16 +119,4 @@ Ba job chạy trên push và PR vào `main`:
 2. **docker-build** — build Dockerfile multi-stage + smoke-start container
 3. **web-app** — npm install, ESLint, JSDoc check (`tsc --checkJs`), Vite build
 
-## Bất biến cứng
-
-- Mọi `Prediction` đều có `Confidence` (enforce ở `domain.coverage.Prediction.__post_init__`)
-- Mọi survey upload đều đi qua `quarantine` trước khi vào `training` (hai hypertable riêng biệt)
-- Dữ liệu calibration Stage 1 chỉ Đà Nẵng (bbox lat 15.8–16.3, lon 107.9–108.5); Hải Phòng & vùng khác chỉ dùng cho validation, không bao giờ tham gia fit
-- Miền hợp lệ Stage 1: outdoor 5–30 km — dự đoán trong miền này đã được validated, dự đoán < 2 km có bias lạc quan đã biết +30 dB
-- Phạm vi training Stage 2 phản chiếu Stage 1 (Đà Nẵng bbox, cùng time-split); target residual = `rssi_measured − rssi_stage1`; 11 feature (hình học + DEM + OSM + pass-through tham số device/gateway); spatial CV dùng grid-cell GroupKFold (cell 0.025°) để chống rò rỉ do autocorrelation không gian
-- Quy tắc chia dataset cho ML: train+val random từ Nov–Dec 2025 (88/12), test = Jan–Feb 2026 hold-out theo thời gian — derive trong query, không persist
-- Cơ chế fail-safe Stage 2: mọi đường lỗi Stage 2 (timeout, 503, auth, network) đều fallback về dự đoán Stage 1 — Stage 2 không bao giờ chặn `/coverage/predict`
-- Quyên góp chung không bao giờ chạm vào Google API
-- `model_version` là một phần của key prefix S3
-- Mục tiêu triển khai v1: Hetzner CPX31 (~$16/tháng), Docker Compose, tổng infra dưới $100/tháng
 

@@ -30,7 +30,6 @@ from typing import Any
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from lora_coverage_api.application.path_loss import resolve_environment_profile
 
 from ..config import Settings
 from . import registry_writer
@@ -253,11 +252,8 @@ def run_retrain(settings: Settings, auto_promote: bool = False) -> RetrainResult
         raise RuntimeError(msg)
 
     # 3. Stage 1 recal report (signal-only, không tự đổi config).
-    env_profile = resolve_environment_profile(settings.env_profile)
-    recal_report = recalibrate(
-        train_val_df,
-        n_current=float(env_profile.path_loss_exponent),
-    )
+    #    ITU model không có exponent → recal trả bias + σ residual.
+    recal_report = recalibrate(train_val_df)
 
     # 4. Feature bounds cho OODDetector (chỉ trên train).
     feature_bounds = compute_feature_bounds(
@@ -371,14 +367,12 @@ def run_retrain(settings: Settings, auto_promote: bool = False) -> RetrainResult
             "rssi_max_dbm": RSSI_MAX_DBM,
         },
         "stage1_recal": {
-            "n_obs": recal_report.n_obs,
-            "sigma_obs": recal_report.sigma_obs,
-            "intercept_db": recal_report.intercept_db,
-            "n_current": recal_report.n_current,
-            "delta_n": recal_report.delta_n,
+            "bias_db": recal_report.bias_db,
+            "sigma_db": recal_report.sigma_db,
             "n_samples": recal_report.n_samples,
-            "min_distance_km": recal_report.min_distance_km,
-            "recommend_update": recal_report.recommend_update,
+            "bias_review_threshold_db": recal_report.bias_review_threshold_db,
+            "sigma_review_threshold_db": recal_report.sigma_review_threshold_db,
+            "recommend_review": recal_report.recommend_review,
         },
         "drift_psi_vs_prev": drift_psi,
         "reference_distribution": _reference_distribution(
@@ -399,7 +393,8 @@ def run_retrain(settings: Settings, auto_promote: bool = False) -> RetrainResult
         hyperparams=study.best_params,
         notes=(
             f"v2 spatial split; optuna {settings.optuna_trials} trials; "
-            f"K={settings.spatial_kfold}; recal Δn={recal_report.delta_n:+.3f}"
+            f"K={settings.spatial_kfold}; "
+            f"recal bias={recal_report.bias_db:+.2f}dB σ={recal_report.sigma_db:.2f}dB"
         ),
     )
 
@@ -459,7 +454,9 @@ def main() -> int:
                 "test_rmse": result.test_rmse,
                 "test_rmse_guardrail": result.test_rmse_guardrail,
                 "n_guardrail_violations": result.n_guardrail_violations,
-                "stage1_recal_delta_n": result.stage1_recal.delta_n,
+                "stage1_recal_bias_db": result.stage1_recal.bias_db,
+                "stage1_recal_sigma_db": result.stage1_recal.sigma_db,
+                "stage1_recal_recommend_review": result.stage1_recal.recommend_review,
                 "drift_psi": result.drift_psi,
                 "artifact_uri": result.artifact_uri,
             },

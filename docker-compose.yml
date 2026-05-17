@@ -29,10 +29,11 @@ services:
 
   migrate:
     # Dùng lại image của api-service (đã có alembic + deps). Mount thư mục
-    # migrations từ host vì image runtime không copy nó vào.
+    # migrations từ host vì image runtime không copy nó vào. Context = repo
+    # root vì Dockerfile cần workspace pyproject + vendor/crc_covlib wheel.
     build:
-      context: ./services/api-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/api-service/Dockerfile
     container_name: lora-wan-migrate
     depends_on:
       db:
@@ -43,13 +44,17 @@ services:
       - ./migrations:/app/migrations:ro
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
-    command: ["alembic", "-c", "migrations/alembic.ini", "upgrade", "head"]
+    # `python -m alembic` thay vì `alembic` vì shebang của /install/bin/alembic
+    # trỏ tới /build/.venv/bin/python (builder venv, không tồn tại ở runtime).
+    command: ["python", "-m", "alembic", "-c", "migrations/alembic.ini", "upgrade", "head"]
     restart: "no"
 
   api-service:
+    # Context = repo root vì Dockerfile cần workspace pyproject + sdk-python +
+    # vendor/crc_covlib wheel (tool.uv.sources trỏ vào ../../vendor/...).
     build:
-      context: ./services/api-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/api-service/Dockerfile
     container_name: lora-wan-api
     restart: unless-stopped
     depends_on:
@@ -62,8 +67,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
-      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-loglike-v0.1.0}
+      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-itu-p1812-v0.1.0}
       LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
+      # Stage 1 ITU-R P.1812 + P.2108 backend
+      LORA_DEM_DIRECTORY: /data/dem
+      LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
+      LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       JWT_SECRET: ${JWT_SECRET}
       JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
       LINKING_FERNET_KEYS: ${LINKING_FERNET_KEYS}
@@ -73,6 +82,9 @@ services:
       STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-http://ml-service-predict:8001}
       STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
       STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
+    volumes:
+      # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
+      - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
     ports:
       - "8000:8000"
     healthcheck:
@@ -100,6 +112,9 @@ services:
       LORA_DB_URL: postgresql://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
       LORA_DEM_PATH: /data/dem/copernicus_glo30_danang.tif
       LORA_DEM_PATH_NORTH_VN: /data/dem/copernicus_glo30_north_vn.tif
+      LORA_DEM_DIRECTORY: /data/dem
+      LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
+      LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       LORA_URBANIZATION_PATH: /data/osm/urbanization_vn.tif
       LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
       LORA_STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}

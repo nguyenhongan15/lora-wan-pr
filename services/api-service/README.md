@@ -13,10 +13,12 @@ src/lora_coverage_api/
   application/      # use case + repository protocol
     repositories.py # Protocol CoverageQuery, GatewayDirectory
     coverage_service.py
-    path_loss.py    # Stage1LogDistanceModel (toán thuần)
+    path_loss.py    # link-budget helpers + PathLossModel Protocol
+    itu/            # Stage1ItuModel + Stage1PhysicsBackend Protocol (ITU-R P.1812 + P.2108)
   infrastructure/   # cài đặt repo cụ thể
     db.py           # SQLAlchemy engine factory
     gateway_directory_pg.py
+    itu/            # CrcCovlibBackend (crc-covlib MIT, C++ qua DEM GeoTIFF)
   edge/             # FastAPI router/middleware/serialization
     app.py          # create_app()
     deps.py         # DI wiring (chỗ DUY NHẤT biết tới infra)

@@ -1,0 +1,155 @@
+"""Stage 1: path-loss qua ITU-R P.1812 + P.2108 (qua backend Protocol).
+
+Class Stage1ItuModel implement `PathLossModel` Protocol. Caller
+(CoverageQueryService, Stage 2 orchestrator) chỉ thấy interface chung.
+
+Deep module (Ousterhout Ch 4): interface 1 method `predict(target, gateway)`;
+behind có DEM sampling, terrain diffraction, clutter loss, link-budget UL/DL,
+SF recommendation, bottleneck resolution. Tất cả ẩn.
+
+Lý do Stage 1 *vẫn* sống ở application layer (không phải infra) dù gọi DEM:
+DEM I/O đã ẩn sau `Stage1PhysicsBackend` Protocol — application chỉ thấy
+"cho geometry → trả dB". I/O thật nằm trong `infrastructure/itu/`.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from ...domain.coverage import (
+    Confidence,
+    ConfidenceMethod,
+    Gateway,
+    Prediction,
+    Target,
+)
+from ..path_loss import (
+    DEVICE_SENSITIVITY_DBM_125KHZ,
+    GW_SENSITIVITY_DBM_125KHZ,
+    SUBURBAN_PROFILE,
+    EnvironmentProfile,
+    compute_link_budget,
+    recommend_sf,
+    resolve_bottleneck,
+    resolve_gateway_rx_gain,
+    resolve_sensitivity,
+    status_worse_of,
+)
+from .backend import GeoPoint, LinkGeometry, Stage1PhysicsBackend
+
+# Anten device mặc định (m AGL). 1.5 m = device cầm tay / gắn xe / mote
+# ground-level — assumption chuẩn của P.2108 (low terminal in clutter).
+# Override qua Settings nếu deploy domain khác (vd sensor trên mái).
+_DEFAULT_DEVICE_ANTENNA_HEIGHT_M = 1.5
+
+
+@dataclass(frozen=True, slots=True)
+class Stage1ItuModel:
+    """Stage 1 path loss qua ITU-R P.1812 + P.2108 (basic transmission loss
+    qua backend) cộng link-budget UL/DL bidirectional.
+
+    What:
+      - predict(target, gateway) → Prediction (same shape as PathLossModel).
+        UL = device→gateway, DL = gateway→device. coverage_status = worst-of.
+    Hidden:
+      - Backend trả 1 con số PL (đã gộp P.1812 + P.2108 clutter).
+      - antenna height device = 1.5 m AGL (config override).
+      - sigma cho Confidence.aleatoric lấy từ env_profile.shadow_fading_std_db.
+    Failure mode:
+      - SF invalid raise tại Target boundary, không lọt vào đây.
+      - DEM coverage thiếu → backend raise, bubble lên HTTP 5xx (ops bug).
+
+    Frozen dataclass: model không thay đổi sau construction; share-thread an toàn.
+    """
+
+    model_version: str
+    backend: Stage1PhysicsBackend
+    env_profile: EnvironmentProfile = SUBURBAN_PROFILE
+    device_antenna_height_m: float = _DEFAULT_DEVICE_ANTENNA_HEIGHT_M
+
+    def predict(self, target: Target, gateway: Gateway) -> Prediction:
+        sf = target.spreading_factor
+
+        link = LinkGeometry(
+            tx=GeoPoint(gateway.latitude, gateway.longitude),
+            rx=GeoPoint(target.latitude, target.longitude),
+            tx_antenna_height_m=gateway.antenna_height_m,
+            rx_antenna_height_m=self.device_antenna_height_m,
+            freq_mhz=target.frequency_mhz,
+        )
+        pl_db = self.backend.basic_transmission_loss_db(link)
+
+        d_km = _haversine_km(
+            target.latitude, target.longitude, gateway.latitude, gateway.longitude
+        )
+
+        gw_rx_gain = resolve_gateway_rx_gain(gateway)
+        gw_sens = resolve_sensitivity(gateway.rx_sensitivity_dbm, GW_SENSITIVITY_DBM_125KHZ, sf)
+        dev_sens = resolve_sensitivity(
+            target.rx_sensitivity_dbm, DEVICE_SENSITIVITY_DBM_125KHZ, sf
+        )
+
+        ul = compute_link_budget(
+            direction="uplink",
+            pl_db=pl_db,
+            tx_power_dbm=target.tx_power_dbm,
+            tx_gain_dbi=target.tx_antenna_gain_dbi,
+            rx_gain_dbi=gw_rx_gain,
+            rx_sensitivity_dbm=gw_sens,
+            sf=sf,
+        )
+        dl = compute_link_budget(
+            direction="downlink",
+            pl_db=pl_db,
+            tx_power_dbm=gateway.tx_power_dbm,
+            tx_gain_dbi=gateway.antenna_gain_dbi,
+            rx_gain_dbi=target.rx_antenna_gain_dbi,
+            rx_sensitivity_dbm=dev_sens,
+            sf=sf,
+        )
+
+        coverage_status = status_worse_of(ul.status, dl.status)
+        bottleneck = resolve_bottleneck(ul, dl)
+        worst_snr = ul.snr_db if ul.margin_db <= dl.margin_db else dl.snr_db
+
+        # Confidence heuristic 1 / (1 + d/30) — distance lớn vẫn giảm confidence
+        # nhưng chậm (P.1812 fit terrain, suy biến chậm theo khoảng cách). Tuned
+        # lỏng cho v0.
+        score = max(0.1, 1.0 / (1.0 + d_km / 30.0))
+        sigma = self.env_profile.shadow_fading_std_db
+
+        return Prediction(
+            rssi_dbm=round(dl.rssi_dbm, 2),
+            snr_db=round(dl.snr_db, 2),
+            coverage_status=coverage_status,
+            serving_gateway_id=gateway.id,
+            confidence=Confidence(
+                score=round(score, 3),
+                method=ConfidenceMethod.PHYSICS,
+                epistemic_variance_db2=0.0,
+                aleatoric_variance_db2=sigma * sigma,
+            ),
+            model_version=self.model_version,
+            recommended_sf=recommend_sf(worst_snr),
+            uplink_rssi_dbm=round(ul.rssi_dbm, 2),
+            uplink_snr_db=round(ul.snr_db, 2),
+            uplink_margin_db=round(ul.margin_db, 2),
+            uplink_status=ul.status,
+            downlink_rssi_dbm=round(dl.rssi_dbm, 2),
+            downlink_snr_db=round(dl.snr_db, 2),
+            downlink_margin_db=round(dl.margin_db, 2),
+            downlink_status=dl.status,
+            bottleneck=bottleneck,
+        )
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Khoảng cách great-circle (km). Chỉ dùng cho Confidence score, không
+    cho path-loss (backend tự lo)."""
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))

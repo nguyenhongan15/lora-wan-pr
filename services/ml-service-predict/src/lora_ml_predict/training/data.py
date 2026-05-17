@@ -7,7 +7,7 @@ Plan v1 §4.1. Áp dụng quyết định Q6:
 
 Pipeline:
   1. SQL query → rows (timestamp, lat, lon, rssi, snr, sf, serving_gw, gw cols).
-  2. Stage1LogDistanceModel.predict() → rssi_stage1 → residual = measured - stage1.
+  2. Stage1ItuModel.predict() (ITU-R P.1812 + P.2108) → rssi_stage1 → residual = measured - stage1.
   3. FeaturePipeline.extract() → 7 feature columns.
   4. Trả DataFrame: 7 feature cols + residual + (lat, lon) + split label.
 
@@ -23,11 +23,10 @@ from datetime import date
 
 import pandas as pd
 import psycopg
-from lora_coverage_api.application.path_loss import (
-    Stage1LogDistanceModel,
-    resolve_environment_profile,
-)
+from lora_coverage_api.application.itu.model import Stage1ItuModel
+from lora_coverage_api.application.path_loss import resolve_environment_profile
 from lora_coverage_api.domain.coverage import Gateway, GatewayId, Target
+from lora_coverage_api.infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
 
 from ..config import Settings
 from ..features.dem import DemLookup
@@ -184,7 +183,7 @@ def _row_to_target_gateway(row: pd.Series) -> tuple[Target, Gateway]:
     """Build duck-typed Target + Gateway từ 1 survey row.
 
     Default device tx_power/gain: dùng AS923-2 cap 14 dBm + 2 dBi whip
-    (theo project_fit_script_assumptions memory — same as fit_path_loss_exponent.sql).
+    (theo project_fit_script_assumptions memory). Khớp Target dataclass default.
     """
     target = Target(
         latitude=float(row["lat"]),
@@ -233,7 +232,17 @@ def collect(settings: Settings) -> TrainingFrame:
     )
 
     env_profile = resolve_environment_profile(settings.env_profile)
-    stage1 = Stage1LogDistanceModel(model_version="stage1-training", env_profile=env_profile)
+    backend = CrcCovlibBackend(
+        dem_directory=settings.dem_directory,
+        model_version="stage1-training",
+        percent_time=settings.itu_percent_time,
+        percent_location=settings.itu_percent_location,
+    )
+    stage1 = Stage1ItuModel(
+        model_version="stage1-training",
+        backend=backend,
+        env_profile=env_profile,
+    )
 
     log.info("Computing Stage1 prediction + features for %d rows", len(raw))
     feature_records: list[dict[str, float]] = []

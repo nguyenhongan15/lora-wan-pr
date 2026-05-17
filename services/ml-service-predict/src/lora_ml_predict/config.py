@@ -42,11 +42,29 @@ class Settings(BaseSettings):
     # thời cả 2 mà không cần restart service.
     dem_path: Path = Field(
         default=Path("E:/DATN/lora-data/dem/copernicus_glo30_danang.tif"),
-        description="DEM GeoTIFF (Copernicus GLO-30 clip) — active region",
+        description="DEM GeoTIFF (Copernicus GLO-30 clip) — active region (feature pipeline)",
     )
     dem_path_north_vn: Path = Field(
         default=Path("E:/DATN/lora-data/dem/copernicus_glo30_north_vn.tif"),
         description="DEM GeoTIFF Bắc Bộ (Hải Phòng, Hải Dương, Hà Nội)",
+    )
+    # Stage1 ITU-R P.1812 backend cần directory chứa tile GeoTIFF, không phải
+    # 1 file. crc-covlib tự auto-detect tile theo bbox của link.
+    dem_directory: Path = Field(
+        default=Path("E:/DATN/lora-data/dem"),
+        description="Folder chứa DEM GeoTIFF tiles cho Stage 1 ITU-R P.1812 (crc-covlib).",
+    )
+    itu_percent_time: float = Field(
+        default=50.0,
+        gt=0.0,
+        le=100.0,
+        description="P.1812 percent_time. 50 = median (khớp api-service default).",
+    )
+    itu_percent_location: float = Field(
+        default=50.0,
+        gt=0.0,
+        le=100.0,
+        description="P.1812/P.2108 percent_location.",
     )
     urbanization_path: Path = Field(
         default=Path("E:/DATN/lora-data/osm/urbanization_vn.tif"),

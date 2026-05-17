@@ -30,6 +30,16 @@ members = [
     "packages/sdk-python",
 ]
 
+[tool.uv]
+# Target deployment: Windows dev + Linux x86_64 container. macOS/arm64 không
+# được hỗ trợ vì crc-covlib (Stage 1 ITU backend) không có wheel/build cho darwin.
+# Giới hạn resolver ở 2 môi trường thực tế → tránh "No solution found" cho splits
+# vô nghĩa khi `uv lock` resolve toàn universe.
+environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -38,6 +48,8 @@ extend-exclude = ["legacy", "migrations/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 ignore = ["E501", "RUF001", "RUF003",]  # line-length handled by formatter
+# Math/physics docstrings dùng σ, ², ·, → xuyên project (path-loss, RSSI, link budget).
+allowed-confusables = ["σ", "²", "·", "→"]
 [tool.ruff.lint.per-file-ignores]
 # FastAPI Depends() trong default argument là pattern chính thức của framework
 "services/api-service/src/lora_coverage_api/edge/routers/*.py" = ["B008"]

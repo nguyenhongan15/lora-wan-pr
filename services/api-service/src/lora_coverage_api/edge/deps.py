@@ -6,6 +6,7 @@ Edge là chỗ DUY NHẤT biết tới infrastructure. Application chỉ thấy 
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 import httpx
@@ -23,8 +24,9 @@ from ..application.identity import (
     InvalidCredentialsError,
     User,
 )
+from ..application.itu.model import Stage1ItuModel
 from ..application.linking import CredentialCipher, LinkingService
-from ..application.path_loss import Stage1LogDistanceModel, resolve_environment_profile
+from ..application.path_loss import resolve_environment_profile
 from ..application.prediction_service import PredictionOrchestrator
 from ..application.repositories import (
     AddressResolution,
@@ -38,6 +40,7 @@ from ..infrastructure.address_cache_pg import PgAddressCache
 from ..infrastructure.db import make_engine
 from ..infrastructure.gateway_directory_pg import PgGatewayDirectory
 from ..infrastructure.goong_client import GoongHttpClient
+from ..infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
 from ..infrastructure.nominatim_client import NominatimHttpClient
 from ..infrastructure.stage2_client import Stage2Client
 from ..infrastructure.survey_repository_pg import PgSurveyRepository
@@ -67,12 +70,27 @@ def survey_repository() -> SurveyIngest:
     return PgSurveyRepository(_engine())
 
 
+@lru_cache(maxsize=1)
+def _itu_backend() -> CrcCovlibBackend:
+    """Singleton backend — Simulation rebuild mỗi call (Ousterhout: hide
+    lifecycle), nhưng DEM directory + tham số config thì process-level.
+    """
+    s = _settings()
+    return CrcCovlibBackend(
+        dem_directory=Path(s.lora_dem_directory),
+        model_version=s.ml_model_version,
+        percent_time=s.lora_itu_percent_time,
+        percent_location=s.lora_itu_percent_location,
+    )
+
+
 def coverage_query() -> CoverageQuery:
     settings = _settings()
     return CoverageQueryService(
         directory=gateway_directory(),
-        model=Stage1LogDistanceModel(
+        model=Stage1ItuModel(
             model_version=settings.ml_model_version,
+            backend=_itu_backend(),
             env_profile=resolve_environment_profile(settings.lora_env_profile),
         ),
     )

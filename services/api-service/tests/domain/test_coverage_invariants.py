@@ -24,13 +24,13 @@ from lora_coverage_api.domain.coverage import (
 
 
 def test_confidence_accepts_score_at_zero():
-    c = Confidence(score=0.0, method=ConfidenceMethod.EMPIRICAL)
+    c = Confidence(score=0.0, method=ConfidenceMethod.PHYSICS)
 
     assert c.score == 0.0
 
 
 def test_confidence_accepts_score_at_one():
-    c = Confidence(score=1.0, method=ConfidenceMethod.EMPIRICAL)
+    c = Confidence(score=1.0, method=ConfidenceMethod.PHYSICS)
 
     assert c.score == 1.0
 
@@ -40,7 +40,7 @@ def test_confidence_rejects_score_outside_unit_interval_when_out_of_range(
     invalid_score: float,
 ):
     with pytest.raises(ValueError, match=r"Confidence\.score"):
-        Confidence(score=invalid_score, method=ConfidenceMethod.EMPIRICAL)
+        Confidence(score=invalid_score, method=ConfidenceMethod.PHYSICS)
 
 
 # ── Target.latitude / longitude / spreading_factor ───────────────────────
@@ -167,7 +167,7 @@ def _pred(**overrides) -> Prediction:
         "snr_db": 10.0,
         "coverage_status": CoverageStatus.STRONG,
         "serving_gateway_id": None,
-        "confidence": Confidence(score=0.5, method=ConfidenceMethod.EMPIRICAL),
+        "confidence": Confidence(score=0.5, method=ConfidenceMethod.PHYSICS),
         "model_version": "t",
         "recommended_sf": 7,
     }

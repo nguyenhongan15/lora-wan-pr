@@ -19,7 +19,17 @@ dependencies = [
     "httpx>=0.27",
     "python-jose[cryptography]>=3.3",
     "bcrypt>=4.2",
+    # Stage 1 path-loss = ITU-R P.1812-7 + P.2108-1 (CRC Canada, MIT).
+    # KHÔNG có trên PyPI — wheel vendored ở repo root `vendor/` (chỉ Windows DLL).
+    # Linux: Dockerfile build từ source qua cmake (xem services/api-service/Dockerfile).
+    "crc-covlib==4.6.2",
 ]
+
+[tool.uv.sources]
+# Wheel vendored — chỉ chứa Windows DLL. Trên Linux/Docker, wheel này install ok
+# nhưng `import crc_covlib.simulation` sẽ fail thiếu .so → Dockerfile build từ
+# source thay vì pip install qua wheel này.
+crc-covlib = { path = "../../vendor/crc_covlib-4.6.2-py3-none-any.whl" }
 
 [build-system]
 requires = ["hatchling"]
