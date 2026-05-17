@@ -139,7 +139,7 @@ def test_predict_confidence_aleatoric_variance_from_env_profile() -> None:
 
     m = _model()
     p = m.predict(_target(16.05, 108.20), _gateway())
-    expected = SUBURBAN_PROFILE.shadow_fading_std_db ** 2
+    expected = SUBURBAN_PROFILE.shadow_fading_std_db**2
     assert p.confidence.aleatoric_variance_db2 == pytest.approx(expected, abs=0.01)
 
 

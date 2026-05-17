@@ -80,15 +80,11 @@ class Stage1ItuModel:
         )
         pl_db = self.backend.basic_transmission_loss_db(link)
 
-        d_km = _haversine_km(
-            target.latitude, target.longitude, gateway.latitude, gateway.longitude
-        )
+        d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
 
         gw_rx_gain = resolve_gateway_rx_gain(gateway)
         gw_sens = resolve_sensitivity(gateway.rx_sensitivity_dbm, GW_SENSITIVITY_DBM_125KHZ, sf)
-        dev_sens = resolve_sensitivity(
-            target.rx_sensitivity_dbm, DEVICE_SENSITIVITY_DBM_125KHZ, sf
-        )
+        dev_sens = resolve_sensitivity(target.rx_sensitivity_dbm, DEVICE_SENSITIVITY_DBM_125KHZ, sf)
 
         ul = compute_link_budget(
             direction="uplink",

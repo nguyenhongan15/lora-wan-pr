@@ -187,9 +187,7 @@ def resolve_gateway_rx_gain(gateway: Gateway) -> float:
     )
 
 
-def resolve_sensitivity(
-    provided: float | None, defaults_table: dict[int, float], sf: int
-) -> float:
+def resolve_sensitivity(provided: float | None, defaults_table: dict[int, float], sf: int) -> float:
     """None → tra SF table. Boundary nhỏ — dataclass-or-default fallback."""
     return defaults_table[sf] if provided is None else provided
 
@@ -208,6 +206,7 @@ def resolve_bottleneck(ul: LinkBudget, dl: LinkBudget) -> LinkBottleneck:
 class PathLossModel(Protocol):
     """Tất cả model qua các Stage chia sẻ interface này."""
 
-    model_version: str
+    @property
+    def model_version(self) -> str: ...
 
     def predict(self, target: Target, gateway: Gateway) -> Prediction: ...

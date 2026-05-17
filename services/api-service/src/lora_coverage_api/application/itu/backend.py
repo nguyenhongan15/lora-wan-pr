@@ -55,6 +55,7 @@ class Stage1PhysicsBackend(Protocol):
         sót cấu hình DEM = bug ops, không phải user error.
     """
 
-    model_version: str
+    @property
+    def model_version(self) -> str: ...
 
     def basic_transmission_loss_db(self, link: LinkGeometry) -> float: ...

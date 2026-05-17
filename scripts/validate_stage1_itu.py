@@ -65,14 +65,12 @@ def _stats(residual: np.ndarray, name: str) -> _Bucket:
         n=int(residual.size),
         bias_db=float(np.mean(residual)),
         sigma_db=float(np.std(residual, ddof=1)) if residual.size > 1 else 0.0,
-        rmse_db=float(np.sqrt(np.mean(residual ** 2))),
+        rmse_db=float(np.sqrt(np.mean(residual**2))),
         mae_db=float(np.mean(np.abs(residual))),
     )
 
 
-def _fetch_test_rows(
-    settings, bbox: tuple[float, float, float, float], start: str, end: str
-):
+def _fetch_test_rows(settings, bbox: tuple[float, float, float, float], start: str, end: str):
     """Lazy-import psycopg để --help không yêu cầu DB driver."""
     import psycopg
 
@@ -182,9 +180,7 @@ def _run(args) -> int:
     overall = _stats(arr, "overall")
     by_sf = [_stats(arr[sf_arr == sf], f"sf={sf}") for sf in sorted(np.unique(sf_arr).tolist())]
     bins = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 50)]
-    by_dist = [
-        _stats(arr[(d_arr >= lo) & (d_arr < hi)], f"d=[{lo},{hi}) km") for lo, hi in bins
-    ]
+    by_dist = [_stats(arr[(d_arr >= lo) & (d_arr < hi)], f"d=[{lo},{hi}) km") for lo, hi in bins]
 
     report = {
         "bbox": args.bbox,

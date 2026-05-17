@@ -78,8 +78,8 @@ class CrcCovlibBackend:
             raise ValueError(f"percent_location ngoài (0, 100]: {self.percent_location}")
 
     def basic_transmission_loss_db(self, link: LinkGeometry) -> float:
-        from crc_covlib import simulation as covlib
-        from crc_covlib.helper import itur_p2108
+        from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
+        from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
 
         sim = covlib.Simulation()
 
@@ -137,7 +137,7 @@ class CrcCovlibBackend:
                 link.freq_mhz / 1000.0, d_km, self.percent_location
             )
 
-        return pl_p1812 + clutter_db
+        return float(pl_p1812 + clutter_db)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

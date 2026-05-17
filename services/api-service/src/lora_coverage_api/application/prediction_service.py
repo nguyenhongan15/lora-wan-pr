@@ -79,9 +79,11 @@ class PredictionOrchestrator:
             return result
 
         delta = stage2_out.residual_db
-        refined_confidence = dataclasses.replace(
-            pred.confidence, method=ConfidenceMethod.RESIDUAL
-        ) if isinstance(pred.confidence, Confidence) else pred.confidence
+        refined_confidence = (
+            dataclasses.replace(pred.confidence, method=ConfidenceMethod.RESIDUAL)
+            if isinstance(pred.confidence, Confidence)
+            else pred.confidence
+        )
         refined = dataclasses.replace(
             pred,
             rssi_dbm=round(pred.rssi_dbm + delta, 2),
