@@ -996,9 +996,12 @@ export function CoverageMap({ mode = "points" }) {
 
     const gwRow = document.createElement("div");
     gwRow.style.cssText = "margin-top:6px";
-    const gw = prediction.serving_gateway_id
-      ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
-      : null;
+    // Khi no_coverage: BE vẫn trả serving_gateway_id = candidate ít tệ nhất
+    // (debug field), nhưng UX-wise treat như "không có gateway phục vụ".
+    const gw =
+      prediction.serving_gateway_id && prediction.coverage_status !== "no_coverage"
+        ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
+        : null;
     if (gw) {
       gwRow.appendChild(
         document.createTextNode(`${t.popup.nearestGateway.label}: `),
@@ -1085,9 +1088,13 @@ export function CoverageMap({ mode = "points" }) {
     // Vẽ line nối điểm dự đoán → serving gateway, cùng màu badge trạng thái.
     // Bỏ qua nếu BE không gán gateway (serving_gateway_id null) hoặc gateway
     // chưa load (gatewaysRef rỗng — race với deep-link predict khi mới mount).
-    const gw = prediction.serving_gateway_id
-      ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
-      : null;
+    // Cũng bỏ qua khi coverage_status="no_coverage": BE vẫn trả serving GW =
+    // candidate ít tệ nhất trong 30 km cho debug, nhưng UX-wise không nên vẽ
+    // line "kết nối" vì gateway đó thật ra không decode được.
+    const gw =
+      prediction.serving_gateway_id && prediction.coverage_status !== "no_coverage"
+        ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
+        : null;
     if (gw) {
       searchLineFeaturesRef.current.push({
         type: "Feature",

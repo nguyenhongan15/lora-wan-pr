@@ -23,6 +23,10 @@ dependencies = [
     # KHÔNG có trên PyPI — wheel vendored ở repo root `vendor/` (chỉ Windows DLL).
     # Linux: Dockerfile build từ source qua cmake (xem services/api-service/Dockerfile).
     "crc-covlib==4.6.2",
+    # crc_covlib.helper.itur_p2109 (Building Entry Loss) import numpy ở top
+    # module — không khai báo trong setup.py của lib nên cần thêm tay. P.2108
+    # không cần. Khi BEL bị strip thì indoor predict crash với ImportError.
+    "numpy>=1.26",
 ]
 
 [tool.uv.sources]
