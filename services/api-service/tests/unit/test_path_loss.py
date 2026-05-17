@@ -45,6 +45,14 @@ class _FakeBackend:
         excess = 10 * (self.n - 2) * math.log10(d / 0.1) if d > 0.1 else 0.0
         return free_space + excess
 
+    def building_entry_loss_db(self, freq_mhz: float, probability_percent: float) -> float:
+        """Simplified BEL: traditional bldg ~14 dB @ 50%, ~25 dB @ 90%.
+
+        Linear interp đủ cho test contract (indoor adds loss, indoor_deep >>
+        indoor); contract test thật của P.2109 chạy với crc-covlib backend.
+        """
+        return 14.0 + (probability_percent - 50.0) * (25.0 - 14.0) / (90.0 - 50.0)
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0088
@@ -284,6 +292,79 @@ def test_predict_uses_target_rx_sensitivity_override_for_downlink_margin() -> No
         p_default.downlink_margin_db + 10.0, abs=0.05
     )
     assert p_better.uplink_margin_db == pytest.approx(p_default.uplink_margin_db, abs=0.01)
+
+
+# ── Indoor / building entry loss (ITU-R P.2109) ───────────────────────────
+
+
+def test_predict_indoor_reduces_rssi_compared_to_outdoor() -> None:
+    """environment=indoor cộng BEL P.2109 → cả UL và DL RSSI giảm so với outdoor."""
+    m = _model()
+    gw = _gateway()
+    tgt_out = _target(16.06, 108.21, sf=7)
+    tgt_in = Target(
+        latitude=16.06,
+        longitude=108.21,
+        spreading_factor=7,
+        frequency_mhz=923.0,
+        tx_power_dbm=14.0,
+        tx_antenna_gain_dbi=2.0,
+        rx_antenna_gain_dbi=0.0,
+        environment="indoor",
+    )
+
+    p_out = m.predict(tgt_out, gw)
+    p_in = m.predict(tgt_in, gw)
+
+    # FakeBackend trả BEL=14 dB @ 50% → cả 2 chiều giảm ~14 dB.
+    assert p_in.downlink_rssi_dbm == pytest.approx(p_out.downlink_rssi_dbm - 14.0, abs=0.05)
+    assert p_in.uplink_rssi_dbm == pytest.approx(p_out.uplink_rssi_dbm - 14.0, abs=0.05)
+
+
+def test_predict_indoor_deep_loses_more_than_indoor() -> None:
+    """indoor_deep = 90% percentile P.2109 > indoor (50%) → RSSI thấp hơn nhiều."""
+    m = _model()
+    gw = _gateway()
+    common = {
+        "latitude": 16.06,
+        "longitude": 108.21,
+        "spreading_factor": 7,
+        "frequency_mhz": 923.0,
+        "tx_power_dbm": 14.0,
+        "tx_antenna_gain_dbi": 2.0,
+        "rx_antenna_gain_dbi": 0.0,
+    }
+    p_indoor = m.predict(Target(**common, environment="indoor"), gw)
+    p_deep = m.predict(Target(**common, environment="indoor_deep"), gw)
+
+    assert p_deep.downlink_rssi_dbm < p_indoor.downlink_rssi_dbm
+    # 90% (25 dB) - 50% (14 dB) = 11 dB diff theo FakeBackend.
+    assert p_indoor.downlink_rssi_dbm - p_deep.downlink_rssi_dbm == pytest.approx(11.0, abs=0.05)
+
+
+def test_predict_outdoor_does_not_call_bel() -> None:
+    """environment=outdoor → backend.building_entry_loss_db không được gọi.
+
+    Mock counting để verify; outdoor flow phải skip BEL call để tránh cost của
+    P.2109 lookup khi không cần.
+    """
+    calls = {"bel": 0}
+
+    @dataclass(frozen=True, slots=True)
+    class _CountingBackend:
+        model_version: str = "counting"
+
+        def basic_transmission_loss_db(self, link: LinkGeometry) -> float:
+            return 100.0
+
+        def building_entry_loss_db(self, freq_mhz: float, probability_percent: float) -> float:
+            # Mutate enclosed dict (frozen dataclass cấm setattr nhưng dict OK).
+            calls["bel"] += 1
+            return 14.0
+
+    m = Stage1ItuModel(model_version="test", backend=_CountingBackend())
+    m.predict(_target(16.06, 108.21), _gateway())
+    assert calls["bel"] == 0
 
 
 def test_predict_uses_gateway_rx_sensitivity_override_for_uplink_margin() -> None:

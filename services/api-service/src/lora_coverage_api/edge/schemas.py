@@ -28,6 +28,9 @@ class PredictRequest(BaseModel):
     tx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
     rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
     rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
+    # Terminal environment — outdoor = no BEL; indoor/indoor_deep apply
+    # ITU-R P.2109 building entry loss (traditional building, prob 50%/90%).
+    environment: Literal["outdoor", "indoor", "indoor_deep"] = "outdoor"
 
 
 class ConfidenceResponse(BaseModel):
@@ -65,6 +68,10 @@ class PredictionResponse(BaseModel):
     uplink: LinkBudgetResponse
     downlink: LinkBudgetResponse
     bottleneck: Literal["uplink", "downlink", "both_ok"]
+    # Path loss tổng (basic transmission loss + BEL nếu có); UL/DL đối xứng.
+    path_loss_db: float = 0.0
+    # Khoảng cách haversine target → serving gateway (km). 0.0 = no serving GW.
+    distance_to_serving_gateway_km: float = 0.0
 
 
 # ── Health ────────────────────────────────────────────────────────────────

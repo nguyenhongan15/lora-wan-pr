@@ -87,6 +87,38 @@ export const strings = {
         /** @param {number} sf */
         value: (sf) => `SF${sf}`,
       },
+      usedTxPower: {
+        label: "Công suất phát",
+        /** @param {number} dbm */
+        value: (dbm) => `${dbm} dBm`,
+      },
+      usedEnvironment: {
+        label: "Môi trường",
+      },
+      // Path loss tổng (basic + BEL nếu có). Hữu ích để engineer debug:
+      // RSSI thấp vì terrain hay vì building entry loss.
+      pathLoss: {
+        label: "Suy hao đường truyền",
+        /** @param {number} db */
+        value: (db) => `${db.toFixed(1)} dB`,
+      },
+      // Khoảng cách target → serving gateway (gateway có tín hiệu mạnh nhất,
+      // chọn theo min(UL_margin, DL_margin), không phải nearest geographic).
+      distanceToGateway: {
+        label: "Khoảng cách đến gateway",
+        /** @param {number} km */
+        value: (km) => (km < 1 ? `${(km * 1000).toFixed(0)} m` : `${km.toFixed(2)} km`),
+      },
+      // Block thông số đường truyền dữ liệu LoRaWAN (bitrate, ToA, max payload)
+      // — pure function của SF, BW=125kHz, CR=4/5 (AS923-2 DT=0).
+      dataLink: {
+        sectionTitle: "Đường truyền dữ liệu",
+        bitrate: "Tốc độ",
+        timeOnAir: "Thời gian phát 23 B",
+        maxPayload: "Payload tối đa",
+        /** @param {number} bytes */
+        maxPayloadValue: (bytes) => `${bytes} byte`,
+      },
       recommendedSf: {
         label: "SF khuyến nghị",
         /** @param {number} sf */
@@ -132,6 +164,35 @@ export const strings = {
       /** @param {number} sf */
       option: (sf) => `SF${sf}`,
       auto: "Tự động",
+    },
+    txPowerPicker: {
+      label: "Công suất phát",
+      hint: "8 mức ADR theo LoRaWAN AS923-2 (TXPower 0..7, bước 2 dB, cap 14 dBm).",
+      // LoRaWAN AS923 regional params §2.7.3 — TXPower index 0..7 = Max EIRP
+      // trừ 0, 2, 4, ... 14 dB. Với Max EIRP = 14 dBm (cap VN) → 14, 12, ..., 0.
+      options: [
+        { value: 14, label: "14 dBm (TXPower 0)" },
+        { value: 12, label: "12 dBm (TXPower 1)" },
+        { value: 10, label: "10 dBm (TXPower 2)" },
+        { value: 8, label: "8 dBm (TXPower 3)" },
+        { value: 6, label: "6 dBm (TXPower 4)" },
+        { value: 4, label: "4 dBm (TXPower 5)" },
+        { value: 2, label: "2 dBm (TXPower 6)" },
+        { value: 0, label: "0 dBm (TXPower 7)" },
+      ],
+    },
+    environmentPicker: {
+      label: "Môi trường",
+      hint: "Trong nhà sẽ cộng thêm suy hao xuyên tường theo ITU-R P.2109.",
+      options: [
+        { value: "outdoor", label: "Ngoài trời", short: "Ngoài trời" },
+        { value: "indoor", label: "Trong nhà", short: "Trong nhà" },
+        {
+          value: "indoor_deep",
+          label: "Sâu trong nhà",
+          short: "Sâu trong nhà",
+        },
+      ],
     },
     viewModePicker: {
       title: "Loại bản đồ",

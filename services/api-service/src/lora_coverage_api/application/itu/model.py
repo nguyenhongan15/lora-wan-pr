@@ -23,6 +23,7 @@ from ...domain.coverage import (
     Gateway,
     Prediction,
     Target,
+    TerminalEnvironment,
 )
 from ..path_loss import (
     DEVICE_SENSITIVITY_DBM_125KHZ,
@@ -42,6 +43,15 @@ from .backend import GeoPoint, LinkGeometry, Stage1PhysicsBackend
 # ground-level — assumption chuẩn của P.2108 (low terminal in clutter).
 # Override qua Settings nếu deploy domain khác (vd sensor trên mái).
 _DEFAULT_DEVICE_ANTENNA_HEIGHT_M = 1.5
+
+# Mapping environment → ITU-R P.2109 probability percentile (traditional bldg).
+# 50% = median "indoor" (sàn 1, có cửa sổ); 90% = "sâu trong nhà" (tầng trong,
+# tường gạch dày). Outdoor = 0 BEL → skip P.2109.
+_ENV_PROBABILITY_PERCENT: dict[TerminalEnvironment, float] = {
+    "outdoor": 0.0,
+    "indoor": 50.0,
+    "indoor_deep": 90.0,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +89,14 @@ class Stage1ItuModel:
             freq_mhz=target.frequency_mhz,
         )
         pl_db = self.backend.basic_transmission_loss_db(link)
+
+        # Building entry loss (ITU-R P.2109) — đối xứng 2 chiều, cộng thẳng vào
+        # PL. Outdoor → skip; backend không bị gọi nên test FakeBackend không
+        # cần stub method này khi env="outdoor".
+        prob_pct = _ENV_PROBABILITY_PERCENT[target.environment]
+        if prob_pct > 0.0:
+            bel_db = self.backend.building_entry_loss_db(target.frequency_mhz, prob_pct)
+            pl_db += bel_db
 
         d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
 
@@ -137,6 +155,8 @@ class Stage1ItuModel:
             downlink_margin_db=round(dl.margin_db, 2),
             downlink_status=dl.status,
             bottleneck=bottleneck,
+            path_loss_db=round(pl_db, 2),
+            distance_to_serving_gateway_km=round(d_km, 3),
         )
 
 

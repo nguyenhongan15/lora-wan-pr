@@ -139,6 +139,33 @@ class CrcCovlibBackend:
 
         return float(pl_p1812 + clutter_db)
 
+    def building_entry_loss_db(self, freq_mhz: float, probability_percent: float) -> float:
+        """ITU-R P.2109 BEL — traditional building, elevation 0° (terrestrial).
+
+        Probability = persentile của distribution: 50% ≈ "indoor", 90% ≈ "sâu
+        trong nhà". Hard-code traditional vì VN context (gạch + bê tông), không
+        phải thermally-efficient (kính low-E + insulation kiểu hiện đại châu Âu);
+        nếu sau này expose tower-mounted IoT → cần extend.
+        """
+        from crc_covlib.helper import itur_p2109  # type: ignore[import-untyped]
+
+        if not 0.0 < probability_percent < 100.0:
+            raise ValueError(
+                f"probability_percent ngoài (0, 100): {probability_percent}"
+            )
+        bel = itur_p2109.BuildingEntryLoss(
+            freq_mhz / 1000.0,
+            probability_percent,
+            itur_p2109.BuildingType.TRADITIONAL,
+            0.0,
+        )
+        if not math.isfinite(bel):
+            raise RuntimeError(
+                f"P.2109 BEL non-finite ({bel}) cho freq={freq_mhz} MHz, "
+                f"prob={probability_percent}%"
+            )
+        return float(bel)
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0088

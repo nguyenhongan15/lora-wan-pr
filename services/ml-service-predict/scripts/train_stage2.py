@@ -1,6 +1,9 @@
 """CLI entry — `python -m scripts.train_stage2 [--promote] [--dry-run]`.
 
 Wrap orchestrator.run_training() + log human-readable summary.
+
+KHÔNG sinh biểu đồ evaluation — dùng `uv run python -m scripts.retrain_and_report`
+ở repo root nếu muốn retrain + auto-render plots (gồm `comparison` group mới).
 """
 
 from __future__ import annotations

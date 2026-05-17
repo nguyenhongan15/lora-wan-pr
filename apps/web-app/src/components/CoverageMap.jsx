@@ -10,6 +10,11 @@ import {
   predictCoverage,
 } from "../api/client.js";
 import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
+import {
+  formatBitrate,
+  formatTimeOnAir,
+  maxPayloadBytes,
+} from "../lora/datarate.js";
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
@@ -432,6 +437,26 @@ function appendBidirectionalSection(parent, ul, dl) {
 }
 
 /**
+ * Block thông số đường truyền dữ liệu LoRaWAN — bitrate, time-on-air (23 B),
+ * max payload bytes. Pure function của SF (BW=125 kHz, CR=4/5, AS923-2 DT=0).
+ * Tách section vì khác bản chất với phủ sóng — đây là "truyền data nhanh hay
+ * chậm khi đã có sóng".
+ * @param {HTMLElement} parent
+ * @param {number} sf
+ */
+function appendDataLinkSection(parent, sf) {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;font-size:11px";
+  wrap.innerHTML =
+    `<div style="font-weight:600;color:#0f172a;margin-bottom:4px">${t.popup.dataLink.sectionTitle}</div>` +
+    `<div>${t.popup.dataLink.bitrate}: <strong>${formatBitrate(sf)}</strong></div>` +
+    `<div>${t.popup.dataLink.timeOnAir}: <strong>${formatTimeOnAir(sf)}</strong></div>` +
+    `<div>${t.popup.dataLink.maxPayload}: <strong>${t.popup.dataLink.maxPayloadValue(maxPayloadBytes(sf))}</strong></div>`;
+  parent.appendChild(wrap);
+}
+
+/**
  * Nút copy permalink (`?lat=&lng=&sf=`) — feedback "Đã copy!" 2s rồi reset.
  * Clipboard API không có ở SSR → guard `window` tồn tại.
  * @param {HTMLElement} parent
@@ -510,6 +535,12 @@ export function CoverageMap({ mode = "points" }) {
   const [sf, setSf] = useState(
     /** @returns {SfValue} */
     () => initialUrlRef.current?.sf ?? DEFAULT_SF,
+  );
+  // Default 14 dBm = AS923-2 cap; user có thể giảm để mô phỏng device pin yếu.
+  const [txPowerDbm, setTxPowerDbm] = useState(/** @type {number} */ (14));
+  // Default outdoor — thay đổi sẽ apply ITU-R P.2109 building entry loss BE-side.
+  const [environment, setEnvironment] = useState(
+    /** @type {"outdoor" | "indoor" | "indoor_deep"} */ ("outdoor"),
   );
   // Visualization mode cho tab "points": circle (RSSI) ↔ heatmap (mật độ).
   // Mặc định circle để không đổi behavior hiện tại. State chỉ ý nghĩa khi
@@ -865,9 +896,9 @@ export function CoverageMap({ mode = "points" }) {
    *    RSSI / SNR / Confidence + link gateway phục vụ.
    * Theo business-logic.md §4.2 — dual-layer rule cho 1 feature phục vụ
    * cả end-user (Layer 1) lẫn kỹ sư P1/P2 (Layer 2).
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean) => HTMLDivElement}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep") => HTMLDivElement}
    */
-  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto) => {
+  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed) => {
     const root = document.createElement("div");
     root.style.cssText = "font:12px/1.4 system-ui;max-width:360px;min-width:320px";
 
@@ -927,6 +958,18 @@ export function CoverageMap({ mode = "points" }) {
     const usedSfRow = isAuto
       ? ""
       : `<div>${t.popup.usedSf.label}: <strong>${t.popup.usedSf.value(sfUsed)}</strong></div>`;
+    const envOption = t.environmentPicker.options.find(
+      (o) => o.value === environmentUsed,
+    );
+    const envLabel = envOption?.short ?? environmentUsed;
+    const usedTxPowerRow = `<div>${t.popup.usedTxPower.label}: <strong>${t.popup.usedTxPower.value(txPowerUsed)}</strong></div>`;
+    const usedEnvRow = `<div>${t.popup.usedEnvironment.label}: <strong>${envLabel}</strong></div>`;
+    // path_loss_db = 0 khi BE chưa rebuild hoặc no_coverage — ẩn row để khỏi
+    // hiển thị "0 dB" lẫn lộn.
+    const pathLossRow =
+      prediction.path_loss_db > 0
+        ? `<div>${t.popup.pathLoss.label}: <strong>${t.popup.pathLoss.value(prediction.path_loss_db)}</strong></div>`
+        : "";
     // σ_total = √(epi + ale) — Stage 1 epi=0, ale=σ_shadow² theo env_profile.
     const sigmaDb = Math.sqrt(
       prediction.confidence.epistemic_variance_db2 +
@@ -935,9 +978,16 @@ export function CoverageMap({ mode = "points" }) {
     techRows.innerHTML =
       usedSfRow +
       `<div>${t.popup.recommendedSf.label}: ${recCellHtml}</div>` +
+      usedTxPowerRow +
+      usedEnvRow +
+      pathLossRow +
       `<div>${t.popup.errorMargin.label}: <strong>${t.popup.errorMargin.value(sigmaDb)}</strong></div>` +
       `<div>${t.popup.accuracy.label}: <strong>${t.popup.accuracy.value(sigmaDb)}</strong></div>`;
     layer2.appendChild(techRows);
+
+    // Data-link metrics (bitrate, ToA, max payload) — pure function của SF,
+    // tách section vì là "khả năng truyền dữ liệu" khác bản chất với "phủ sóng".
+    appendDataLinkSection(layer2, sfUsed);
 
     // UL/DL table — chỉ render khi BE có trả 2 chiều (backward-compat).
     if (prediction.uplink && prediction.downlink) {
@@ -970,6 +1020,16 @@ export function CoverageMap({ mode = "points" }) {
     }
     layer2.appendChild(gwRow);
 
+    // Khoảng cách đến serving gateway — chỉ hiển thị khi BE có wire (>0).
+    // Serving gateway = gateway có min(UL_margin, DL_margin) = "tín hiệu mạnh
+    // nhất", không phải nearest geographic.
+    if (gw && prediction.distance_to_serving_gateway_km > 0) {
+      const distRow = document.createElement("div");
+      distRow.style.cssText = "margin-top:2px;color:#475569;font-size:11px";
+      distRow.textContent = `${t.popup.distanceToGateway.label}: ${t.popup.distanceToGateway.value(prediction.distance_to_serving_gateway_km)}`;
+      layer2.appendChild(distRow);
+    }
+
     appendCopyLinkButton(layer2, lat, lng, isAuto ? "auto" : sfUsed);
 
     root.appendChild(layer2);
@@ -990,9 +1050,9 @@ export function CoverageMap({ mode = "points" }) {
   /**
    * Pure marker-drawing helper — không phụ thuộc state, chỉ dùng refs.
    * Cho phép gọi từ effect mà không gây stale closure.
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean) => void}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep") => void}
    */
-  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto) => {
+  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed) => {
     const map = mapRef.current;
     if (!map) return;
 
@@ -1010,7 +1070,9 @@ export function CoverageMap({ mode = "points" }) {
     const popup = new maplibregl.Popup({
       offset: 16,
       maxWidth: "380px",
-    }).setDOMContent(buildPopupNode(lat, lng, prediction, sfUsed, isAuto));
+    }).setDOMContent(
+      buildPopupNode(lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed),
+    );
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat])
@@ -1085,7 +1147,9 @@ export function CoverageMap({ mode = "points" }) {
     })
       .then((prediction) => {
         if (cancelled) return;
-        drawSearchMarker(url.lat, url.lng, prediction, sfForUrl, isAuto);
+        // Deep-link không serialize tx_power/environment → fallback defaults
+        // (14 dBm outdoor) khớp BE behavior khi field None trong PredictRequest.
+        drawSearchMarker(url.lat, url.lng, prediction, sfForUrl, isAuto, 14, "outdoor");
       })
       .catch((e) => {
         console.error("Deep-link predict failed:", e);
@@ -1114,8 +1178,18 @@ export function CoverageMap({ mode = "points" }) {
         longitude: lng,
         spreading_factor: sfForApi,
         frequency_mhz: DEFAULT_FREQ_MHZ,
+        tx_power_dbm: txPowerDbm,
+        environment,
       });
-      drawSearchMarker(lat, lng, prediction, sfForApi, isAuto);
+      drawSearchMarker(
+        lat,
+        lng,
+        prediction,
+        sfForApi,
+        isAuto,
+        txPowerDbm,
+        environment,
+      );
       writeUrlState(lat, lng, sf);
     } catch (e) {
       console.error("Predict submit failed:", e);
@@ -1205,6 +1279,60 @@ export function CoverageMap({ mode = "points" }) {
                   ))}
                 </select>
               </div>
+
+              <div className="mt-2 flex items-center gap-2">
+                <label
+                  className="text-xs font-medium text-slate-700"
+                  htmlFor="tx-power-picker"
+                >
+                  {t.txPowerPicker.label}
+                </label>
+                <select
+                  id="tx-power-picker"
+                  value={txPowerDbm}
+                  onChange={(e) => setTxPowerDbm(Number(e.target.value))}
+                  className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                  title={t.txPowerPicker.hint}
+                >
+                  {t.txPowerPicker.options.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <fieldset className="mt-2">
+                <legend
+                  className="text-xs font-medium text-slate-700"
+                  title={t.environmentPicker.hint}
+                >
+                  {t.environmentPicker.label}
+                </legend>
+                <div className="mt-1 flex flex-col gap-0.5">
+                  {t.environmentPicker.options.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className="flex items-center gap-1.5 text-[11px] text-slate-700"
+                    >
+                      <input
+                        type="radio"
+                        name="environment-picker"
+                        value={opt.value}
+                        checked={environment === opt.value}
+                        onChange={() =>
+                          setEnvironment(
+                            /** @type {"outdoor" | "indoor" | "indoor_deep"} */ (
+                              opt.value
+                            ),
+                          )
+                        }
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
 
               {!pickedCoords && (
                 <div className="mt-2 text-[11px] leading-snug text-slate-500">

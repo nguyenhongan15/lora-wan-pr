@@ -11,7 +11,7 @@ from ...application.prediction_service import PredictionOrchestrator
 from ...application.repositories import AddressResolution
 from ...config import get_settings
 from ...domain.address import Address
-from ...domain.coverage import Target
+from ...domain.coverage import Target, TerminalEnvironment
 from ...domain.errors import AddressLookupErrorCode, PredictionErrorCode
 from ...domain.result import Err
 from ..deps import address_resolution, prediction_orchestrator
@@ -57,6 +57,7 @@ async def predict(
         tx_antenna_gain_dbi=payload.tx_antenna_gain_dbi,
         rx_antenna_gain_dbi=payload.rx_antenna_gain_dbi,
         rx_sensitivity_dbm=payload.rx_sensitivity_dbm,
+        environment=payload.environment,
     )
     result = await service.predict(target)
 
@@ -90,6 +91,7 @@ def _build_target(
     tx_antenna_gain_dbi: float | None = None,
     rx_antenna_gain_dbi: float | None = None,
     rx_sensitivity_dbm: float | None = None,
+    environment: TerminalEnvironment = "outdoor",
 ) -> Target:
     """Construct Target. None field → fallback Settings env defaults.
 
@@ -112,6 +114,7 @@ def _build_target(
         if rx_antenna_gain_dbi is not None
         else settings.default_device_rx_antenna_gain_dbi,
         rx_sensitivity_dbm=rx_sensitivity_dbm,
+        environment=environment,
     )
 
 
@@ -144,6 +147,8 @@ def _to_prediction_response(p: object) -> PredictionResponse:
             status=p.downlink_status.value,  # type: ignore[attr-defined]
         ),
         bottleneck=p.bottleneck,  # type: ignore[attr-defined]
+        path_loss_db=p.path_loss_db,  # type: ignore[attr-defined]
+        distance_to_serving_gateway_km=p.distance_to_serving_gateway_km,  # type: ignore[attr-defined]
     )
 
 

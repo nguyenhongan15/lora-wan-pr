@@ -20,13 +20,14 @@ import sys
 from pathlib import Path
 
 from .data_loader import load_eval_bundle
-from .plots import interpretation, regression, training_curve
+from .plots import comparison, interpretation, regression, training_curve
 
 log = logging.getLogger(__name__)
 
 _PLOT_GROUPS = {
     "regression": regression.render,
     "training": training_curve.render,
+    "comparison": comparison.render,
     "interpretation": interpretation.render,
 }
 

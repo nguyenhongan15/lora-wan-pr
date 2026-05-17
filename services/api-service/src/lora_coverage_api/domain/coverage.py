@@ -19,6 +19,11 @@ AS923_DEVICE_TX_POWER_CAP_DBM = 14.0
 # Bottleneck direction trong bidirectional link budget.
 LinkBottleneck = Literal["uplink", "downlink", "both_ok"]
 
+# Terminal environment — quyết định Stage 1 có cộng building entry loss
+# (ITU-R P.2109) hay không. outdoor = không cộng; indoor/indoor_deep map sang
+# percentile 50%/90% ở application layer.
+TerminalEnvironment = Literal["outdoor", "indoor", "indoor_deep"]
+
 
 class CoverageStatus(StrEnum):
     STRONG = "strong"  # RSSI ≥ -100, SNR ≥ 5
@@ -81,6 +86,7 @@ class Target:
     tx_power_dbm: float = AS923_DEVICE_TX_POWER_CAP_DBM
     tx_antenna_gain_dbi: float = 2.0
     rx_sensitivity_dbm: float | None = None
+    environment: TerminalEnvironment = "outdoor"
 
     def __post_init__(self) -> None:
         if not -90.0 <= self.latitude <= 90.0:
@@ -96,6 +102,8 @@ class Target:
             )
         if self.rx_sensitivity_dbm is not None and not -150.0 <= self.rx_sensitivity_dbm <= -50.0:
             raise ValueError(f"rx_sensitivity_dbm out of range: {self.rx_sensitivity_dbm}")
+        if self.environment not in ("outdoor", "indoor", "indoor_deep"):
+            raise ValueError(f"invalid environment: {self.environment}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +138,14 @@ class Prediction:
     downlink_margin_db: float = 0.0
     downlink_status: CoverageStatus = CoverageStatus.NO_COVERAGE
     bottleneck: LinkBottleneck = "both_ok"
+    # Path loss tổng (basic transmission loss + BEL nếu có) cho UL+DL đối xứng.
+    # Engineer debug "RSSI thấp do terrain xa hay building entry loss" — bóc tách
+    # giúp họ biết cần đặt thêm GW (PL terrain cao) hay đẩy device ra ngoài
+    # (BEL cao). 0.0 default cho Stage 2+ chưa wire.
+    path_loss_db: float = 0.0
+    # Khoảng cách haversine target → serving gateway. Hữu ích display ở popup.
+    # 0.0 = no serving gateway / chưa wire.
+    distance_to_serving_gateway_km: float = 0.0
 
     def __post_init__(self) -> None:
         if self.confidence is None:

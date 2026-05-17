@@ -1,0 +1,45 @@
+Stage 2 evaluation report — stage2-20260517T093146Z
+============================================================
+
+Dataset (spatial stratified hold-out)
+  strategy          : spatial_grid_stratified_holdout
+  cell_size_deg     : 0.01
+  n_train_cells     : 71
+  n_test_cells      : 19
+  test_fraction     : target=0.2 actual=0.601
+  n_train_val       : 3811
+  n_test            : 5742
+  dataset_hash      : ee87eb0b8dd2
+
+Metrics
+  CV RMSE (mean)    : 6.344 dB
+  CV RMSE per fold  : [5.06, 7.783, 6.54, 5.046, 7.291]
+  Test RMSE         : 6.490 dB (residual head)
+  Test MAE          : 5.028 dB
+  Test RMSE +guard  : 6.283 dB
+  Guardrail clipped : 448/5742
+
+Hyperparameters (Optuna best)
+  bagging_fraction    : 0.8548091561277197
+  bagging_freq        : 0
+  feature_fraction    : 0.9600436945818199
+  lambda_l1           : 5.32450440103115
+  lambda_l2           : 1.8411559989387012
+  learning_rate       : 0.18533933095938973
+  max_depth           : 5
+  min_data_in_leaf    : 81
+  num_leaves          : 127
+
+Features (12)
+  - log10_distance_to_serving_gw_km
+  - bearing_sin
+  - bearing_cos
+  - distance_to_2nd_nearest_gw_km
+  - elevation_diff_m
+  - los_obstruction_count
+  - urbanization_index
+  - spreading_factor
+  - frequency_mhz
+  - gw_antenna_height_m
+  - gw_antenna_gain_dbi
+  - serving_gateway_id

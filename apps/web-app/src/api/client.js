@@ -10,6 +10,11 @@ export const PredictRequest = z.object({
   longitude: z.number().min(-180).max(180),
   spreading_factor: z.number().int().min(7).max(12),
   frequency_mhz: z.number().default(923),
+  // tx_power_dbm capped 14 dBm theo AS923-2 regional params (BE validate cùng range).
+  tx_power_dbm: z.number().min(-10).max(14).optional(),
+  // environment: outdoor | indoor (mặc định trong nhà) | indoor_deep (sâu trong nhà,
+  // ít cửa sổ). Thiếu = outdoor (default ở BE).
+  environment: z.enum(["outdoor", "indoor", "indoor_deep"]).optional(),
 });
 
 export const Confidence = z.object({
@@ -42,6 +47,12 @@ export const Prediction = z.object({
   uplink: LinkBudget.optional(),
   downlink: LinkBudget.optional(),
   bottleneck: z.enum(["uplink", "downlink", "both_ok"]).optional(),
+  // Path loss tổng (basic transmission + BEL nếu có); UL/DL đối xứng. Default 0
+  // để graceful degrade với BE chưa rebuild.
+  path_loss_db: z.number().default(0),
+  // Khoảng cách target → serving gateway (km). Serving GW chọn theo
+  // min(UL_margin, DL_margin) = "gateway tín hiệu mạnh nhất" — không phải nearest.
+  distance_to_serving_gateway_km: z.number().nonnegative().default(0),
 });
 
 export const ProblemDetails = z.object({

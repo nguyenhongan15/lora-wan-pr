@@ -46,10 +46,12 @@ class Stage1PhysicsBackend(Protocol):
     "Basic transmission loss" theo ITU-R nomenclature = PL (dB) trước khi trừ
     antenna gains — tức là số dB sẽ trừ vào (P_tx + G_tx + G_rx) để ra Pr.
 
-    What: 1 method duy nhất, trả 1 số. Deep module: behind là ITU-R P.1812
-        delta-Bullington diffraction + P.2108 statistical clutter + DEM sampling.
+    What:
+      - basic_transmission_loss_db: 1 số PL ngoài trời (P.1812 + P.2108).
+      - building_entry_loss_db: 1 số BEL nội suy theo ITU-R P.2109 dùng khi
+        terminal nằm trong nhà; trả 0 cho outdoor.
     Hidden: lib choice, percent_time/percent_location config, polarization,
-        radio-climatic zone, surface profile method.
+        radio-climatic zone, surface profile method, building type lookup.
     Failure mode: backend tự raise nếu DEM không cover bbox của link. Caller
         (Stage1ItuModel) không bắt — bubble lên orchestrator (HTTP 5xx). Sai
         sót cấu hình DEM = bug ops, không phải user error.
@@ -59,3 +61,11 @@ class Stage1PhysicsBackend(Protocol):
     def model_version(self) -> str: ...
 
     def basic_transmission_loss_db(self, link: LinkGeometry) -> float: ...
+
+    def building_entry_loss_db(self, freq_mhz: float, probability_percent: float) -> float:
+        """BEL (dB) cho 1 terminal trong nhà, building type = traditional.
+
+        `probability_percent` là persentile của distribution P.2109 (50% = median
+        "indoor", 90% = sâu trong nhà). Outdoor caller không gọi method này.
+        """
+        ...

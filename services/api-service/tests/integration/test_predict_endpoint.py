@@ -49,6 +49,10 @@ class _FakeBackend:
         excess = 10 * (self.n - 2) * math.log10(d_km / 0.1) if d_km > 0.1 else 0.0
         return free_space + excess
 
+    def building_entry_loss_db(self, freq_mhz: float, probability_percent: float) -> float:
+        """Linear interp ~P.2109 traditional: 14 dB @ 50%, 25 dB @ 90%."""
+        return 14.0 + (probability_percent - 50.0) * (25.0 - 14.0) / (90.0 - 50.0)
+
 
 @pytest.fixture(scope="module")
 def client() -> Generator[TestClient, None, None]:
