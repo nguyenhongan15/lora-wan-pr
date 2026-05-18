@@ -27,6 +27,11 @@ dependencies = [
     # module — không khai báo trong setup.py của lib nên cần thêm tay. P.2108
     # không cần. Khi BEL bị strip thì indoor predict crash với ImportError.
     "numpy>=1.26",
+    # scikit-image dùng cho `scripts/precompute_minsf.py` — marching squares
+    # (find_contours) convert min-SF grid → GeoJSON polygon bands. Chỉ chạy
+    # offline (CLI precompute), không touch runtime API. Đặt ở api-service vì
+    # script reuse Stage1ItuModel + CrcCovlibBackend.
+    "scikit-image>=0.24",
 ]
 
 [tool.uv.sources]

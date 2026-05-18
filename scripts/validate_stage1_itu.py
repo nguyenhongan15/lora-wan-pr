@@ -30,10 +30,8 @@ import numpy as np
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _API_SRC = _REPO_ROOT / "services" / "api-service" / "src"
-_ML_SRC = _REPO_ROOT / "services" / "ml-service-predict" / "src"
-for p in (str(_API_SRC), str(_ML_SRC)):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if str(_API_SRC) not in sys.path:
+    sys.path.insert(0, str(_API_SRC))
 
 
 log = logging.getLogger(__name__)
@@ -100,13 +98,23 @@ def _fetch_test_rows(settings, bbox: tuple[float, float, float, float], start: s
 
 
 def _run(args) -> int:
+    import os
+
     from lora_coverage_api.application.itu.model import Stage1ItuModel
     from lora_coverage_api.application.path_loss import resolve_environment_profile
     from lora_coverage_api.domain.coverage import Gateway, GatewayId, Target
     from lora_coverage_api.infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
-    from lora_ml_predict.config import get_settings
 
-    settings = get_settings()
+    # Settings inline — decoupled khỏi lora_ml_predict (đã archive sang
+    # archive/stage2-lightgbm/). Đọc env vars trực tiếp, không pull thêm lib.
+    class _Settings:
+        db_url = os.environ["LORA_DB_URL"]
+        dem_directory = Path(os.environ["LORA_DEM_DIRECTORY"])
+        itu_percent_time = float(os.environ.get("LORA_ITU_PERCENT_TIME", "50.0"))
+        itu_percent_location = float(os.environ.get("LORA_ITU_PERCENT_LOCATION", "50.0"))
+        env_profile = os.environ.get("LORA_ENV_PROFILE", "suburban")
+
+    settings = _Settings()
     bbox = _BBOX_PRESETS[args.bbox]
     rows = _fetch_test_rows(settings, bbox, args.start, args.end)
     if not rows:

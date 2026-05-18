@@ -11,13 +11,18 @@ import { strings } from "../strings.js";
 
 const t = strings.coverageMap.viewModePicker;
 
-/** @typedef {"points" | "heatmap"} ViewMode */
+/**
+ * Generic view-mode toggle — value typed string vì 2 tab khác nhau:
+ *  - tab "Bản đồ điểm đo": "points" | "heatmap"
+ *  - tab "Bản đồ phủ sóng": "minsf" | "estimate"
+ * Component không quan tâm semantic value, chỉ render label.
+ */
 
 /**
  * @param {{
- *   mode: ViewMode,
- *   onChange: (next: ViewMode) => void,
- *   options: ReadonlyArray<{ value: ViewMode, label: string }>,
+ *   mode: string,
+ *   onChange: (next: string) => void,
+ *   options: ReadonlyArray<{ value: string, label: string }>,
  * }} props
  */
 export function MapViewModeToggle({ mode, onChange, options }) {

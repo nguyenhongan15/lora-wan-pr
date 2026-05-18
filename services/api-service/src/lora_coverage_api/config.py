@@ -84,6 +84,13 @@ class Settings(BaseSettings):
         ...,
         description="Folder chứa DEM GeoTIFF tiles cho ITU-R P.1812 (Copernicus GLO-30).",
     )
+    # Surface DEM (DTM + building heights). Rỗng = reuse terrain dir → P.1812
+    # chạy như chưa có DSM (clutter qua P.2108 thôi). Set để bật ITU-R P.1812
+    # mode P1812_USE_SURFACE_ELEV_DATA với building obstruction thật.
+    lora_surface_dem_directory: str = Field(
+        default="",
+        description="Folder chứa Surface DEM (DTM+buildings) GeoTIFF tiles. Rỗng = reuse terrain.",
+    )
     lora_itu_percent_time: float = Field(
         default=50.0,
         gt=0.0,
@@ -149,11 +156,11 @@ class Settings(BaseSettings):
     # active model, mọi /predict + /lookup được refine bằng residual_db.
     stage2_predict_base_url: str = Field(
         default="",
-        description="Internal URL tới ml-service-predict (vd http://ml-predict:8001). Rỗng = disabled.",
+        description="Internal URL tới ml-service (vd http://ml-service:8001). Rỗng = disabled.",
     )
     stage2_auth_token: str = Field(
         default="",
-        description="Bearer token gửi tới ml-service-predict. Phải khớp LORA_STAGE2_AUTH_TOKEN bên ml-service-predict.",
+        description="Bearer token gửi tới ml-service. Phải khớp LORA_STAGE2_AUTH_TOKEN bên ml-service.",
     )
     stage2_timeout_seconds: float = Field(
         default=0.5,

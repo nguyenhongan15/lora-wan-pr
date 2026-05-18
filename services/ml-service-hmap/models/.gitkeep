@@ -1,1 +1,0 @@
-# Cached ONNX artifacts (R2-backed). Bucket layout: lora-models-prod/stage=X/region=Y/calib=vZ/

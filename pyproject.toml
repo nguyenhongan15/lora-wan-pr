@@ -24,11 +24,12 @@ dev = [
 [tool.uv.workspace]
 members = [
     "services/api-service",
-    "services/ml-service-hmap",
-    "services/ml-service-predict",
     "services/worker-service",
     "packages/sdk-python",
 ]
+# services/ml-service đang trống — chờ dev ML mới setup pyproject.toml + source.
+# Legacy LightGBM (cá nhân tự build trước handoff) → archive/stage2-lightgbm/
+# (KHÔNG là workspace member; pyproject chỉ giữ làm reference, không runnable).
 
 [tool.uv]
 # Target deployment: Windows dev + Linux x86_64 container. macOS/arm64 không
@@ -43,17 +44,21 @@ environments = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["legacy", "migrations/versions"]
+extend-exclude = [
+    "legacy",
+    "migrations/versions",
+    "archive",
+    "services/ml-service/reference_wireless",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 ignore = ["E501", "RUF001", "RUF003",]  # line-length handled by formatter
 # Math/physics docstrings dùng σ, ², ·, → xuyên project (path-loss, RSSI, link budget).
-allowed-confusables = ["σ", "²", "·", "→"]
+allowed-confusables = ["σ", "²", "·", "→", "×"]
 [tool.ruff.lint.per-file-ignores]
 # FastAPI Depends() trong default argument là pattern chính thức của framework
 "services/api-service/src/lora_coverage_api/edge/routers/*.py" = ["B008"]
-"services/ml-service-predict/src/lora_ml_predict/serving/*.py" = ["B008"]
 # conftest phải load_dotenv() trước khi import modules đọc env vars
 "services/api-service/tests/conftest.py" = ["E402"]
 
@@ -76,7 +81,5 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = [
     "services/api-service/tests",
-    "services/ml-service-hmap/tests",
-    "services/ml-service-predict/tests",
 ]
 addopts = "-ra --strict-markers --strict-config"

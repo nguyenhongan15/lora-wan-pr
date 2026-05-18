@@ -71,6 +71,9 @@ services:
       LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
       # Stage 1 ITU-R P.1812 + P.2108 backend
       LORA_DEM_DIRECTORY: /data/dem
+      # Empty default = backend reuse terrain dir (no buildings). Set ở host .env
+      # để bật DSM (vd /data/dem-surface với volume mount LORA_DATA_DIR).
+      LORA_SURFACE_DEM_DIRECTORY: ${LORA_SURFACE_DEM_DIRECTORY:-}
       LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
       LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       JWT_SECRET: ${JWT_SECRET}
@@ -79,7 +82,10 @@ services:
       DEFAULT_DEVICE_TX_POWER_DBM: ${DEFAULT_DEVICE_TX_POWER_DBM:-14.0}
       DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI: ${DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI:-2.0}
       DEFAULT_DEVICE_RX_ANTENNA_GAIN_DBI: ${DEFAULT_DEVICE_RX_ANTENNA_GAIN_DBI:-0.0}
-      STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-http://ml-service-predict:8001}
+      # Stage 2 disabled (ML handoff in progress). Empty base_url = api-service
+      # bypass /residual call, dùng Stage1-only response. Set ở host .env
+      # (STAGE2_PREDICT_BASE_URL=http://ml-service:8001) khi dev mới có model.
+      STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-}
       STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
       STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
     volumes:
@@ -94,46 +100,13 @@ services:
       start_period: 10s
       retries: 3
 
-  ml-service-predict:
-    # Predict-ML serving (Stage 2 LightGBM residual). Context = repo root vì
-    # Dockerfile cần workspace pyproject + sdk-python + lora-coverage-api source
-    # (workspace dep).
-    build:
-      context: .
-      dockerfile: services/ml-service-predict/Dockerfile
-    container_name: lora-wan-ml-predict
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      LORA_DB_URL: postgresql://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
-      LORA_DEM_PATH: /data/dem/copernicus_glo30_danang.tif
-      LORA_DEM_PATH_NORTH_VN: /data/dem/copernicus_glo30_north_vn.tif
-      LORA_DEM_DIRECTORY: /data/dem
-      LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
-      LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
-      LORA_URBANIZATION_PATH: /data/osm/urbanization_vn.tif
-      LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
-      LORA_STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
-      # Mirror host artifact dir vị trí trong container → artifact_uri trong DB
-      # (relative path từ repo root) resolve giống host. Cùng layout = không
-      # cần rewrite path khi train host → load container.
-      LORA_STAGE2_ARTIFACT_DIR: services/ml-service-predict/artifacts/stage2
-    volumes:
-      # Raster files (DEM + urbanization) live on host. Read-only mount.
-      - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
-      # Stage 2 artifacts: mount mirror đường dẫn host để relative path
-      # `services/ml-service-predict/artifacts/...` từ CWD=/app resolve OK.
-      - ./services/ml-service-predict/artifacts:/app/services/ml-service-predict/artifacts
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)\""]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
+  # ── ml-service ────────────────────────────────────────────────────────
+  # Đang handoff cho dev ML mới. Folder `services/ml-service/` chỉ còn README +
+  # `reference_wireless/` (model XGBoost dev mới author trước khi join repo).
+  # Legacy LightGBM cá nhân tự build trước handoff → `archive/stage2-lightgbm/`
+  # (chỉ giữ làm reference, không deploy). api-service chạy Stage1-only —
+  # STAGE2_PREDICT_BASE_URL rỗng. Dev mới khi sẵn sàng sẽ tự thêm service block
+  # vào file này.
 
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
   # Production: build static rồi serve qua Nginx.

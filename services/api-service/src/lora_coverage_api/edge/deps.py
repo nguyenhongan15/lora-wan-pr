@@ -78,6 +78,9 @@ def _itu_backend() -> CrcCovlibBackend:
     s = _settings()
     return CrcCovlibBackend(
         dem_directory=Path(s.lora_dem_directory),
+        surface_dem_directory=(
+            Path(s.lora_surface_dem_directory) if s.lora_surface_dem_directory else None
+        ),
         model_version=s.ml_model_version,
         percent_time=s.lora_itu_percent_time,
         percent_location=s.lora_itu_percent_location,

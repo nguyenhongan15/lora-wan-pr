@@ -18,6 +18,7 @@ import {
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
+import { MinSFPanel } from "./MinSFPanel.jsx";
 import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
 import {
   BASEMAP_STYLE,
@@ -29,6 +30,8 @@ import {
   INITIAL_CENTER,
   INITIAL_ZOOM,
   MARGIN_BAR_RANGE,
+  MINSF_BAND_COLORS,
+  MINSF_FILL_OPACITY,
   PREDICT_MARKER_STYLE,
   SF_OPTIONS,
   STATUS_COLOR,
@@ -291,7 +294,10 @@ function writeFilterUrlState(state) {
 const SURVEYS_SOURCE_ID = "surveys-src";
 const SURVEYS_LAYER_ID = "surveys-circle";
 
-/** @typedef {import("./MapViewModeToggle.jsx").ViewMode} ViewMode */
+// ViewMode cho tab "Bản đồ điểm đo" — toggle circle/heatmap mật độ. Định
+// nghĩa local vì MapViewModeToggle hiện nhận `string` chung (xài cho cả
+// tab "Bản đồ phủ sóng" với value khác: minsf/estimate).
+/** @typedef {"points" | "heatmap"} ViewMode */
 
 // Predict-line GeoJSON source — line layer nối điểm dự đoán → serving gateway.
 // 1 source duy nhất cho cả tab "Dự đoán điểm": mỗi lần predict push 1 feature,
@@ -299,6 +305,13 @@ const SURVEYS_LAYER_ID = "surveys-circle";
 // `color` (set runtime từ STATUS_COLOR theo coverage_status).
 const PREDICT_LINES_SOURCE_ID = "predict-lines-src";
 const PREDICT_LINES_LAYER_ID = "predict-lines";
+
+// Min-SF coverage layer (tab "Bản đồ phủ sóng" + viewMode "minsf"). 1 source
+// + 1 fill layer; setData khi user đổi gateway. Polygon nested SF12⊃...⊃SF7
+// đã sort outermost-first ở precompute script → render đúng order tự nhiên.
+const MINSF_SOURCE_ID = "minsf-src";
+const MINSF_FILL_LAYER_ID = "minsf-fill";
+const MINSF_OUTLINE_LAYER_ID = "minsf-outline";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
@@ -549,6 +562,21 @@ export function CoverageMap({ mode = "points" }) {
     /** @type {ViewMode} */ ("points"),
   );
 
+  // Tab "Bản đồ phủ sóng" (mode === "heatmap") có 2 layer toggle độc lập với
+  // viewMode points/heatmap. "minsf" hiển thị overlay precomputed; "estimate"
+  // là placeholder roadmap.
+  const [coverageViewMode, setCoverageViewMode] = useState(
+    /** @type {"minsf" | "estimate"} */ ("minsf"),
+  );
+  // Code gateway đang được chọn để hiển thị min-SF overlay (null = không chọn).
+  // Dùng `code` thay `id` vì precompute script ghi GeoJSON theo code (`{code}.geojson`).
+  const [minsfGatewayCode, setMinsfGatewayCode] = useState(
+    /** @type {string | null} */ (null),
+  );
+  const [minsfLoadError, setMinsfLoadError] = useState(
+    /** @type {string | null} */ (null),
+  );
+
   const [contributor, setContributor] = useState(
     () => initialFilterRef.current.contributor,
   );
@@ -740,6 +768,58 @@ export function CoverageMap({ mode = "points" }) {
         });
       }
 
+      // Tab "Bản đồ phủ sóng" (mode "heatmap"): add min-SF source + fill layer
+      // ngay khi map load để khi user chọn gateway chỉ cần setData. Layer ẩn
+      // mặc định (visibility="none") — bật khi viewMode==="minsf" và có data.
+      if (mode === "heatmap") {
+        map.addSource(MINSF_SOURCE_ID, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: MINSF_FILL_LAYER_ID,
+          type: "fill",
+          source: MINSF_SOURCE_ID,
+          // fill-sort-key: SF nhỏ → key cao → render trên cùng. Polygon nested
+          // SF7 ⊂ SF8 ⊂ ... ⊂ SF12; nếu để default order (SF12 last → top) sẽ
+          // phủ hết SF7..SF11. Sort key = 12 - min_sf đảo lại → SF7 = 5 (top),
+          // SF12 = 0 (bottom).
+          layout: /** @type {any} */ ({
+            visibility: "none",
+            "fill-sort-key": ["-", 12, ["get", "min_sf"]],
+          }),
+          paint: /** @type {any} */ ({
+            "fill-color": [
+              "match",
+              ["get", "min_sf"],
+              7, MINSF_BAND_COLORS[7],
+              8, MINSF_BAND_COLORS[8],
+              9, MINSF_BAND_COLORS[9],
+              10, MINSF_BAND_COLORS[10],
+              11, MINSF_BAND_COLORS[11],
+              12, MINSF_BAND_COLORS[12],
+              "#888888",
+            ],
+            "fill-opacity": MINSF_FILL_OPACITY,
+          }),
+        });
+        map.addLayer({
+          id: MINSF_OUTLINE_LAYER_ID,
+          type: "line",
+          source: MINSF_SOURCE_ID,
+          // Outline cùng sort-key để khớp với fill bên dưới — SF nhỏ vẽ trên
+          // cùng. line-sort-key chỉ chấp nhận number expression.
+          layout: /** @type {any} */ ({
+            visibility: "none",
+            "line-sort-key": ["-", 12, ["get", "min_sf"]],
+          }),
+          paint: /** @type {any} */ ({
+            "line-color": "rgba(0,0,0,0.25)",
+            "line-width": 0.5,
+          }),
+        });
+      }
+
       // Survey layer chỉ add cho "points" mode. "heatmap" sẽ add raster
       // source ở Phase 2; "predict" không cần điểm đo nền.
       if (mode !== "points") return;
@@ -837,6 +917,86 @@ export function CoverageMap({ mode = "points" }) {
     );
     setSurveyHeatmapVisible(map, !showCircle);
   }, [viewMode, mode, mapLoaded]);
+
+  // Tab "Bản đồ phủ sóng": sync visibility 2 layer min-SF với viewMode +
+  // có gateway đang chọn. Khi switch sang "estimate" hoặc bỏ chọn gateway →
+  // ẩn cả 2 layer. Không clear source data — giữ để switch lại nhanh.
+  useEffect(() => {
+    if (mode !== "heatmap") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getLayer(MINSF_FILL_LAYER_ID)) return;
+    const visible =
+      coverageViewMode === "minsf" && minsfGatewayCode != null ? "visible" : "none";
+    map.setLayoutProperty(MINSF_FILL_LAYER_ID, "visibility", visible);
+    map.setLayoutProperty(MINSF_OUTLINE_LAYER_ID, "visibility", visible);
+  }, [coverageViewMode, minsfGatewayCode, mode, mapLoaded]);
+
+  // Fetch GeoJSON tĩnh từ public/coverage/minsf/{code}.geojson khi user chọn
+  // gateway. File precomputed offline qua `scripts/precompute_minsf.py` —
+  // không qua API, không có authentication. AbortController để cancel khi
+  // user đổi nhanh (race-safe).
+  useEffect(() => {
+    if (mode !== "heatmap") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !minsfGatewayCode) {
+      // Clear source khi bỏ chọn để không tốn memory với feature cũ.
+      if (map && mapLoaded && map.getSource(MINSF_SOURCE_ID)) {
+        /** @type {maplibregl.GeoJSONSource} */ (
+          map.getSource(MINSF_SOURCE_ID)
+        ).setData({ type: "FeatureCollection", features: [] });
+      }
+      setMinsfLoadError(null);
+      return;
+    }
+
+    setMinsfLoadError(null);
+    const controller = new AbortController();
+    const url = `${import.meta.env.BASE_URL ?? "/"}coverage/minsf/${encodeURIComponent(minsfGatewayCode)}.geojson`;
+    fetch(url, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const fc = await res.json();
+        if (!fc || !Array.isArray(fc.features)) {
+          throw new Error("invalid_geojson");
+        }
+        const src = map.getSource(MINSF_SOURCE_ID);
+        if (src && "setData" in src) {
+          /** @type {maplibregl.GeoJSONSource} */ (src).setData(fc);
+        }
+        // Fly tới gateway center nếu có trong properties.
+        const props = /** @type {Record<string, any>} */ (fc.properties ?? {});
+        if (
+          typeof props.gateway_lat === "number" &&
+          typeof props.gateway_lon === "number"
+        ) {
+          map.flyTo({
+            center: [props.gateway_lon, props.gateway_lat],
+            zoom: 11,
+            duration: 800,
+          });
+        }
+        if (fc.features.length === 0) {
+          setMinsfLoadError(strings.coverageMap.minsf.loadEmpty);
+        }
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        console.error("min-SF fetch failed:", err);
+        setMinsfLoadError(strings.coverageMap.minsf.loadError);
+        const src = map.getSource(MINSF_SOURCE_ID);
+        if (src && "setData" in src) {
+          /** @type {maplibregl.GeoJSONSource} */ (src).setData({
+            type: "FeatureCollection",
+            features: [],
+          });
+        }
+      });
+
+    return () => controller.abort();
+  }, [minsfGatewayCode, mode, mapLoaded]);
 
   // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
   // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
@@ -1212,11 +1372,11 @@ export function CoverageMap({ mode = "points" }) {
   return (
     <div className="h-full w-full">
       {/* Pad maplibre top-right control container (pt-10 = 40px) khi tab
-          points để chừa chỗ cho icon view-mode toggle ngồi trên zoom. Tab
-          khác (predict/heatmap) không có toggle nên giữ control sát mép. */}
+          points hoặc heatmap để chừa chỗ cho icon view-mode toggle ngồi trên
+          zoom. Tab "predict" không có toggle nên giữ control sát mép. */}
       <div
         className={
-          mode === "points"
+          mode === "points" || mode === "heatmap"
             ? "relative h-full w-full overflow-hidden [&_.maplibregl-ctrl-top-right]:pt-10"
             : "relative h-full w-full overflow-hidden"
         }
@@ -1229,10 +1389,27 @@ export function CoverageMap({ mode = "points" }) {
         {mode === "points" && (
           <MapViewModeToggle
             mode={viewMode}
-            onChange={setViewMode}
+            onChange={(v) => setViewMode(/** @type {ViewMode} */ (v))}
             options={[
               { value: "points", label: t.viewModePicker.modes.points },
               { value: "heatmap", label: t.viewModePicker.modes.heatmap },
+            ]}
+          />
+        )}
+
+        {/* Tab "Bản đồ phủ sóng": toggle 2 layer minsf ↔ estimate. Cùng vị
+            trí top-right như points-mode toggle nhưng options khác. */}
+        {mode === "heatmap" && (
+          <MapViewModeToggle
+            mode={coverageViewMode}
+            onChange={(v) =>
+              setCoverageViewMode(
+                /** @type {"minsf" | "estimate"} */ (v),
+              )
+            }
+            options={[
+              { value: "minsf", label: t.viewModePicker.modes.minsf },
+              { value: "estimate", label: t.viewModePicker.modes.estimate },
             ]}
           />
         )}
@@ -1396,31 +1573,27 @@ export function CoverageMap({ mode = "points" }) {
               sortConfig={sortConfig}
               onSortConfigChange={setSortConfig}
             />
-          ) : (
-            // Heatmap mode: chỉ SF dropdown đơn để chọn SF input cho model.
-            <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
-              <div className="flex items-center gap-2">
-                <label
-                  className="text-xs font-medium text-slate-700"
-                  htmlFor="sf-picker"
-                >
-                  {t.sfPicker.label}
-                </label>
-                <select
-                  id="sf-picker"
-                  value={sf === "auto" ? DEFAULT_SF : sf}
-                  onChange={(e) => setSf(Number(e.target.value))}
-                  className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                >
-                  {SF_OPTIONS.map((v) => (
-                    <option key={v} value={v}>
-                      {t.sfPicker.option(v)}
-                    </option>
-                  ))}
-                </select>
+          ) : mode === "heatmap" ? (
+            // Tab "Bản đồ phủ sóng": minsf panel (gateway dropdown + legend)
+            // hoặc estimate placeholder, tuỳ coverageViewMode đang chọn.
+            coverageViewMode === "minsf" ? (
+              <MinSFPanel
+                gateways={gatewaysQ.data?.items ?? []}
+                selectedCode={minsfGatewayCode}
+                onChange={setMinsfGatewayCode}
+                loadingError={minsfLoadError}
+              />
+            ) : (
+              <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 shadow-sm">
+                <div className="text-sm font-semibold text-slate-900">
+                  {t.estimate.panelTitle}
+                </div>
+                <div className="mt-2 text-slate-500">
+                  {t.estimate.placeholder}
+                </div>
               </div>
-            </div>
-          )}
+            )
+          ) : null}
 
         </div>
 

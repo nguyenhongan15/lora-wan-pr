@@ -130,3 +130,23 @@ export const PREDICT_MARKER_STYLE = {
   border: "3px solid white",
   boxShadow: "0 0 6px rgba(0,0,0,0.5)",
 };
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Min-SF coverage map palette (paper Fig 11 style).
+ * SF7 (inner, gw gần) = đỏ ấm; SF12 (outer, xa) = xanh dương lạnh.
+ * Convention: SF nhỏ = signal mạnh, đỡ cần spread; SF lớn = xa, cần
+ * sensitivity cao. Sequential cool→warm reversed cho "vùng dễ phục vụ ⇄ rìa".
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** @type {Record<number, string>} */
+export const MINSF_BAND_COLORS = {
+  7: "#d7191c",
+  8: "#fdae61",
+  9: "#ffffbf",
+  10: "#abd9e9",
+  11: "#2c7bb6",
+  12: "#08306b",
+};
+
+// Opacity nền fill — đủ rõ band, vẫn thấy địa hình dưới.
+export const MINSF_FILL_OPACITY = 0.55;

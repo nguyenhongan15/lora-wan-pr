@@ -200,7 +200,35 @@ export const strings = {
       modes: {
         points: "Bản đồ điểm đo",
         heatmap: "Bản đồ nhiệt mật độ",
+        // Tab "Bản đồ phủ sóng" có 2 layer:
+        minsf: "Bản đồ min-SF",
+        estimate: "Bản đồ ước lượng",
       },
+    },
+    minsf: {
+      panelTitle: "Bản đồ phủ sóng",
+      selector: {
+        label: "Chọn gateway",
+        placeholder: "— Chọn gateway —",
+        loading: "Đang tải gateway…",
+        empty: "Chưa có gateway nào.",
+      },
+      legend: {
+        title: "Min-SF",
+        /** @param {number} sf */
+        sfLabel: (sf) => `SF${sf}`,
+        noCoverage: "Không phủ",
+        hint: "SF nhỏ = sóng mạnh, đỡ spread. SF lớn = vùng rìa, cần sensitivity cao.",
+      },
+      loadError:
+        "Không tải được dữ liệu phủ sóng. Gateway này có thể chưa được precompute.",
+      loadEmpty:
+        "Chưa có dữ liệu phủ sóng cho gateway này — chạy lại `precompute_minsf.py`.",
+      model: "Mô hình: ITU-R P.1812 + P.2108 (clutter)",
+    },
+    estimate: {
+      panelTitle: "Bản đồ ước lượng",
+      placeholder: "Đang phát triển — chưa khả dụng.",
     },
     urlPositionLabel: "Vị trí từ URL",
     filters: {

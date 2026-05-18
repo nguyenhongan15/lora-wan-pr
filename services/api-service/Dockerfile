@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Build context = repo root (cần workspace pyproject.toml + vendor/crc_covlib wheel).
 #
-# Multi-stage uv workspace install — mirror services/ml-service-predict/Dockerfile.
+# Multi-stage uv workspace install — mirror services/ml-service/Dockerfile.
 
 ARG PYTHON_VERSION=3.12.7
 
@@ -29,8 +29,6 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock /build/
 COPY services/api-service/pyproject.toml /build/services/api-service/pyproject.toml
 COPY services/api-service/src /build/services/api-service/src
-COPY services/ml-service-predict/pyproject.toml /build/services/ml-service-predict/pyproject.toml
-COPY services/ml-service-hmap/pyproject.toml /build/services/ml-service-hmap/pyproject.toml
 COPY services/worker-service/pyproject.toml /build/services/worker-service/pyproject.toml
 COPY packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.toml
 # Vendored crc-covlib wheel (tool.uv.sources trỏ vào ../../vendor/...).

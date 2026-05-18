@@ -61,6 +61,7 @@ class CrcCovlibBackend:
     """
 
     dem_directory: Path
+    surface_dem_directory: Path | None = None
     model_version: str = "itu-p1812-p2108-crccovlib"
     percent_time: float = 50.0
     percent_location: float = 50.0
@@ -71,6 +72,10 @@ class CrcCovlibBackend:
         if not self.dem_directory.is_dir():
             raise ValueError(
                 f"dem_directory không tồn tại hoặc không phải directory: {self.dem_directory}"
+            )
+        if self.surface_dem_directory is not None and not self.surface_dem_directory.is_dir():
+            raise ValueError(
+                f"surface_dem_directory không tồn tại hoặc không phải directory: {self.surface_dem_directory}"
             )
         if not 0.0 < self.percent_time <= 100.0:
             raise ValueError(f"percent_time ngoài (0, 100]: {self.percent_time}")
@@ -104,10 +109,14 @@ class CrcCovlibBackend:
         sim.SetTerrainElevDataSourceDirectory(
             covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, dem_str
         )
-        # Không có DSM riêng → reuse DEM làm surface. P.2108 sẽ bù building loss.
+        # Surface dir riêng (DTM + building heights) khi có DSM; fallback về
+        # dem_directory để P.1812 vẫn có data nguồn — clutter sẽ bù qua P.2108.
+        surface_str = (
+            str(self.surface_dem_directory) if self.surface_dem_directory is not None else dem_str
+        )
         sim.SetPrimarySurfaceElevDataSource(covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF)
         sim.SetSurfaceElevDataSourceDirectory(
-            covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF, dem_str
+            covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF, surface_str
         )
 
         sim.SetResultType(covlib.ResultType.PATH_LOSS_DB)

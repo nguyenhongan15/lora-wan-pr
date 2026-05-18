@@ -1,4 +1,4 @@
-"""HTTP client tới ml-service-predict POST /residual.
+"""HTTP client tới ml-service POST /residual.
 
 What:
   Stage2Client.predict_residual(target, gateway) → (residual_db, model_version) | None.
@@ -43,7 +43,7 @@ class Stage2Client:
         """1 (target, serving_gateway) → residual_db + model_version.
 
         Return None khi:
-          - 503: ml-service-predict chưa có active model.
+          - 503: ml-service chưa có active model.
           - Timeout / network error.
           - Auth fail.
         """

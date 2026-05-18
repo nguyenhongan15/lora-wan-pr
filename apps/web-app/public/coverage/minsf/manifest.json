@@ -1,0 +1,125 @@
+{
+  "generated_at": "2026-05-18T01:18:10Z",
+  "grid_m": 50.0,
+  "radius_km": 30.0,
+  "model": "ITU-R P.1812 + P.2108",
+  "gateways": [
+    {
+      "code": "24e124fffef4778e",
+      "name": "24e124fffef4778e",
+      "lat": 20.89967088823762,
+      "lon": 106.63570404052736,
+      "elapsed_s": 21788.1,
+      "cells": 1444804,
+      "covered_cells": 66786
+    },
+    {
+      "code": "7076ff0054070418",
+      "name": "7076ff0054070418",
+      "lat": 20.90107409448514,
+      "lon": 106.59278869628908,
+      "elapsed_s": 21972.6,
+      "cells": 1444804,
+      "covered_cells": 90017
+    },
+    {
+      "code": "7276ff002e0507da",
+      "name": "DNIIT GW 0507da",
+      "lat": 16.0740935,
+      "lon": 108.1524913,
+      "elapsed_s": 18215.2,
+      "cells": 1443602,
+      "covered_cells": 106161
+    },
+    {
+      "code": "7276ff002e06029f",
+      "name": "DNIIT GW 06029f",
+      "lat": 16.0659959,
+      "lon": 108.1532551,
+      "elapsed_s": 18458.6,
+      "cells": 1443602,
+      "covered_cells": 89876
+    },
+    {
+      "code": "7276ff002e061f5b",
+      "name": "DNIIT GW 061f5b",
+      "lat": 16.075590133666992,
+      "lon": 108.22207641601562,
+      "elapsed_s": 15311.3,
+      "cells": 1444804,
+      "covered_cells": 129301
+    },
+    {
+      "code": "7276ff002e062cf2",
+      "name": "DNIIT GW 062cf2",
+      "lat": 16.11829376220703,
+      "lon": 108.27363586425781,
+      "elapsed_s": 12748.8,
+      "cells": 1443602,
+      "covered_cells": 869736
+    },
+    {
+      "code": "a840411eebb44150",
+      "name": "DNIIT GW b44150",
+      "lat": 16.0740984,
+      "lon": 108.15253,
+      "elapsed_s": 18239.5,
+      "cells": 1443602,
+      "covered_cells": 106093
+    },
+    {
+      "code": "a84041ffff1ec39f",
+      "name": "DNIIT GW 1ec39f",
+      "lat": 16.0741086,
+      "lon": 108.1525171,
+      "elapsed_s": 18086.4,
+      "cells": 1443602,
+      "covered_cells": 106358
+    },
+    {
+      "code": "ac1f09fffe00ab20",
+      "name": "DNIIT GW 00ab20",
+      "lat": 16.05469,
+      "lon": 108.22009,
+      "elapsed_s": 15101.6,
+      "cells": 1443602,
+      "covered_cells": 137181
+    },
+    {
+      "code": "ac1f09fffe00ab25",
+      "name": "DNIIT GW 00ab25",
+      "lat": 16.11073,
+      "lon": 108.12857,
+      "elapsed_s": 15250.7,
+      "cells": 1444804,
+      "covered_cells": 96214
+    },
+    {
+      "code": "ac1f09fffe06fcf2",
+      "name": "DNIIT GW 06fcf2",
+      "lat": 16.054765682623003,
+      "lon": 108.21985626414313,
+      "elapsed_s": 13735.6,
+      "cells": 1443602,
+      "covered_cells": 141598
+    },
+    {
+      "code": "ac1f09fffe0fd629",
+      "name": "DNIIT GW 0fd629",
+      "lat": 16.06815,
+      "lon": 108.15448,
+      "elapsed_s": 14606.2,
+      "cells": 1444804,
+      "covered_cells": 94168
+    },
+    {
+      "code": "ac1f09fffe0fd63b",
+      "name": "DNIIT GW 0fd63b",
+      "lat": 15.98571,
+      "lon": 108.23986,
+      "elapsed_s": 14315.1,
+      "cells": 1442401,
+      "covered_cells": 152097
+    }
+  ]
+}

@@ -1,122 +1,132 @@
-# Nền tảng bản đồ vùng phủ sóng LoRa
+# LoRa Coverage Mapping Platform
 
-
-
-## Khởi động nhanh (dev)
+## Quick start (dev)
 
 ```bash
-cp .env.template .env       # điền giá trị (chỉ lần đầu)
+cp .env.template .env       # fill in values (first time only)
 
-# Backend: db → migrate (một lần) → api — một lệnh duy nhất, khởi động theo thứ tự
+# Backend: db → migrate (one-shot) → api — single command, starts in order
 docker compose up -d
 
-# Frontend (terminal khác)
+# Frontend (separate terminal)
 npm install
 npm run dev:web
 ```
 
-API chạy ở `http://localhost:8000` (docs ở `/docs`), web ở `http://localhost:5173`.
-Xem log với `docker compose logs -f api-service`.
+API runs at `http://localhost:8000` (docs at `/docs`), web at `http://localhost:5173`.
+Tail logs with `docker compose logs -f api-service`.
 
-## Yêu cầu
+## Requirements
 
 - Docker Desktop (compose v2)
-- Node ≥ 22, npm ≥ 10 — npm workspaces bao gồm `apps/*`, `packages/sdk-js`, `packages/api-types`
-- Python 3.12 + [uv](https://docs.astral.sh/uv/) — uv workspace bao gồm `services/*` và `packages/sdk-python`
+- Node ≥ 22, npm ≥ 10 — npm workspaces cover `apps/*`, `packages/sdk-js`, `packages/api-types`
+- Python 3.12 + [uv](https://docs.astral.sh/uv/) — uv workspace covers `services/api-service`, `services/worker-service`, `packages/sdk-python` (`services/ml-service` is empty pending the new ML developer; see **ml-service & Stage 2** below)
 
-## Cấu trúc repository
+## Repository layout
 
-Chú thích trạng thái: ✅ đã implement · 🟡 khung/scaffold · ⏳ placeholder
+Status legend: ✅ implemented · 🟡 scaffolded · ⏳ placeholder
 
 ```
 apps/
   web-app/          ✅ React 19 + Vite + JS ES2024 + JSDoc + Zod + Tailwind 4 + MapLibre GL + TanStack Query
-  mobile-app/       ⏳ React Native + Expo (dự kiến)
-  docs/             ⏳ Site tài liệu cho người dùng (dự kiến)
+  mobile-app/       ⏳ React Native + Expo (planned)
+  docs/             ⏳ End-user documentation site (planned)
 
 services/
-  api-service/         ✅ FastAPI (Python 3.12) — kiến trúc 5 tầng, bộ dự đoán ITU-R P.1812 + P.2108 Stage 1
-  ml-service-predict/  ✅ Predict-ML:  Physics → LightGBM → SVGP
-  ml-service-hmap/     🟡 Map-ML (heatmap, cho /map) — placeholder 
-  worker-service/      ⏳ Celery + Redis/Valkey (dự kiến)
-  tile-server/         ⏳ Go PMTiles server (dự kiến)
+  api-service/         ✅ FastAPI (Python 3.12) — 5-layer architecture, ITU-R P.1812 + P.2108 Stage 1 predictor
+  ml-service/          🟡 Empty — waiting for new ML dev to set up. Currently only README + `reference_wireless/`
+  worker-service/      ⏳ Celery + Redis/Valkey (planned)
+  tile-server/         ⏳ Go PMTiles server (planned)
 
 packages/
-  api-types/        ⏳ Định nghĩa type sinh từ OpenAPI (chưa generate)
+  api-types/        ⏳ Types generated from OpenAPI (not generated yet)
   sdk-python/       ⏳ Python client SDK
   sdk-js/           ⏳ JavaScript client SDK
   sdk-go/           ⏳ Go client SDK
 
-migrations/         ✅ Alembic — 9 version (PostGIS + TimescaleDB hypertable) + seed_gateways.sql (11 gateway DNIIT + 2 HP)
-ops/                Template reverse-proxy Nginx; thư mục Docker / Grafana đã chừa chỗ
-docs/               Tài liệu kiến trúc & ADR 
-core-logic/         Playbook thiết kế (kiến trúc hệ thống, quy tắc skill, ghi chú triết lý)
-scripts/            seed_gateways.py, backfill_rdt.py, validate_stage1_itu.py
+archive/
+  stage2-lightgbm/  📦 Stage 2 LightGBM residual model the platform owner built before the handoff
+                       (test RMSE 6.41 dB, frozen reference, not deployed). See its own README.
+
+migrations/         ✅ Alembic — 9 versions (PostGIS + TimescaleDB hypertable) + seed_gateways.sql (11 DNIIT gateways + 2 HP)
+ops/                Nginx reverse-proxy template; Docker / Grafana folders reserved
+docs/               Architecture & ADR documentation
+core-logic/         Design playbook (system architecture, skill rules, philosophy notes)
+scripts/            seed_gateways.py, backfill_rdt.py, validate_stage1_itu.py, precompute_minsf.py, build_dsm.py
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
-## Kiến trúc
+## ml-service & Stage 2
 
-Tách 5 tầng nghiêm ngặt, enforce bởi `import-linter` (xem `.importlinter`):
+Stage 2 (residual correction on top of Stage 1 ITU) is currently in a **handoff state to the new ML developer**. The platform owner built a LightGBM residual baseline before the handoff for personal experience — that baseline has been archived to `archive/stage2-lightgbm/` (committed to git along with its 3.3 MB artifact, test RMSE 6.41 dB) as a reference benchmark, **not deployed**.
+
+- `services/ml-service/` currently contains only `README.md` + `reference_wireless/` (the XGBoost direct-RSSI project the new dev authored before joining this repo). The folder is empty and waiting — `pyproject.toml`, `Dockerfile`, and the HTTP contract are all the new dev's call.
+- `api-service` runs Stage-1-only: `STAGE2_PREDICT_BASE_URL` is empty in `.env`, and responses carry `model_version = stage1-itu-p1812-v0.1.0`.
+- When the new dev deploys their model, set `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` (or whichever route/port they pick) and rebuild api-service.
+- The min-SF coverage map is **pure physics** (Stage 1 ITU + ITU-R P.2108 clutter loss), owned by the platform owner — out of scope for ml-service.
+
+Handoff details: `services/ml-service/README.md` (English). Archived model details: `archive/stage2-lightgbm/README.md`.
+
+## Architecture
+
+Strict 5-layer split, enforced by `import-linter` (see `.importlinter`):
 
 ```
 Client → edge            (FastAPI router/middleware/serialization)
-       → application     (use case, repository Protocol)
-       → domain          (type thuần, không I/O)
-       ↑ infrastructure  (repo cụ thể: PostGIS, R2, Valkey)
+       → application     (use cases, repository Protocols)
+       → domain          (pure types, no I/O)
+       ↑ infrastructure  (concrete repos: PostGIS, R2, Valkey)
 ```
 
-`application/` **không bao giờ** được import `infrastructure/`. `domain/` không được import bất kỳ tầng nào khác. CI cũng grep tìm chuỗi gắn tầng storage (`postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN`) bên trong `application/` và `domain/` — vi phạm sẽ fail build.
+`application/` must **never** import `infrastructure/`. `domain/` must not import any other layer. CI also greps for storage-tier strings (`postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN`) inside `application/` and `domain/` — violations fail the build.
 
-## Stack dữ liệu
+## Data stack
 
-- PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17 trong một image duy nhất (`timescale/timescaledb-ha:pg17-ts2.17-all`)
-- Dữ liệu khảo sát đi vào hypertable `quarantine`; chỉ row đã validated mới được promote lên hypertable `training`
-- Object storage: Cloudflare R2 (S3-compatible) — `model_version` là một phần của key prefix
-- Cache: Valkey đang bị comment trong `docker-compose.yml`; chỉ bật khi traffic đủ lớn
+- PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17 in a single image (`timescale/timescaledb-ha:pg17-ts2.17-all`)
+- Survey data lands in the `quarantine` hypertable; only validated rows are promoted to the `training` hypertable
+- Object storage: Cloudflare R2 (S3-compatible) — `model_version` is part of the key prefix
+- Cache: Valkey is commented out in `docker-compose.yml`; only enable it when traffic warrants
 
 ## API
 
-OpenAPI 3.1 spec ở `openapi.yaml`. Các endpoint đang live:
+OpenAPI 3.1 spec at `openapi.yaml`. Live endpoints:
 
 - `GET /healthz`, `GET /readyz`
-- `POST /api/v1/coverage/predict` — dự đoán lai ghép Stage 1 + Stage 2 (RSSI/SNR/coverage/confidence/model_version). `model_version` là `stage1-...+stage2-...` khi Stage 2 active, là `stage1-...` trơn khi Stage 2 lỗi (chế độ degraded)
-- `GET /api/v1/gateways` — danh mục gateway
-- Ingestion webhook ChirpStack
+- `POST /api/v1/coverage/predict` — Stage 1 prediction (RSSI/SNR/coverage/confidence/model_version). `model_version` currently returns `stage1-itu-p1812-v0.1.0` because Stage 2 is shut down during the handoff (see **ml-service & Stage 2**). Once the new dev deploys a model, the response becomes `stage1-...+stage2-...`.
+- `GET /api/v1/gateways` — gateway catalog
+- ChirpStack ingestion webhook
 
-Lỗi tuân theo RFC 7807 (`application/problem+json`). Versioning theo URI-path (`/api/v1`).
+Errors follow RFC 7807 (`application/problem+json`). Versioning is URI-path based (`/api/v1`).
 
 ## Test
 
-`.env.test` được commit chủ ý: thông tin đăng nhập (`lora_test_user:test_only_no_secrets`) chỉ cho phép truy cập DB test trống hoàn toàn cách ly khỏi dev.
+`.env.test` is intentionally committed: the credentials (`lora_test_user:test_only_no_secrets`) only grant access to a fully empty test DB isolated from dev.
 
 ```bash
-# Setup DB test một lần
-# → xem services/api-service/README.md §Setup test DB
+# One-time test DB setup
+# → see services/api-service/README.md §Setup test DB
 
-# Chạy test
-uv run pytest                                  # toàn bộ
-uv run pytest tests/domain tests/application   # nhanh, không I/O
-uv run pytest tests/integration -v             # cần DB test
+# Run tests
+uv run pytest                                  # everything
+uv run pytest tests/domain tests/application   # fast, no I/O
+uv run pytest tests/integration -v             # needs test DB
 ```
 
 ## Lint / type-check
 
 ```bash
-uv run ruff check .              # lint Python
-uv run ruff format --check .     # format Python
-uv run mypy services/api-service/src   # type-check strict (chạy từ repo root)
-uv run lint-imports --config .importlinter   # tách 5 tầng
-npm run lint                     # ESLint cho web-app
-npm run jsdoc-check              # kiểm tra JSDoc qua tsc --noEmit
+uv run ruff check .              # Python lint
+uv run ruff format --check .     # Python format
+uv run mypy services/api-service/src   # strict type-check (run from repo root)
+uv run lint-imports --config .importlinter   # 5-layer separation
+npm run lint                     # ESLint for web-app
+npm run jsdoc-check              # JSDoc check via tsc --noEmit
 ```
 
 ## CI (.github/workflows/ci.yml)
 
-Ba job chạy trên push và PR vào `main`:
+Three jobs run on push and PRs against `main`:
 
-1. **api-service** — ruff lint+format, mypy strict, import-linter, grep no-leaky-strings, alembic upgrade trên service container TimescaleDB, seed gateway, pytest
-2. **docker-build** — build Dockerfile multi-stage + smoke-start container
+1. **api-service** — ruff lint+format, mypy strict, import-linter, no-leaky-strings grep, alembic upgrade on a TimescaleDB service container, gateway seed, pytest
+2. **docker-build** — multi-stage Dockerfile build + container smoke-start
 3. **web-app** — npm install, ESLint, JSDoc check (`tsc --checkJs`), Vite build
-
-
