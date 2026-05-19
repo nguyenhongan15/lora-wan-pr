@@ -86,6 +86,11 @@ class CrcCovlibBackend:
         from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
         from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
 
+        # ITU digital maps (P.453 refractivity DN50/N050, P.1510 T_Annual, P.836
+        # water vapor) được crc-covlib wheel ship sẵn trong
+        # <site-packages>/crc_covlib/data/itu_proprietary/. C++ core đọc tự động
+        # — không cần env var override.
+
         sim = covlib.Simulation()
 
         sim.SetTransmitterLocation(link.tx.latitude, link.tx.longitude)

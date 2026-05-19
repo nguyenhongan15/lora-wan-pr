@@ -2,9 +2,10 @@
 
 Vẽ giống Figure 11 của paper "A Study on LoRa Signal Propagation Models in
 Urban Environments" (ITU-R model with clutter losses). Cho mỗi gateway: sample
-50 m grid trong square 60×60 km tâm gw, tính path loss P.1812 + clutter P.2108,
-derive min-SF (SF nhỏ nhất vẫn link 2 chiều OK), polygonize 6 band SF7..SF12,
-output GeoJSON.
+50 m grid trong square (2·r)×(2·r) km tâm gw với r = auto-radius từ link
+budget (DL Friis - 30 dB clutter margin, cap [5, 50] km), tính path loss
+P.1812 + clutter P.2108, derive min-SF (SF nhỏ nhất vẫn link 2 chiều OK),
+polygonize 6 band SF7..SF12, output GeoJSON.
 
 Một lần chạy là forever-cached: FE fetch trực tiếp file tĩnh, không qua API.
 
@@ -46,11 +47,39 @@ log = logging.getLogger("precompute_minsf")
 
 OUTPUT_DIR = REPO_ROOT / "apps" / "web-app" / "public" / "coverage" / "minsf"
 
-# 30 km radius square = 60×60 km bbox per gateway. LoRa SF12 link budget
-# realistic ~30 km max ở suburban; xa hơn → guaranteed no_coverage.
-RADIUS_KM_DEFAULT = 30.0
 GRID_METERS_DEFAULT = 50.0
 SF_LEVELS = (7, 8, 9, 10, 11, 12)
+
+# Auto-radius parameters (link-budget driven, per-gateway).
+# Friis công thức cho biết free-space distance — thực tế suburban LoRa có
+# excess loss ~25-35 dB vs free-space ở edge-of-coverage (do diffraction +
+# clutter). Trừ margin này để có outer bound thực tế thay vì Friis lý
+# tưởng vài trăm km. Cap cứng 50 km cho gateway TX power cực cao.
+_FRIIS_CLUTTER_MARGIN_DB = 30.0
+_MAX_RADIUS_KM = 50.0
+_MIN_RADIUS_KM = 5.0
+
+
+def _auto_radius_km(tx_power_dbm: float, antenna_gain_dbi: float, freq_mhz: float) -> float:
+    """Compute search radius từ DL link budget (downlink-limited).
+
+    Downlink limiting vì device sensitivity SF12 = -134 dBm — kém UL gw
+    sensitivity -137 dBm khoảng 3 dB. Budget thực dụng:
+
+      PL_usable = tx_power + g_tx - device_sensitivity_sf12 - margin_clutter
+      d_km = 10^((PL_usable - 32.45 - 20·log10(freq_mhz)) / 20)
+
+    P.1812 + P.2108 sẽ tự kết luận no-coverage cho cell ngoài link budget
+    thật; auto-radius chỉ thu nhỏ bbox search để khỏi quét vùng chắc chắn
+    không liên kết được.
+    """
+    from lora_coverage_api.application.path_loss import DEVICE_SENSITIVITY_DBM_125KHZ
+
+    sens = DEVICE_SENSITIVITY_DBM_125KHZ[12]
+    pl_usable = tx_power_dbm + antenna_gain_dbi - sens - _FRIIS_CLUTTER_MARGIN_DB
+    log_d = (pl_usable - 32.45 - 20.0 * math.log10(freq_mhz)) / 20.0
+    d_km = 10.0**log_d
+    return max(_MIN_RADIUS_KM, min(d_km, _MAX_RADIUS_KM))
 
 
 def meters_to_degrees(lat: float, dx_m: float, dy_m: float) -> tuple[float, float]:
@@ -389,7 +418,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--grid-m", type=float, default=GRID_METERS_DEFAULT)
-    parser.add_argument("--radius-km", type=float, default=RADIUS_KM_DEFAULT)
+    parser.add_argument(
+        "--radius-km",
+        type=float,
+        default=None,
+        help=(
+            "Override per-gateway auto-radius. Mặc định auto = link-budget "
+            "Friis − 30 dB clutter margin, cap [5, 50] km."
+        ),
+    )
     parser.add_argument("--gateway-code", default=None, help="Compute 1 gw only")
     parser.add_argument("--force", action="store_true", help="Recompute even if output exists")
     parser.add_argument(
@@ -430,6 +467,21 @@ def main() -> int:
             log.info("[%s] skip (đã có %s, dùng --force để recompute)", r["code"], out_path.name)
             skipped += 1
             continue
+        tx_power = float(r["tx_power_dbm"])
+        gain = float(r["antenna_gain_dbi"])
+        freq = float(r["frequency_mhz"])
+        if args.radius_km is not None:
+            radius_km = float(args.radius_km)
+        else:
+            radius_km = _auto_radius_km(tx_power, gain, freq)
+            log.info(
+                "[%s] auto-radius %.1f km (tx=%.1f dBm, gain=%.1f dBi, f=%.1f MHz)",
+                r["code"],
+                radius_km,
+                tx_power,
+                gain,
+                freq,
+            )
         jobs.append(
             GatewayJob(
                 code=str(r["code"]),
@@ -438,10 +490,10 @@ def main() -> int:
                 lon=float(r["lon"]),
                 altitude_m=float(r["altitude_m"]),
                 antenna_height_m=float(r["antenna_height_m"]),
-                antenna_gain_dbi=float(r["antenna_gain_dbi"]),
-                tx_power_dbm=float(r["tx_power_dbm"]),
-                frequency_mhz=float(r["frequency_mhz"]),
-                radius_km=args.radius_km,
+                antenna_gain_dbi=gain,
+                tx_power_dbm=tx_power,
+                frequency_mhz=freq,
+                radius_km=radius_km,
                 grid_m=args.grid_m,
                 dem_dir=dem_dir,
                 surface_dem_dir=surface_dem_dir,
@@ -453,12 +505,17 @@ def main() -> int:
         log.info("Không có job để chạy (%d skipped)", skipped)
         return 0
 
+    radius_summary = (
+        f"override {args.radius_km:.0f}km"
+        if args.radius_km is not None
+        else f"auto per-gw [{min(j.radius_km for j in jobs):.1f}..{max(j.radius_km for j in jobs):.1f}]km"
+    )
     log.info(
-        "Bắt đầu %d job trên %d worker (grid %dm × radius %.0fkm)",
+        "Bắt đầu %d job trên %d worker (grid %dm × radius %s)",
         len(jobs),
         args.workers,
         int(args.grid_m),
-        args.radius_km,
+        radius_summary,
     )
     t_start = time.time()
     if args.workers <= 1 or len(jobs) <= 1:
@@ -485,7 +542,7 @@ def main() -> int:
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
-        "radius_km": args.radius_km,
+        "radius_km": args.radius_km if args.radius_km is not None else "auto",
         "model": "ITU-R P.1812 + P.2108",
         "gateways": sorted(existing.values(), key=lambda g: g["code"]),
     }

@@ -110,6 +110,8 @@ def _run(args) -> int:
     class _Settings:
         db_url = os.environ["LORA_DB_URL"]
         dem_directory = Path(os.environ["LORA_DEM_DIRECTORY"])
+        _surf = os.environ.get("LORA_SURFACE_DEM_DIRECTORY", "")
+        surface_dem_directory = Path(_surf) if _surf else None
         itu_percent_time = float(os.environ.get("LORA_ITU_PERCENT_TIME", "50.0"))
         itu_percent_location = float(os.environ.get("LORA_ITU_PERCENT_LOCATION", "50.0"))
         env_profile = os.environ.get("LORA_ENV_PROFILE", "suburban")
@@ -124,6 +126,7 @@ def _run(args) -> int:
 
     backend = CrcCovlibBackend(
         dem_directory=settings.dem_directory,
+        surface_dem_directory=settings.surface_dem_directory,
         model_version="stage1-validate",
         percent_time=settings.itu_percent_time,
         percent_location=settings.itu_percent_location,
