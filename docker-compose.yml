@@ -71,9 +71,10 @@ services:
       LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
       # Stage 1 ITU-R P.1812 + P.2108 backend
       LORA_DEM_DIRECTORY: /data/dem
-      # Empty default = backend reuse terrain dir (no buildings). Set ở host .env
-      # để bật DSM (vd /data/dem-surface với volume mount LORA_DATA_DIR).
-      LORA_SURFACE_DEM_DIRECTORY: ${LORA_SURFACE_DEM_DIRECTORY:-}
+      # Container-internal path. Empty = reuse terrain dir (no buildings).
+      # Host .env dùng Windows path cho script chạy ngoài container — KHÔNG
+      # propagate host path vào đây vì container không mount E:/... drive.
+      LORA_SURFACE_DEM_DIRECTORY: /data/dem-surface
       LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
       LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       JWT_SECRET: ${JWT_SECRET}

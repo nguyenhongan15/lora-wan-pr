@@ -70,12 +70,15 @@ class PgGatewayDirectory:
     def find_serving_candidates(
         self, target: Target, max_distance_km: float = 30.0, limit: int = 5
     ) -> Sequence[Gateway]:
+        # Không filter theo frequency_mhz: LoRa gateway listen full AS923-2 band
+        # (8 channel 923-925 MHz), `gateways.frequency_mhz` chỉ là nominal center,
+        # không phải channel filter. Target.frequency_mhz vẫn dùng cho path-loss
+        # tính toán xuôi sau khi đã chọn được gateway.
         sql = text(
             f"""
             SELECT {_SELECT_COLS}
             FROM geo.gateways
             WHERE is_public = true
-              AND frequency_mhz = :freq
               AND ST_DWithin(
                     location,
                     ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
@@ -92,7 +95,6 @@ class PgGatewayDirectory:
                     {
                         "lat": target.latitude,
                         "lon": target.longitude,
-                        "freq": target.frequency_mhz,
                         "radius_m": max_distance_km * 1000.0,
                         "lim": limit,
                     },
