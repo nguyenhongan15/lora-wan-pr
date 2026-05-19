@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lora_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lora_pass_2024}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}
       POSTGRES_DB: ${POSTGRES_DB:-lora_coverage}
     ports:
       - "5432:5432"
@@ -39,7 +39,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}@db:5432/${POSTGRES_DB:-lora_coverage}
     volumes:
       - ./migrations:/app/migrations:ro
     working_dir: /app
@@ -65,7 +65,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:-lora_pass_2024}@db:5432/${POSTGRES_DB:-lora_coverage}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}@db:5432/${POSTGRES_DB:-lora_coverage}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       ML_MODEL_VERSION: ${ML_MODEL_VERSION:-stage1-itu-p1812-v0.1.0}
       LORA_ENV_PROFILE: ${LORA_ENV_PROFILE:-suburban}
@@ -87,7 +87,7 @@ services:
       # bypass /residual call, dùng Stage1-only response. Set ở host .env
       # (STAGE2_PREDICT_BASE_URL=http://ml-service:8001) khi dev mới có model.
       STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-}
-      STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:-stage2-dev-please-change}
+      STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
       STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
@@ -104,7 +104,6 @@ services:
   # ── ml-service ────────────────────────────────────────────────────────
   # Đang handoff cho dev ML mới. Folder `services/ml-service/` chỉ còn README +
   # `reference_wireless/` (model XGBoost dev mới author trước khi join repo).
-  # Legacy LightGBM cá nhân tự build trước handoff → `archive/stage2-lightgbm/`
   # (chỉ giữ làm reference, không deploy). api-service chạy Stage1-only —
   # STAGE2_PREDICT_BASE_URL rỗng. Dev mới khi sẵn sàng sẽ tự thêm service block
   # vào file này.
