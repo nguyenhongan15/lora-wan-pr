@@ -346,9 +346,7 @@ def _step_validation(sample_size: int) -> StepResult:
 # ── Step 5: Min-SF precompute ─────────────────────────────────────────────────
 
 
-def _step_minsf(
-    workers: int, radius_km: float | None, grid_m: float, force: bool
-) -> StepResult:
+def _step_minsf(workers: int, radius_km: float | None, grid_m: float, force: bool) -> StepResult:
     t0 = time.time()
     _FRONTEND_MINSF_DIR.mkdir(parents=True, exist_ok=True)
 
