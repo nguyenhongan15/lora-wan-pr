@@ -7,13 +7,18 @@ image cũ vẫn trên disk → revert là 1 lệnh `docker compose up -d`.
 ## Build & deploy
 
 ```bash
-# Pin image tag bằng git SHA — không bao giờ dùng `latest` cho prod.
+# 0. DB snapshot trước migrate. Image rollback nhanh nhưng schema đi 1
+#    chiều — nếu migration mới DROP COLUMN / type-change, downgrade alembic
+#    không undo được data. Dump là safety net duy nhất.
+./scripts/backup_db.sh
+
+# 1. Pin image tag bằng git SHA — không bao giờ dùng `latest` cho prod.
 export IMAGE_TAG=$(git rev-parse --short HEAD)
 
-# Build image với tag SHA (compose dùng cùng tag cho api-service + migrate).
+# 2. Build image với tag SHA (compose dùng cùng tag cho api-service + migrate).
 docker compose build api-service
 
-# Run migrate (1 lần) → up api-service.
+# 3. Run migrate (1 lần) → up api-service.
 docker compose up -d
 ```
 
@@ -48,6 +53,12 @@ git log --oneline -n 10
 # 2. Set IMAGE_TAG sang SHA cũ + up lại — KHÔNG build (image cũ vẫn còn).
 export IMAGE_TAG=<prev-sha>
 docker compose up -d --no-build api-service
+
+# 3. Verify rollback healthy — chạy LẠI smoke test ở §Smoke test trên.
+#    KHÔNG skip: rollback có thể fail nếu image cũ + schema mới
+#    incompatible (xem §Migration rollback).
+curl -fsS http://localhost:8000/healthz
+curl -fsS http://localhost:8000/readyz   # DB connectivity
 ```
 
 Container restart trong < 5s vì image đã có sẵn trên disk.
@@ -122,6 +133,28 @@ network (`api-service:8000`).
   soft signal, 5xx burst nhỏ).
 
 Alertmanager routing config tách riêng — không trong repo này.
+
+### External uptime probe (bổ trợ Prometheus)
+
+Prometheus scrape TỪ TRONG VPS — nếu VPS chết / DNS broken / TLS expired
+thì Prometheus cũng chết, không alert được. External probe ngoài VPS bắt
+được lớp failure này.
+
+Free option (single-VPS scale): UptimeRobot 5-phút interval, 50 monitor
+free, alert qua email:
+
+1. Tạo HTTP(S) monitor → URL `https://<your-host>/readyz` (KHÔNG dùng
+   `/healthz` — đó chỉ là liveness; `/readyz` ping DB → biết stack thật
+   sự healthy).
+2. Keyword check: expect `"status":"ok"` trong response body.
+3. Interval 5m, alert "Down" + "SSL expires < 7 days".
+
+Probe `/readyz` vì:
+- 200 + `status:ok` → app + DB cùng healthy.
+- 503 → DB unreachable (handler trong `health.py`); alert kích trước khi
+  user thấy lỗi.
+
+`/metrics` KHÔNG được monitor public — block ở reverse proxy.
 
 ## Khi chuyển sang blue-green thật
 
