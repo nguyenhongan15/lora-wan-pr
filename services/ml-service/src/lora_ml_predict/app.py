@@ -142,8 +142,6 @@ class BatchResidualItem(BaseModel):
 
 class BatchPredictionResponse(BaseModel):
     model_version: str
-    residuals: list[BatchResidualItem]
-
 
 async def verify_token(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
@@ -155,13 +153,12 @@ async def verify_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-
 def check_model_active():
     if not settings.is_model_active:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="no active model"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="no active model"
         )
-
 
 @app.get("/healthz")
 async def healthz():
