@@ -70,8 +70,8 @@ class BatchPredictionResponse(BaseModel):
     model_version: str
     residuals: list[BatchResidualItem]
 
-async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]):
-    if credentials.credentials != settings.auth_token:
+async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)]):
+    if credentials is None or credentials.credentials != settings.auth_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing token",
