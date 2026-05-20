@@ -35,6 +35,8 @@ from ..deps import _engine, current_user, identity_service
 from ..rate_limit import limiter
 from ..schemas import (
     LoginRequest,
+    PasswordResetConfirmRequest,
+    PasswordResetRequestRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
@@ -181,3 +183,38 @@ def logout(
 )
 def me(user: User = Depends(current_user)) -> UserResponse:
     return _user_to_response(user)
+
+
+# ── Password reset (pre-deploy checklist §2) ──────────────────────────────
+# Always-204 trên /request: không leak email registered/disabled. Service
+# branch in/out trên user-state, route đồng nhất response shape.
+
+
+@router.post(
+    "/password-reset/request",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+@limiter.limit(_settings.auth_password_reset_request_rate_limit)
+def password_reset_request(
+    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    body: PasswordResetRequestRequest,
+    identity: IdentityService = Depends(identity_service),
+) -> Response:
+    with _engine().begin() as conn:
+        identity.request_password_reset(conn, body.email)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/password-reset/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+@limiter.limit(_settings.auth_password_reset_confirm_rate_limit)
+def password_reset_confirm(
+    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    body: PasswordResetConfirmRequest,
+    identity: IdentityService = Depends(identity_service),
+) -> Response:
+    with _engine().begin() as conn:
+        identity.confirm_password_reset(conn, body.token, body.new_password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

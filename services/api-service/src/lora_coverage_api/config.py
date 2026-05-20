@@ -197,6 +197,91 @@ class Settings(BaseSettings):
         description="Thời gian lock (phút) sau khi vượt max_attempts.",
     )
 
+    # ── Password reset (pre-deploy checklist §2) ─────────────────────────
+    # TTL ngắn (30 phút) — link chỉ dùng được trong cửa sổ hẹp. Token
+    # single-use enforce ở SQL; xem migration 0016.
+    password_reset_ttl_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=1440,
+        description="TTL (phút) cho password reset token. Khuyến nghị 15-60.",
+    )
+    # Frontend URL template — `{token}` được replace bằng plaintext token.
+    # FE đọc query param `?reset=<token>` và mở ResetPassword form. Tách
+    # khỏi `webhook_base_url` vì 2 origin khác nhau (FE vs API).
+    password_reset_url_template: str = Field(
+        default="http://localhost:5173/?reset={token}",
+        description="Template URL trong email. {token} sẽ được thay bằng plaintext token.",
+    )
+    auth_password_reset_request_rate_limit: str = Field(
+        default="5/hour",
+        description="Rate limit cho POST /auth/password-reset/request per IP.",
+    )
+    auth_password_reset_confirm_rate_limit: str = Field(
+        default="10/hour",
+        description="Rate limit cho POST /auth/password-reset/confirm per IP.",
+    )
+
+    # ── SMTP (password reset mailer) ─────────────────────────────────────
+    # Empty host = NoOpMailer (dev: reset URL log ra console, không gửi).
+    # Production: validator dưới chặn empty + warn nếu from_email default.
+    smtp_host: str = Field(
+        default="",
+        description="SMTP server hostname. Empty = NoOpMailer (dev/test).",
+    )
+    smtp_port: int = Field(
+        default=587,
+        ge=1,
+        le=65535,
+        description="SMTP server port. 587 STARTTLS (Gmail/SES); 1025 dev mailpit.",
+    )
+    smtp_username: str = Field(
+        default="",
+        description="SMTP login username. Empty = unauthenticated (mailpit/local).",
+    )
+    smtp_password: str = Field(
+        default="",
+        description="SMTP login password.",
+    )
+    smtp_from_email: str = Field(
+        default="noreply@lora-coverage.local",
+        description="From: address. Production phải khớp domain verified ở provider.",
+    )
+    smtp_from_name: str = Field(
+        default="LoRa Coverage",
+        description="From: display name.",
+    )
+    smtp_use_starttls: bool = Field(
+        default=True,
+        description="STARTTLS upgrade sau khi connect. False cho local mailpit.",
+    )
+
+    # ── Coverage endpoint rate limits (per IP) ───────────────────────────
+    # Public read endpoints — không có auth gate nhưng compute đắt:
+    #   * /predict: ITU-R P.1812 + crc-covlib (~hundreds ms / call).
+    #   * /lookup:  geocode (external HTTP) + predict, SLO P95 < 3s.
+    #   * /batch:   ≤500 item × predict mỗi item → potential 8 phút CPU.
+    # Không decorator = unlimited; 1 IP loop endpoint = cloud bill / DoS.
+    #
+    # /batch cost-amplification tradeoff: limit count theo request, không theo
+    # item. Với cap 500 item/req: 1/min × 500 = 500 predict/min/IP (vẫn ~16×
+    # /predict). Cap thấp 1/min vì:
+    #   (a) UI BulkLookup là one-shot CSV upload, không cần liên tục.
+    #   (b) Cost symmetry thật sự cần per-item weighting (slowapi không support
+    #       native) hoặc auth-gated user quota — defer khi /batch require login.
+    coverage_predict_rate_limit: str = Field(
+        default="30/minute",
+        description="Rate limit cho POST /coverage/predict per IP.",
+    )
+    coverage_lookup_rate_limit: str = Field(
+        default="30/minute",
+        description="Rate limit cho POST /coverage/lookup per IP (geocode + predict).",
+    )
+    coverage_batch_rate_limit: str = Field(
+        default="1/minute",
+        description="Rate limit cho POST /coverage/batch per IP (≤500 item/req).",
+    )
+
     # ── Rate-limit storage (Chapter 4 §Distributed Environments) ─────────
     # Empty = in-memory per worker (dev / single-worker test). Production
     # PHẢI set redis://host:port/db để workers chia sẻ counter — nếu không
@@ -296,6 +381,30 @@ class Settings(BaseSettings):
                 "WEBHOOK_BASE_URL bắt buộc khi APP_ENV=production — FE cần "
                 "origin public-facing để build URL hiển thị cho user. "
                 "Đặt ví dụ: WEBHOOK_BASE_URL=https://api.example.com"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _smtp_required_in_prod(self) -> Settings:
+        # NoOpMailer trong production = silent failure khi user yêu cầu
+        # reset password (log only). Operator phải biết để wire SMTP thật.
+        if self.app_env == "production" and not self.smtp_host:
+            raise ValueError(
+                "SMTP_HOST bắt buộc khi APP_ENV=production — không có SMTP "
+                "thì password reset email không gửi được, user bị khoá ngoài. "
+                "Wire SES/Gmail SMTP hoặc set APP_ENV=development để dùng "
+                "NoOpMailer (log URL ra console)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _password_reset_url_template_valid(self) -> Settings:
+        # Lỗi typo "{tokeN}" → format silent-substitute không ra URL hợp lệ.
+        # Catch tại startup chứ không phải lúc user click link.
+        if "{token}" not in self.password_reset_url_template:
+            raise ValueError(
+                "PASSWORD_RESET_URL_TEMPLATE phải chứa placeholder '{token}'. "
+                "Ví dụ: https://app.example.com/?reset={token}"
             )
         return self
 

@@ -16,6 +16,7 @@ from ...domain.errors import AddressLookupErrorCode, PredictionErrorCode
 from ...domain.result import Err
 from ..deps import address_resolution, prediction_orchestrator
 from ..metrics import LOOKUP_LATENCY_SECONDS, LOOKUP_SLO_VIOLATIONS_TOTAL
+from ..rate_limit import limiter
 from ..schemas import (
     AddressLookupRequest,
     ConfidenceResponse,
@@ -32,6 +33,8 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/v1/coverage", tags=["coverage"])
 
+_settings = get_settings()
+
 
 @router.post(
     "/predict",
@@ -41,11 +44,13 @@ router = APIRouter(prefix="/api/v1/coverage", tags=["coverage"])
     responses={
         404: {"description": "Không có gateway phục vụ"},
         422: {"description": "Validation error"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
+@limiter.limit(_settings.coverage_predict_rate_limit)
 async def predict(
-    payload: PredictRequest,
     request: Request,
+    payload: PredictRequest,
     service: PredictionOrchestrator = Depends(prediction_orchestrator),
 ) -> PredictionResponse | JSONResponse:
     target = _build_target(
@@ -168,13 +173,14 @@ _ADDRESS_ERR_TO_STATUS = {
     responses={
         404: {"description": "Không tìm thấy địa chỉ hoặc không có gateway"},
         422: {"description": "Địa chỉ ngoài VN hoặc validation"},
-        429: {"description": "Geocoding rate-limited"},
+        429: {"description": "Rate limit exceeded hoặc geocoding rate-limited"},
         503: {"description": "Geocoding provider không khả dụng"},
     },
 )
+@limiter.limit(_settings.coverage_lookup_rate_limit)
 async def lookup(
-    payload: AddressLookupRequest,
     request: Request,
+    payload: AddressLookupRequest,
     geocoder: AddressResolution = Depends(address_resolution),
     service: PredictionOrchestrator = Depends(prediction_orchestrator),
 ) -> CoverageLookupResponse | JSONResponse:
@@ -265,9 +271,12 @@ async def lookup(
     summary="Bulk coverage lookup (≤500 items) — IoT/SI use case",
     responses={
         422: {"description": "Validation error (malformed batch)"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
+@limiter.limit(_settings.coverage_batch_rate_limit)
 async def lookup_batch(
+    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
     payload: CoverageBatchRequest,
     geocoder: AddressResolution = Depends(address_resolution),
     service: PredictionOrchestrator = Depends(prediction_orchestrator),

@@ -531,6 +531,11 @@ export function CoverageMap({ mode = "points" }) {
   const gatewaysRef = useRef(
     /** @type {import("../api/client.js").GatewayT[]} */ ([]),
   );
+  // Cache reverse-geocode kết quả theo gateway code để tránh gọi lại Nominatim
+  // mỗi lần user mở lại popup. Giá trị "" = đang tải, null = lỗi (đã fetch).
+  const gatewayAddressCacheRef = useRef(
+    /** @type {Map<string, string | null>} */ (new Map()),
+  );
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
   const initialPointsFilterRef = useRef(readPointsFilterUrlState());
@@ -1025,14 +1030,88 @@ export function CoverageMap({ mode = "points" }) {
           <line x1="9" y1="14" x2="15" y2="14"/>
         </g>
       </svg>`;
-      const popup = new maplibregl.Popup({ offset: 12 }).setHTML(
-        `<div style="font:12px/1.4 system-ui">
-           <div><strong>${g.code}</strong> — ${g.name}</div>
-           <div>${t.popup.gatewayTx}: ${g.tx_power_dbm} dBm, ${t.popup.gatewayGain} ${g.antenna_gain_dbi} dBi</div>
-           <div>${t.popup.gatewayAntenna}: ${g.antenna_height_m} m AGL</div>
-           <div>${t.popup.gatewayFreq}: ${g.frequency_mhz} MHz</div>
-         </div>`,
+      // g.code + g.name từ ChirpStack do user link → có thể chứa HTML (XSS).
+      // Build DOM bằng textContent, KHÔNG setHTML. Các field số (tx_power_dbm,
+      // antenna_*, frequency_mhz) đã validate ở schema backend nên dùng
+      // template string đặt qua textContent — không cần escape numeric.
+      const popupRoot = document.createElement("div");
+      popupRoot.style.cssText = "font:12px/1.4 system-ui";
+
+      const titleRow = document.createElement("div");
+      const codeStrong = document.createElement("strong");
+      codeStrong.textContent = g.code;
+      titleRow.appendChild(codeStrong);
+      titleRow.appendChild(document.createTextNode(` — ${g.name}`));
+      popupRoot.appendChild(titleRow);
+
+      const txRow = document.createElement("div");
+      txRow.textContent = `${t.popup.gatewayTx}: ${g.tx_power_dbm} dBm, ${t.popup.gatewayGain} ${g.antenna_gain_dbi} dBi`;
+      popupRoot.appendChild(txRow);
+
+      const antRow = document.createElement("div");
+      antRow.textContent = `${t.popup.gatewayAntenna}: ${g.antenna_height_m} m AGL`;
+      popupRoot.appendChild(antRow);
+
+      const freqRow = document.createElement("div");
+      freqRow.textContent = `${t.popup.gatewayFreq}: ${g.frequency_mhz} MHz`;
+      popupRoot.appendChild(freqRow);
+
+      // Address row — lazy fetch reverse-geocode khi popup mở lần đầu.
+      // Nominatim cho phép browser usage low-frequency, không cần API key.
+      // Gắn label + span riêng để chỉ update text khi fetch xong.
+      const addrRow = document.createElement("div");
+      addrRow.appendChild(
+        document.createTextNode(`${t.popup.gatewayAddress}: `),
       );
+      const addrValue = document.createElement("span");
+      addrRow.appendChild(addrValue);
+      popupRoot.appendChild(addrRow);
+
+      const applyAddress = (
+        /** @type {string | null | undefined} */ value,
+      ) => {
+        if (value === "") {
+          addrValue.textContent = t.popup.gatewayAddressLoading;
+          addrValue.style.color = "#666";
+        } else if (value == null) {
+          addrValue.textContent = t.popup.gatewayAddressError;
+          addrValue.style.color = "#a00";
+        } else {
+          addrValue.textContent = value;
+          addrValue.style.color = "";
+        }
+      };
+      applyAddress(gatewayAddressCacheRef.current.get(g.code));
+
+      const popup = new maplibregl.Popup({ offset: 12 }).setDOMContent(popupRoot);
+      popup.on("open", () => {
+        const cache = gatewayAddressCacheRef.current;
+        const cached = cache.get(g.code);
+        // undefined = chưa fetch bao giờ → trigger lazy fetch.
+        // "" (loading) / string (hit) / null (lỗi) → đã có state, skip.
+        if (cached !== undefined) return;
+        cache.set(g.code, "");
+        applyAddress("");
+        const url =
+          `https://nominatim.openstreetmap.org/reverse` +
+          `?format=json&zoom=18&addressdetails=1&accept-language=vi` +
+          `&lat=${encodeURIComponent(g.latitude)}` +
+          `&lon=${encodeURIComponent(g.longitude)}`;
+        fetch(url, { headers: { Accept: "application/json" } })
+          .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+          .then((data) => {
+            const name =
+              data && typeof data.display_name === "string"
+                ? data.display_name
+                : null;
+            cache.set(g.code, name);
+            applyAddress(name);
+          })
+          .catch(() => {
+            cache.set(g.code, null);
+            applyAddress(null);
+          });
+      });
       // anchor='bottom' → đáy SVG (tip teardrop) đặt đúng tại tọa độ gateway,
       // giống folium.Marker (Leaflet default behavior).
       const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })

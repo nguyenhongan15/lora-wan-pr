@@ -12,15 +12,18 @@
 //     mất successHint. User tự click link "Đã có tài khoản? Đăng nhập".
 
 import { useEffect, useState } from "react";
+import { ForgotPassword } from "./ForgotPassword.jsx";
 import { LoginPage } from "./LoginPage.jsx";
 import { RegisterPage } from "./RegisterPage.jsx";
 import { strings } from "../strings.js";
 
 /**
- * @param {{ isOpen: boolean, onClose: () => void, initialMode?: "login" | "register" }} props
+ * @param {{ isOpen: boolean, onClose: () => void, initialMode?: "login" | "register" | "forgot" }} props
  */
 export function AuthModal({ isOpen, onClose, initialMode = "login" }) {
-  const [mode, setMode] = useState(/** @type {"login" | "register"} */ (initialMode));
+  const [mode, setMode] = useState(
+    /** @type {"login" | "register" | "forgot"} */ (initialMode),
+  );
   const tHeader = strings.auth.header;
 
   // Reset mode mỗi lần mở (không giữ state cũ giữa các lần mở/đóng).
@@ -68,13 +71,18 @@ export function AuthModal({ isOpen, onClose, initialMode = "login" }) {
           </svg>
         </button>
 
-        {mode === "login" ? (
+        {mode === "login" && (
           <LoginPage
             onSwitchToRegister={() => setMode("register")}
+            onSwitchToForgot={() => setMode("forgot")}
             onSuccess={onClose}
           />
-        ) : (
+        )}
+        {mode === "register" && (
           <RegisterPage onSwitchToLogin={() => setMode("login")} />
+        )}
+        {mode === "forgot" && (
+          <ForgotPassword onSwitchToLogin={() => setMode("login")} />
         )}
       </div>
     </div>

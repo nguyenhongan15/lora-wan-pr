@@ -40,12 +40,17 @@ def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings.log_level)
 
+    # Pre-deploy checklist §6 (custom error screens): production KHÔNG expose
+    # /docs + /openapi.json — leak schema nội bộ + giúp attacker fingerprint
+    # stack. Staging/development giữ enable để dev/QA xem. Override qua env
+    # nếu cần expose tạm (vd 1 sprint demo) — không khuyến khích.
+    _docs_enabled = settings.app_env != "production"
     app = FastAPI(
         title="LoRa Coverage Platform API",
         version="0.2.0",
-        docs_url="/docs",
+        docs_url="/docs" if _docs_enabled else None,
         redoc_url=None,
-        openapi_url="/openapi.json",
+        openapi_url="/openapi.json" if _docs_enabled else None,
     )
 
     # CORS — STRICTLY WHITELISTED ORIGINS (plan-auth-v2 nguyên tắc bảo mật).

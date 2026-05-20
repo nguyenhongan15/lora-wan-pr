@@ -7,6 +7,7 @@ canonicalisation, timing-attack mitigation.
 KHÔNG quản lý linked external sources — đó là Step 6 (`linking/`).
 """
 
+from ._mailer import Mailer, MailerError
 from .errors import (
     AccountLockedError,
     AdminRequiredError,
@@ -14,6 +15,9 @@ from .errors import (
     EmailAlreadyExistsError,
     IdentityError,
     InvalidCredentialsError,
+    PasswordResetTokenExpiredError,
+    PasswordResetTokenInvalidError,
+    PasswordResetTokenUsedError,
     RefreshTokenExpiredError,
     RefreshTokenInvalidError,
     RefreshTokenReusedError,
@@ -33,6 +37,11 @@ __all__ = [
     "IdentityError",
     "IdentityService",
     "InvalidCredentialsError",
+    "Mailer",
+    "MailerError",
+    "PasswordResetTokenExpiredError",
+    "PasswordResetTokenInvalidError",
+    "PasswordResetTokenUsedError",
     "RefreshTokenExpiredError",
     "RefreshTokenInvalidError",
     "RefreshTokenReusedError",

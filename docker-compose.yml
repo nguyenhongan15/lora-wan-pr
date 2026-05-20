@@ -34,6 +34,8 @@ services:
     # Dùng lại image của api-service (đã có alembic + deps). Mount thư mục
     # migrations từ host vì image runtime không copy nó vào. Context = repo
     # root vì Dockerfile cần workspace pyproject + vendor/crc_covlib wheel.
+    # Image tag PHẢI khớp api-service để alembic version code trùng app code.
+    image: lora-wan-api:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/api-service/Dockerfile
@@ -55,6 +57,12 @@ services:
   api-service:
     # Context = repo root vì Dockerfile cần workspace pyproject + sdk-python +
     # vendor/crc_covlib wheel (tool.uv.sources trỏ vào ../../vendor/...).
+    #
+    # Rollback strategy (pre-deploy checklist §9): tag image bằng git SHA
+    # (vd `IMAGE_TAG=$(git rev-parse --short HEAD)`). Compose dùng cùng tag
+    # cho build + run → image cũ vẫn trên disk → revert chỉ là set IMAGE_TAG
+    # lại SHA cũ + `docker compose up -d --no-build api-service`. Xem DEPLOY.md.
+    image: lora-wan-api:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/api-service/Dockerfile
@@ -102,10 +110,26 @@ services:
       # https://api.example.com); empty trong production → startup fail-fast.
       WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
       CHIRPSTACK_WEBHOOK_RATE_LIMIT: ${CHIRPSTACK_WEBHOOK_RATE_LIMIT:-600/minute}
+      COVERAGE_PREDICT_RATE_LIMIT: ${COVERAGE_PREDICT_RATE_LIMIT:-30/minute}
+      COVERAGE_LOOKUP_RATE_LIMIT: ${COVERAGE_LOOKUP_RATE_LIMIT:-30/minute}
+      COVERAGE_BATCH_RATE_LIMIT: ${COVERAGE_BATCH_RATE_LIMIT:-1/minute}
       # Centralized rate-limit store (Chapter 4 §Distributed Environments).
       # Empty = in-memory (dev / single-worker). Compose mặc định trỏ tới
       # service `cache` để 2 workers đếm chung counter, không bị divergence.
       RATE_LIMIT_STORAGE_URI: ${RATE_LIMIT_STORAGE_URI:-redis://cache:6379/0}
+      # Password reset (pre-deploy checklist §2). SMTP_HOST empty = NoOpMailer
+      # (dev console log); production validator fail-fast nếu empty.
+      PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
+      PASSWORD_RESET_URL_TEMPLATE: ${PASSWORD_RESET_URL_TEMPLATE:-http://localhost:5173/?reset={token}}
+      AUTH_PASSWORD_RESET_REQUEST_RATE_LIMIT: ${AUTH_PASSWORD_RESET_REQUEST_RATE_LIMIT:-5/hour}
+      AUTH_PASSWORD_RESET_CONFIRM_RATE_LIMIT: ${AUTH_PASSWORD_RESET_CONFIRM_RATE_LIMIT:-10/hour}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-noreply@lora-coverage.local}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-LoRa Coverage}
+      SMTP_USE_STARTTLS: ${SMTP_USE_STARTTLS:-true}
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro

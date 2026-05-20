@@ -322,6 +322,24 @@ class TokenResponse(BaseModel):
     expires_at: datetime
 
 
+# ── Password reset (pre-deploy checklist §2) ──────────────────────────────
+
+
+class PasswordResetRequestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    email: str = Field(..., min_length=3, max_length=320, pattern=_EMAIL_PATTERN)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # 43-char base64url token = secrets.token_urlsafe(32). Pattern check
+    # shape để 422 fast trên junk input thay vì tốn DB query.
+    token: str = Field(..., min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_\-]+$")
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 # ── Linking — me/sources (plan-auth-v1 §3.3) ──────────────────────────────
 
 

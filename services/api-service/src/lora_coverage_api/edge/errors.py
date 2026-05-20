@@ -11,6 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ApplicationError
+from ..application.identity import MailerError
 
 
 def _trace_id_of(request: Request) -> str:
@@ -99,6 +100,24 @@ def register_error_handlers(app: FastAPI) -> None:
                 "retry_after_seconds": retry_after,
             },
             headers={"Retry-After": str(retry_after)},
+        )
+
+    @app.exception_handler(MailerError)
+    async def on_mailer_error(request: Request, exc: MailerError) -> JSONResponse:
+        # SMTP fail = service-degraded; KHÔNG leak host/auth detail trong body.
+        # Generic 503 đủ để FE retry/báo user.
+        return JSONResponse(
+            status_code=503,
+            media_type="application/problem+json",
+            content={
+                "type": "about:blank",
+                "title": "Mailer Unavailable",
+                "status": 503,
+                "detail": "Không gửi được email. Vui lòng thử lại sau.",
+                "instance": str(request.url.path),
+                "code": "mailer_unavailable",
+                "traceId": _trace_id_of(request),
+            },
         )
 
     @app.exception_handler(RequestValidationError)

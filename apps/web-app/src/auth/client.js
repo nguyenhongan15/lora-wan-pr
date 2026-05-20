@@ -33,6 +33,15 @@ export const LoginRequest = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const PasswordResetRequestRequest = z.object({
+  email: z.string().min(3).max(320),
+});
+
+export const PasswordResetConfirmRequest = z.object({
+  token: z.string().min(32).max(128),
+  new_password: z.string().min(8).max(128),
+});
+
 export const TokenResponse = z.object({
   access_token: z.string(),
   token_type: z.literal("bearer"),
@@ -195,6 +204,49 @@ export async function bootstrap() {
   const user = User.parse(await meRes.json());
   setSession(token.access_token, user);
   return user;
+}
+
+/**
+ * POST /api/v1/auth/password-reset/request — fire-and-forget.
+ *
+ * Backend always-204: không leak email registered/disabled. UI hiển thị
+ * cùng confirmation message dù email có tồn tại hay không.
+ *
+ * @param {{ email: string }} req
+ * @returns {Promise<void>}
+ */
+export async function requestPasswordReset(req) {
+  const parsed = PasswordResetRequestRequest.parse(req);
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/password-reset/request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(parsed),
+  });
+  // 204 = thành công; 429 = rate limit; 422 = email shape sai (Zod catch
+  // trước). 4xx khác chỉ ApiError, không có 2xx nào ngoài 204.
+  if (!res.ok) await _throwProblem(res);
+}
+
+/**
+ * POST /api/v1/auth/password-reset/confirm — single-use, kick toàn bộ phiên.
+ *
+ * Sau confirm: backend revoke tất cả refresh tokens; FE phải clear() store
+ * và yêu cầu user login lại với password mới.
+ *
+ * @param {{ token: string, new_password: string }} req
+ * @returns {Promise<void>}
+ */
+export async function confirmPasswordReset(req) {
+  const parsed = PasswordResetConfirmRequest.parse(req);
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/password-reset/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(parsed),
+  });
+  if (!res.ok) await _throwProblem(res);
+  // Mọi session hiện tại của user này đã bị revoke ở backend → clear local
+  // store nếu trùng user. Đơn giản nhất là clear vô điều kiện — UX an toàn.
+  clear();
 }
 
 /**

@@ -16,12 +16,17 @@ import { ApiError, login } from "./client.js";
 import { strings } from "../strings.js";
 
 const t = strings.auth.login;
+const tForgot = strings.auth.forgot;
 const tErr = strings.auth.errors;
 
 /**
- * @param {{ onSwitchToRegister: () => void, onSuccess?: () => void }} props
+ * @param {{
+ *   onSwitchToRegister: () => void,
+ *   onSwitchToForgot?: () => void,
+ *   onSuccess?: () => void,
+ * }} props
  */
-export function LoginPage({ onSwitchToRegister, onSuccess }) {
+export function LoginPage({ onSwitchToRegister, onSwitchToForgot, onSuccess }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -112,13 +117,24 @@ export function LoginPage({ onSwitchToRegister, onSuccess }) {
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onSwitchToRegister}
-        className="block w-full text-center text-sm text-slate-600 underline hover:text-slate-900"
-      >
-        {t.switchToRegister}
-      </button>
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={onSwitchToRegister}
+          className="block w-full text-center text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t.switchToRegister}
+        </button>
+        {onSwitchToForgot && (
+          <button
+            type="button"
+            onClick={onSwitchToForgot}
+            className="block w-full text-center text-sm text-slate-500 underline hover:text-slate-900"
+          >
+            {tForgot.linkFromLogin}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

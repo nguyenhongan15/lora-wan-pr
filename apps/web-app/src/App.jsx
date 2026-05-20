@@ -5,6 +5,7 @@ import { AdminPage } from "./admin/AdminPage.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
+import { ResetPassword } from "./auth/ResetPassword.jsx";
 import { getUser, subscribe } from "./auth/store.js";
 import { bootstrap, logout } from "./auth/client.js";
 import { SourcesPage } from "./sources/SourcesPage.jsx";
@@ -12,10 +13,26 @@ import { strings } from "./strings.js";
 
 /** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin" | "sources" | "adminPanel"} Tab */
 
+/**
+ * Đọc `?reset=<token>` từ URL ở thời điểm App mount. Không subscribe — token
+ * chỉ cần một lần để render ResetPassword. Sau khi user click "Đăng nhập"
+ * (onDone), App push history mới và bỏ qua query.
+ *
+ * Trả empty-string nếu URL có `?reset=` nhưng giá trị rỗng → ResetPassword
+ * render fallback "Link không hợp lệ". Trả `null` nếu không có param.
+ */
+function _readResetTokenFromUrl() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("reset")) return null;
+  return params.get("reset") ?? "";
+}
+
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
   const [authOpen, setAuthOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [resetToken, setResetToken] = useState(_readResetTokenFromUrl);
   const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
   const tHeader = strings.auth.header;
@@ -23,11 +40,16 @@ export function App() {
   // App mount → rehydrate session từ HttpOnly cookie (auth v2). Nếu cookie
   // còn valid, POST /auth/refresh + GET /me restore in-memory token + user.
   // Cookie hết hạn / bị revoke → bootstrap trả null, user vẫn logged-out.
+  //
+  // Skip bootstrap khi đang ở reset flow — user vào từ email, không nên có
+  // session sẵn (đặt lại pass = re-login). Backend cũng sẽ revoke session
+  // sau confirm; bootstrap chạy lúc đó sẽ no-op vì cookie đã invalid.
   useEffect(() => {
+    if (resetToken !== null) return;
     bootstrap().catch(() => {
       // Lỗi mạng / parse: coi như chưa login, không show banner — silent.
     });
-  }, []);
+  }, [resetToken]);
 
   // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin. Khi điều
   // kiện không còn (logout / token expire / admin bị demote giữa session)
@@ -37,6 +59,26 @@ export function App() {
     if (!user && tab === "sources") setTab("map");
     if (!user?.is_admin && tab === "adminPanel") setTab("map");
   }, [user, tab]);
+
+  // Reset mode: render full-screen, không render app chính. Sau khi user xong
+  // (success → click "Đăng nhập" hoặc cancel) → clear param + state, mở
+  // AuthModal login. Đặt SAU mọi useState/useEffect để không vi phạm
+  // rules-of-hooks (early-return phải sau hooks).
+  if (resetToken !== null) {
+    return (
+      <ResetPassword
+        token={resetToken || null}
+        onDone={() => {
+          // Clear `?reset=` khỏi URL mà không reload (replaceState giữ history).
+          if (typeof window !== "undefined") {
+            window.history.replaceState({}, "", window.location.pathname);
+          }
+          setResetToken(null);
+          setAuthOpen(true);
+        }}
+      />
+    );
+  }
 
   function onAvatarClick() {
     if (user) setMenuOpen((o) => !o);

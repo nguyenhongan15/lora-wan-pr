@@ -21,7 +21,8 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine, text
 
-from . import _passwords, _refresh, _tokens
+from . import _passwords, _refresh, _reset, _tokens
+from ._mailer import Mailer
 from .errors import (
     AccountLockedError,
     EmailAlreadyExistsError,
@@ -105,6 +106,22 @@ _UPDATE_LOGIN_SUCCESS = text("""
     WHERE id = :user_id
 """)
 
+_UPDATE_PASSWORD = text("""
+    UPDATE auth.users
+    SET password_hash = :password_hash,
+        failed_login_count = 0,
+        locked_until = NULL
+    WHERE id = :user_id
+""")
+
+# Revoke toàn bộ refresh token chưa revoked của user — kick mọi device sau
+# khi reset password. Mitigate scenario attacker đã cầm refresh cookie cũ.
+_REVOKE_ALL_USER_REFRESH = text("""
+    UPDATE auth.refresh_tokens
+    SET revoked = true, revoked_at = now()
+    WHERE user_id = :user_id AND revoked = false
+""")
+
 
 def _canonical_email(email: str) -> str:
     return email.strip().lower()
@@ -120,6 +137,9 @@ class IdentityService:
         refresh_ttl_days: int,
         lockout_max_attempts: int,
         lockout_window_minutes: int,
+        mailer: Mailer,
+        password_reset_ttl_minutes: int,
+        password_reset_url_template: str,
     ) -> None:
         # `engine` cần thiết cho inner write transactions của login-failure
         # counter (plan-auth-v2). Route mở outer `engine.begin()` rồi raise
@@ -131,6 +151,11 @@ class IdentityService:
         self._refresh_ttl_days = refresh_ttl_days
         self._lockout_max_attempts = lockout_max_attempts
         self._lockout_window_minutes = lockout_window_minutes
+        self._mailer = mailer
+        self._password_reset_ttl_minutes = password_reset_ttl_minutes
+        # Template format: "{frontend_base_url}/?reset={token}". Format string
+        # đơn giản — caller chỉ chèn token. Validate khi construct settings.
+        self._password_reset_url_template = password_reset_url_template
 
     # ── public interface ──────────────────────────────────────────────────
 
@@ -282,6 +307,72 @@ class IdentityService:
         nên kick các device khác.
         """
         _refresh.revoke(conn, presented_refresh_token)
+
+    def request_password_reset(self, conn: Connection, email: str) -> None:
+        """Request reset link cho email. Always-200 từ phía route (no enum).
+
+        Behavior:
+          * Email tồn tại + active → issue token + send mail.
+          * Email tồn tại + disabled → NO-OP (không gửi mail; tránh leak
+            disabled status + tránh user disable nghĩ là reset được).
+          * Email không tồn tại → NO-OP.
+
+        Route handler luôn trả 204 bất kể nhánh nào → caller không enumerate
+        được email registered. Pre-deploy checklist §2 + §5 (no info leak).
+
+        Mailer raise MailerError → propagate; route trả 503. Token đã được
+        ghi DB trước khi gửi (commit ở outer txn), retry user sẽ invalidate
+        và issue token mới — không có "ghost token" do mail fail.
+        """
+        canonical = _canonical_email(email)
+        row = conn.execute(_SELECT_USER_BY_EMAIL, {"email": canonical}).one_or_none()
+        if row is None or row.disabled:
+            return
+
+        issued = _reset.issue(
+            conn,
+            row.id,
+            ttl_minutes=self._password_reset_ttl_minutes,
+        )
+        reset_url = self._password_reset_url_template.format(token=issued.token)
+        # Gửi mail sau khi token đã ghi (cùng outer txn). Nếu mail raise,
+        # route bắt → outer rollback → token cũng bị xoá. Consistent state.
+        self._mailer.send_password_reset(
+            canonical,
+            reset_url=reset_url,
+            expires_in_minutes=self._password_reset_ttl_minutes,
+        )
+
+    def confirm_password_reset(
+        self,
+        conn: Connection,
+        presented_token: str,
+        new_password: str,
+    ) -> None:
+        """Validate token + đổi password + revoke mọi refresh token của user.
+
+        Raises:
+            PasswordResetTokenInvalidError / ExpiredError / UsedError
+            UserDisabledError: user đã bị disable sau khi request token.
+
+        Side effect: tất cả phiên đăng nhập hiện hữu của user bị revoke —
+        force re-login mọi device sau reset. Mitigate stolen-cookie scenario.
+        """
+        user_id = _reset.consume(conn, presented_token)
+        # Refetch user để check disabled (admin có thể disable giữa lúc user
+        # request reset và lúc confirm). Cũng đảm bảo user còn tồn tại.
+        user_row = conn.execute(_SELECT_USER_BY_ID, {"user_id": user_id}).one_or_none()
+        if user_row is None:
+            raise InvalidCredentialsError("User không tồn tại")
+        if user_row.disabled:
+            raise UserDisabledError("Tài khoản đã bị vô hiệu hoá")
+
+        password_hash = _passwords.hash_password(new_password)
+        conn.execute(
+            _UPDATE_PASSWORD,
+            {"user_id": user_id, "password_hash": password_hash},
+        )
+        conn.execute(_REVOKE_ALL_USER_REFRESH, {"user_id": user_id})
 
     def _issue_session(
         self,

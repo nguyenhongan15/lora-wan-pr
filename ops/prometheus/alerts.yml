@@ -1,0 +1,162 @@
+# ──────────────────────────────────────────────────────────────────────
+# Prometheus alert rules — api-service (lora-wan-api)
+#
+# Metric source: services/api-service/src/lora_coverage_api/edge/metrics.py
+# 4 golden signals: traffic (http_requests_total), errors (status=~"5.."),
+# latency (http_request_duration_seconds histogram), saturation
+# (http_requests_in_flight gauge) + F2 SLO (lookup_latency_seconds).
+#
+# Severity convention:
+#   - page   → wake oncall (5xx spike, SLO budget burn).
+#   - ticket → next business day (latency drift, saturation soft signal).
+#
+# Wire-up: xem DEPLOY.md §Monitoring.
+# ──────────────────────────────────────────────────────────────────────
+
+groups:
+  - name: api-service-errors
+    interval: 30s
+    rules:
+      - alert: ApiHigh5xxRate
+        # >2% 5xx trong 5m sustained — không spike thoáng qua. Tránh
+        # false positive khi traffic thấp: WHERE clause loại trừ window
+        # < 1 rps tổng (numerator/denominator nhiễu khi N nhỏ).
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.02
+          and
+          sum(rate(http_requests_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: page
+          service: api-service
+        annotations:
+          summary: "5xx rate >2% trên api-service (5m sustained)"
+          description: |
+            Tỷ lệ 5xx vượt 2% trong 5 phút. Check log structlog
+            (trace_id) + Sentry/error tracker. Nếu mới deploy →
+            rollback ngay (DEPLOY.md §Rollback).
+
+      - alert: ApiAny5xxBurst
+        # Burst guard: bất kỳ 5xx nào trong 1m → 30s ack window.
+        # Mục đích: bắt deploy mới broken trước khi rate alert kích.
+        expr: |
+          sum(increase(http_requests_total{status=~"5.."}[1m])) > 5
+        for: 1m
+        labels:
+          severity: ticket
+          service: api-service
+        annotations:
+          summary: ">5 lỗi 5xx trong 1 phút"
+          description: |
+            Burst lỗi 5xx — có thể là deploy mới hoặc downstream
+            (DB / Valkey / ChirpStack webhook) đang failing.
+
+  - name: api-service-latency
+    interval: 30s
+    rules:
+      - alert: ApiGenericP95High
+        # P95 chung > 1s sustained 10m — early warning trước khi
+        # vi phạm SLO /lookup 3s. histogram_quantile cần buckets
+        # đủ dày quanh threshold; xem buckets trong metrics.py.
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1.0
+        for: 10m
+        labels:
+          severity: ticket
+          service: api-service
+        annotations:
+          summary: "P95 latency >1s (10m sustained)"
+          description: |
+            Latency P95 drift cao. Drill-down theo path để tìm
+            endpoint chậm: histogram_quantile by (path).
+
+      - alert: LookupSloP95Violation
+        # F2 SLO: /coverage/lookup P95 < 3s end-to-end. Vi phạm
+        # 10m sustained → page. Bucket cap 6s nên P95 > 3s vẫn
+        # đo được chính xác (không bị clip về +Inf).
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(lookup_latency_seconds_bucket[5m]))
+          ) > 3.0
+        for: 10m
+        labels:
+          severity: page
+          service: api-service
+          slo: f2-lookup
+        annotations:
+          summary: "F2 /coverage/lookup P95 > 3s — SLO violation"
+          description: |
+            SLO budget cho lookup là P95 < 3s. Vi phạm sustained.
+            Check provider breakdown: lookup_latency_seconds_bucket
+            by (provider). Geocode (vietmap/goong/nominatim) thường
+            là root cause nếu provider != postgres-cache.
+
+      - alert: LookupSloErrorBudgetBurn
+        # SLO violations counter — error budget burn fast.
+        # >5%/h request lookup vi phạm SLO → page.
+        expr: |
+          (
+            sum(rate(lookup_slo_violations_total[1h]))
+            /
+            sum(rate(lookup_latency_seconds_count[1h]))
+          ) > 0.05
+          and
+          sum(rate(lookup_latency_seconds_count[1h])) > 0.01
+        for: 15m
+        labels:
+          severity: page
+          service: api-service
+          slo: f2-lookup
+        annotations:
+          summary: "F2 lookup SLO error budget burn >5%/h"
+          description: |
+            Hơn 5% request /coverage/lookup vượt budget SLO trong
+            1h gần nhất. Nếu burn rate tiếp tục → exhaust monthly
+            budget trong ~ngày. Investigate provider + DB.
+
+  - name: api-service-saturation
+    interval: 30s
+    rules:
+      - alert: ApiInFlightSaturation
+        # Single VPS, uvicorn --workers 2 (xem docker-compose.yml).
+        # FastAPI async → 1 worker handle hàng chục in-flight ok,
+        # nhưng > 50 sustained = downstream blocking (DB pool /
+        # external HTTP). Threshold điều chỉnh khi production thật
+        # đo được baseline.
+        expr: http_requests_in_flight > 50
+        for: 5m
+        labels:
+          severity: ticket
+          service: api-service
+        annotations:
+          summary: "In-flight requests >50 (5m sustained)"
+          description: |
+            Saturation cao. Thường do DB pool exhausted hoặc
+            external HTTP (geocode / ChirpStack) chậm. Check
+            pool config + p95 by path để tìm endpoint nghẽn.
+
+  - name: api-service-availability
+    interval: 30s
+    rules:
+      - alert: ApiServiceDown
+        # Scrape failed 2 lần liên tiếp = process down hoặc
+        # /metrics block. up{} = 0 khi target unreachable.
+        expr: up{job="api-service"} == 0
+        for: 2m
+        labels:
+          severity: page
+          service: api-service
+        annotations:
+          summary: "api-service /metrics scrape failed"
+          description: |
+            Prometheus không scrape được /metrics > 2m. Container
+            down, healthcheck fail, hoặc network. Check
+            `docker compose ps` + `docker logs lora-wan-api`.

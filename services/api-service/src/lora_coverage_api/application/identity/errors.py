@@ -110,3 +110,29 @@ class RefreshTokenReusedError(IdentityError):
 
     http_status = 401
     code = "refresh_reused"
+
+
+# ── Password reset errors (pre-deploy checklist §2) ────────────────────────
+# 400 cho cả 3 — frontend treat đồng nhất "link hỏng, request lại". Phân
+# biệt qua `code` để hiển thị message cụ thể (hết hạn vs đã dùng vs sai).
+
+
+class PasswordResetTokenInvalidError(IdentityError):
+    """Reset token không tồn tại hoặc malformed."""
+
+    http_status = 400
+    code = "password_reset_invalid"
+
+
+class PasswordResetTokenExpiredError(IdentityError):
+    """Reset token quá expires_at (TTL ~30 phút)."""
+
+    http_status = 400
+    code = "password_reset_expired"
+
+
+class PasswordResetTokenUsedError(IdentityError):
+    """Reset token đã được consume — single-use enforced."""
+
+    http_status = 400
+    code = "password_reset_used"

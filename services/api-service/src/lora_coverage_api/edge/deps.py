@@ -22,6 +22,7 @@ from ..application.identity import (
     AdminRequiredError,
     IdentityService,
     InvalidCredentialsError,
+    Mailer,
     User,
 )
 from ..application.itu.model import Stage1ItuModel
@@ -45,6 +46,7 @@ from ..infrastructure.gateway_directory_pg import PgGatewayDirectory
 from ..infrastructure.goong_client import GoongHttpClient
 from ..infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
 from ..infrastructure.nominatim_client import NominatimHttpClient
+from ..infrastructure.smtp_mailer import NoOpMailer, SmtpMailer
 from ..infrastructure.stage2_client import Stage2Client
 from ..infrastructure.survey_repository_pg import PgSurveyRepository
 from ..infrastructure.vietmap_client import VietmapHttpClient
@@ -180,6 +182,23 @@ def address_resolution() -> AddressResolution:
 
 
 @lru_cache(maxsize=1)
+def _mailer() -> Mailer:
+    """SmtpMailer khi `smtp_host` set; NoOpMailer khi rỗng (dev)."""
+    s = _settings()
+    if not s.smtp_host:
+        return NoOpMailer()
+    return SmtpMailer(
+        host=s.smtp_host,
+        port=s.smtp_port,
+        username=s.smtp_username or None,
+        password=s.smtp_password or None,
+        from_email=s.smtp_from_email,
+        from_name=s.smtp_from_name,
+        use_starttls=s.smtp_use_starttls,
+    )
+
+
+@lru_cache(maxsize=1)
 def _identity_service() -> IdentityService:
     s = _settings()
     return IdentityService(
@@ -189,6 +208,9 @@ def _identity_service() -> IdentityService:
         refresh_ttl_days=s.refresh_ttl_days,
         lockout_max_attempts=s.login_lockout_max_attempts,
         lockout_window_minutes=s.login_lockout_window_minutes,
+        mailer=_mailer(),
+        password_reset_ttl_minutes=s.password_reset_ttl_minutes,
+        password_reset_url_template=s.password_reset_url_template,
     )
 
 

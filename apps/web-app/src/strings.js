@@ -57,6 +57,9 @@ export const strings = {
       gatewayGain: "gain",
       gatewayAntenna: "Antenna",
       gatewayFreq: "Freq",
+      gatewayAddress: "Địa chỉ",
+      gatewayAddressLoading: "Đang tải địa chỉ…",
+      gatewayAddressError: "Không lấy được địa chỉ",
       searchStatus: "Trạng thái",
       // Sai số (1σ ~68% CI) + Độ chính xác (95% CI ~1.96σ) — tính từ σ²
       // shadow fading của môi trường (urban σ=8, suburban σ=6, rural σ=4).
@@ -490,6 +493,34 @@ export const strings = {
       submitPending: "Đang tạo tài khoản…",
       switchToLogin: "Đã có tài khoản? Đăng nhập",
       successHint: "Tài khoản đã tạo — đăng nhập để tiếp tục.",
+    },
+    forgot: {
+      title: "Quên mật khẩu",
+      subtitle: "Nhập email — chúng tôi sẽ gửi link đặt lại mật khẩu (TTL 30 phút).",
+      emailLabel: "Email",
+      submit: "Gửi link đặt lại",
+      submitPending: "Đang gửi…",
+      // Always-200 message: không xác nhận email tồn tại. Nội dung ánh xạ
+      // backend response (204 trên cả 2 nhánh user-exists vs not-exists).
+      successHint:
+        "Nếu email này thuộc về một tài khoản, link đặt lại đã được gửi. Kiểm tra hộp thư (và spam).",
+      switchToLogin: "Nhớ mật khẩu? Đăng nhập",
+      // Link "Quên mật khẩu?" hiển thị dưới form Login.
+      linkFromLogin: "Quên mật khẩu?",
+    },
+    reset: {
+      title: "Đặt lại mật khẩu",
+      subtitle:
+        "Nhập mật khẩu mới. Sau khi đặt lại, mọi phiên đăng nhập hiện tại sẽ bị thu hồi.",
+      newPasswordLabel: "Mật khẩu mới",
+      submit: "Đặt lại mật khẩu",
+      submitPending: "Đang đặt lại…",
+      successHint: "Đã đặt lại mật khẩu. Vui lòng đăng nhập với mật khẩu mới.",
+      goToLogin: "Đăng nhập",
+      // Hiển thị khi URL không có token (user mở /?reset= rỗng) — defensive.
+      missingTokenTitle: "Link không hợp lệ",
+      missingTokenDetail:
+        "URL không có token đặt lại. Yêu cầu lại link đặt lại mật khẩu.",
     },
     header: {
       /** @param {string} email */
