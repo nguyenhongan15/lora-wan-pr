@@ -16,7 +16,7 @@ COPY services/ml-service/reference_wireless /build/services/ml-service/reference
 # Add other workspace members if needed for dependency resolution
 COPY services/api-service/pyproject.toml /build/services/api-service/pyproject.toml
 COPY services/worker-service/pyproject.toml /build/services/worker-service/pyproject.toml
-COPY packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.toml
+packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.toml
 
 ENV UV_LINK_MODE=copy
 RUN uv sync --package lora-ml-predict --no-dev --frozen --no-editable \
