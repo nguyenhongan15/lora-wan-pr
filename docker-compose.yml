@@ -26,12 +26,40 @@ services:
     container_name: lora-wan-db
     restart: unless-stopped
     logging: *default-logging
+    # Postgres tuning cho VPS 8GB (Hetzner CPX31 baseline). Default image
+    # giả định container 1GB → shared_buffers=128MB phí 98% RAM. Override
+    # qua command flags (image hỗ trợ `-c key=value`):
+    #   * shared_buffers 2GB     — ~25% RAM, sweet spot Postgres docs.
+    #   * effective_cache_size 6GB — hint planner về OS page cache.
+    #   * work_mem 20MB          — sort/hash GiST không spill disk; 50 conn
+    #                              × 20MB max ~1GB, an toàn.
+    #   * maintenance_work_mem 256MB — VACUUM/REINDEX/index build nhanh.
+    #   * max_connections 100    — SQLAlchemy pool 20-30/worker × 2 workers
+    #                              vẫn đủ headroom cho psql admin.
+    # Override theo VPS khác: copy block này, đổi số theo RAM thật.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - work_mem=20MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=100
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lora_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}
       POSTGRES_DB: ${POSTGRES_DB:-lora_coverage}
+    # Bind loopback only — Internet KHÔNG reach Postgres trực tiếp dù VPS có
+    # public IP. Dev local: psql -h localhost vẫn ok (loopback = localhost).
+    # Bỏ hẳn `ports:` khi deploy prod nếu không cần psql từ host nữa (chỉ
+    # gọi qua docker network từ api-service). Cú pháp "5432:5432" cũ =
+    # bind 0.0.0.0 → bot scan port 5432 brute-force pwd → mất DB.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - lora-wan-db-data:/home/postgres/pgdata/data
     healthcheck:
@@ -145,8 +173,13 @@ services:
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
+    # Bind loopback only — prod cần reverse proxy (nginx) trên host hoặc
+    # cùng compose forward 443/80 → 8000. Dev local: localhost:8000 vẫn ok.
+    # Cú pháp "8000:8000" cũ = bind 0.0.0.0 → ai có IP VPS đều gọi thẳng
+    # /metrics + bypass CORS/X-Forwarded-For của nginx → rate-limit per-IP
+    # đếm sai (mọi request thấy IP docker network).
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)\""]
       interval: 30s
