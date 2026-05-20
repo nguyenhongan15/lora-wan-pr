@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import Annotated
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     model_version: str = "stage2-stub-v0.1.0"
     # Set to False to simulate "no active model" (503)
     is_model_active: bool = True
+    model_path: str | None = Field(default=None, alias="LORA_ML_MODEL_PATH")
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -23,10 +25,40 @@ settings = Settings()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Placeholder for the loaded model
+model_artifact = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model_artifact
+    logger.info("ML service starting up...")
+    if settings.model_path and os.path.exists(settings.model_path):
+        try:
+            # Simulate model loading
+            logger.info(f"Attempting to load model from {settings.model_path}")
+            model_artifact = f"Loaded model from {settings.model_path}" # Placeholder for actual model object
+            settings.is_model_active = True
+            logger.info(f"Model {settings.model_version} loaded successfully from {settings.model_path}")
+        except Exception as e:
+            settings.is_model_active = False
+            logger.error(f"Failed to load model from {settings.model_path}: {e}")
+    else:
+        settings.is_model_active = False
+        if settings.model_path:
+            logger.warning(f"Model path not found: {settings.model_path}. Service will return 503.")
+        else:
+            logger.warning("LORA_ML_MODEL_PATH not set. Service will return 503.")
+
+    yield
+    logger.info("ML service shutting down...")
+    # Clean up resources if necessary
+    global model_artifact
+    model_artifact = None
+
 # --- App ---
 
-app = FastAPI(title="LoRa ML Prediction Service")
-security = HTTPBearer()
+app = FastAPI(title="LoRa ML Prediction Service", lifespan=lifespan)
+security = HTTPBearer(auto_error=False)
 
 class TargetSchema(BaseModel):
     latitude: float
