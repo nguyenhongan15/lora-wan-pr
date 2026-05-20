@@ -10,6 +10,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Workspace skeleton
 COPY pyproject.toml uv.lock /build/
 COPY services/ml-service/pyproject.toml /build/services/ml-service/pyproject.toml
+COPY services/ml-service/README.md /build/services/ml-service/
 COPY services/ml-service/src /build/services/ml-service/src
 # Add other workspace members if needed for dependency resolution
 COPY services/api-service/pyproject.toml /build/services/api-service/pyproject.toml

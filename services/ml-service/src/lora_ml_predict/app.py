@@ -2,8 +2,9 @@ import os
 import logging
 from typing import Annotated
 from contextlib import asynccontextmanager
+#from urllib.request import Request
 
-from fastapi import FastAPI, Depends, HTTPException, status, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,30 +31,29 @@ model_artifact = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model_artifact
+    # Initialisation de l'état
+    app.state.model = None
+    
     logger.info("ML service starting up...")
+    
     if settings.model_path and os.path.exists(settings.model_path):
         try:
-            # Simulate model loading
-            logger.info(f"Attempting to load model from {settings.model_path}")
-            model_artifact = f"Loaded model from {settings.model_path}" # Placeholder for actual model object
+            logger.info(f"Loading model from {settings.model_path}")
+            # Simulation du chargement
+            
             settings.is_model_active = True
-            logger.info(f"Model {settings.model_version} loaded successfully from {settings.model_path}")
+            app.state.model = "MOCK_MODEL_DATA" 
+            logger.info("Model loaded successfully")
         except Exception as e:
             settings.is_model_active = False
-            logger.error(f"Failed to load model from {settings.model_path}: {e}")
+            logger.error(f"Failed to load: {e}")
     else:
         settings.is_model_active = False
-        if settings.model_path:
-            logger.warning(f"Model path not found: {settings.model_path}. Service will return 503.")
-        else:
-            logger.warning("LORA_ML_MODEL_PATH not set. Service will return 503.")
+        logger.warning("No model path configured or file not found. Service will return 503.")
 
     yield
-    logger.info("ML service shutting down...")
-    # Clean up resources if necessary
-    global model_artifact
-    model_artifact = None
+    # Nettoyage
+    app.state.model = None
 
 # --- App ---
 
@@ -123,14 +123,18 @@ async def healthz():
 
 @app.post("/residual", response_model=PredictionResponse)
 async def predict_residual(
-    request: PredictionRequest,
+    request: Request,
+    payload: PredictionRequest,
     _auth: Annotated[None, Depends(verify_token)],
     _active: Annotated[None, Depends(check_model_active)]
 ):
     """
     POST /residual — per-target, used by point-prediction via api-service.
     """
-    # Placeholder: In a real implementation, feature engineering + model inference go here.
+    # Accès au modèle via l'état de l'application
+    model = request.app.state.model
+    
+    # Placeholder: Ici tu utiliseras ton objet 'model' pour l'inférence
     return PredictionResponse(
         residual_db=0.0,
         model_version=settings.model_version,
@@ -139,22 +143,25 @@ async def predict_residual(
 
 @app.post("/residuals/batch", response_model=BatchPredictionResponse)
 async def predict_residuals_batch(
-    request: BatchPredictionRequest,
+    request: Request,
+    payload: BatchPredictionRequest, # Renommé pour cohérence
     _auth: Annotated[None, Depends(verify_token)],
     _active: Annotated[None, Depends(check_model_active)]
 ):
     """
     POST /residuals/batch — bulk, for min-SF precompute.
     """
-    # Batch size limit check (optional but recommended)
-    if len(request.targets) > 5000:
-        logger.warning("Batch size too large: %d", len(request.targets))
-        # We could raise an error, but let's just process it for now or truncate.
+    # Accès au modèle via l'état de l'application
+    model = request.app.state.model
 
-    # Placeholder logic: return 0.0 residuals for all targets
+    # Batch size limit check
+    if len(payload.targets) > 5000:
+        logger.warning("Batch size too large: %d", len(payload.targets))
+
+    # Placeholder logic
     residuals = [
         BatchResidualItem(residual_db=0.0, ood=False)
-        for _ in request.targets
+        for _ in payload.targets
     ]
     
     return BatchPredictionResponse(
