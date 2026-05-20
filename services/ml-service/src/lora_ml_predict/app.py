@@ -131,10 +131,10 @@ async def predict_residual(
     """
     POST /residual — per-target, used by point-prediction via api-service.
     """
-    # Accès au modèle via l'état de l'application
+    # Accessing the model via the application status
     model = request.app.state.model
     
-    # Placeholder: Ici tu utiliseras ton objet 'model' pour l'inférence
+    # Placeholder: Here you will use your 'model' object for inference
     return PredictionResponse(
         residual_db=0.0,
         model_version=settings.model_version,
@@ -144,14 +144,14 @@ async def predict_residual(
 @app.post("/residuals/batch", response_model=BatchPredictionResponse)
 async def predict_residuals_batch(
     request: Request,
-    payload: BatchPredictionRequest, # Renommé pour cohérence
+    payload: BatchPredictionRequest, 
     _auth: Annotated[None, Depends(verify_token)],
     _active: Annotated[None, Depends(check_model_active)]
 ):
     """
     POST /residuals/batch — bulk, for min-SF precompute.
     """
-    # Accès au modèle via l'état de l'application
+    # Accessing the model via the application status
     model = request.app.state.model
 
     # Batch size limit check
