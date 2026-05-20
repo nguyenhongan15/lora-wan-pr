@@ -102,11 +102,22 @@ services:
       retries: 3
 
   # ── ml-service ────────────────────────────────────────────────────────
-  # Đang handoff cho dev ML mới. Folder `services/ml-service/` chỉ còn README +
-  # `reference_wireless/` (model XGBoost dev mới author trước khi join repo).
-  # (chỉ giữ làm reference, không deploy). api-service chạy Stage1-only —
-  # STAGE2_PREDICT_BASE_URL rỗng. Dev mới khi sẵn sàng sẽ tự thêm service block
-  # vào file này.
+  ml-service:
+    build:
+      context: .
+      dockerfile: services/ml-service/Dockerfile
+    container_name: lora-wan-ml
+    restart: unless-stopped
+    environment:
+      LORA_STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
   # Production: build static rồi serve qua Nginx.

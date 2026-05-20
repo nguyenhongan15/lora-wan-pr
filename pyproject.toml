@@ -25,6 +25,7 @@ dev = [
 members = [
     "services/api-service",
     "services/worker-service",
+    "services/ml-service",
     "packages/sdk-python",
 ]
 # services/ml-service đang trống — chờ dev ML mới setup pyproject.toml + source.
