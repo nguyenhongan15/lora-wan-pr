@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from contextlib import asynccontextmanager
 
 # from urllib.request import Request
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -88,6 +89,82 @@ def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
         return True
     return False
 
+
+# Placeholder for the loaded model
+model_artifact = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialisation de l'état
+    app.state.model = None
+
+    logger.info("ML service starting up...")
+
+    if settings.model_path and Path(settings.model_path).exists():
+        try:
+            logger.info(f"Loading model from {settings.model_path}")
+            # Simulation du chargement
+
+            settings.is_model_active = True
+            app.state.model = "MOCK_MODEL_DATA"
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            settings.is_model_active = False
+            logger.error(f"Failed to load: {e}")
+    else:
+        settings.is_model_active = False
+        logger.warning("No model path configured or file not found. Service will return 503.")
+
+    yield
+    # Nettoyage
+    app.state.model = None
+
+
+# --- OOD Logic ---
+
+
+def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
+    if not (settings.min_lat <= lat <= settings.max_lat):
+        return True
+    if not (settings.min_lon <= lon <= settings.max_lon):
+        return True
+    if not (settings.min_sf <= sf <= settings.max_sf):
+        return True
+    if not (settings.min_freq_mhz <= freq <= settings.max_freq_mhz):
+        return True
+    return False
+
+
+# Placeholder for the loaded model
+model_artifact = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model_artifact
+    logger.info("ML service starting up...")
+    if settings.model_path and os.path.exists(settings.model_path):
+        try:
+            # Simulate model loading
+            logger.info(f"Attempting to load model from {settings.model_path}")
+            model_artifact = f"Loaded model from {settings.model_path}" # Placeholder for actual model object
+            settings.is_model_active = True
+            logger.info(f"Model {settings.model_version} loaded successfully from {settings.model_path}")
+        except Exception as e:
+            settings.is_model_active = False
+            logger.error(f"Failed to load model from {settings.model_path}: {e}")
+    else:
+        settings.is_model_active = False
+        if settings.model_path:
+            logger.warning(f"Model path not found: {settings.model_path}. Service will return 503.")
+        else:
+            logger.warning("LORA_ML_MODEL_PATH not set. Service will return 503.")
+
+    yield
+    logger.info("ML service shutting down...")
+    # Clean up resources if necessary
+    global model_artifact
+    model_artifact = None
 
 # --- App ---
 
