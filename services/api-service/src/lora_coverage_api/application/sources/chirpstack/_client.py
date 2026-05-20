@@ -1,58 +1,73 @@
-"""HTTP client cho ChirpStack v4 REST API (private — chỉ adapter dùng).
+"""gRPC-web client cho ChirpStack v4 API (private — chỉ adapter dùng).
 
-API doc: https://www.chirpstack.io/docs/chirpstack/api/api.html
-REST gateway endpoints generated từ gRPC; auth via Bearer API key.
+ChirpStack v4 KHÔNG built-in REST API. Public deployments thường chỉ expose
+gRPC-web (UI dùng), không có companion `chirpstack-rest-api`. Adapter của
+ta vì thế gọi trực tiếp gRPC-web qua HTTP/1.1 POST với protobuf framing
+(xem `_grpc_web.GrpcWebClient`).
 
-Quyết định:
-  * Probe endpoint = GET /api/tenants?limit=1. Hoạt động với cả global key
-    (list all tenants) và tenant-scoped key (list tenant of token).
-    Alternative /api/internal/profile yêu cầu JWT người dùng — không hợp
-    cho API key.
-  * List gateways = GET /api/gateways?limit=N&offset=M[&tenantId=X].
-  * Map raw httpx error → SourceError subclasses; KHÔNG leak ra ngoài.
+Service paths:
+  /api.TenantService/List       — probe (auth check)
+  /api.GatewayService/List      — fetch gateways
+  /api.ApplicationService/List  — list applications (2-level pagination)
+  /api.DeviceService/List       — fetch devices (per application)
+
+Lý do KHÔNG giữ REST adapter cũ làm fallback: maintenance burden 2 đường
+đi cho cùng provider không justified — gRPC-web hoạt động với mọi
+ChirpStack v4 deployment, bao gồm cả cái có REST sidecar.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from chirpstack_api import api
 
-import httpx
-
-from ..errors import SourceAuthError, SourceFetchError, SourceUnreachableError
+from ._grpc_web import GrpcWebClient
 
 DEFAULT_TIMEOUT_S = 30.0
 
 
 class Client:
-    def __init__(self, base_url: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
-        self._http = httpx.Client(base_url=base_url, timeout=timeout_s)
+    def __init__(
+        self,
+        base_url: str,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        verify: bool = True,
+    ) -> None:
+        self._grpc = GrpcWebClient(base_url=base_url, timeout_s=timeout_s, verify=verify)
 
     def close(self) -> None:
-        self._http.close()
+        self._grpc.close()
 
-    def probe(self, token: str) -> None:
-        """GET /api/tenants?limit=1 — validate Bearer token.
+    def probe(self, token: str, *, tenant_id: str | None) -> None:
+        """Validate Bearer token bằng cách gọi đúng endpoint sẽ dùng sau khi
+        link.
 
-        Raises:
-            SourceAuthError: 401/403 (token sai/hết hạn/không đủ quyền)
-            SourceUnreachableError: network/timeout/5xx
-            SourceFetchError: response status khác lạ
+        Tenant-scoped API key (loại phổ biến — user tạo trong "Tenant API
+        Keys") KHÔNG có quyền `ListTenants` (cần global admin). Vì
+        `fetch_gateways`/`fetch_devices` đều yêu cầu `tenant_id`, probe
+        dùng chính `ListGateways(tenant_id, limit=1)` → vừa kiểm tra token
+        vừa kiểm tra tenant_id hợp lệ trong 1 round-trip.
+
+        Nếu user không cung cấp `tenant_id` → token bắt buộc phải là global
+        admin → fallback `ListTenants(limit=1)`.
         """
-        try:
-            resp = self._http.get(
-                "/api/tenants",
-                headers=_auth(token),
-                params={"limit": 1},
+        if tenant_id:
+            request = api.ListGatewaysRequest(tenant_id=tenant_id, limit=1, offset=0)
+            self._grpc.call(
+                service="api.GatewayService",
+                method="List",
+                request=request,
+                response_type=api.ListGatewaysResponse,
+                token=token,
             )
-        except httpx.RequestError as e:
-            raise SourceUnreachableError(f"probe network error: {e}") from e
-
-        if resp.status_code in (401, 403):
-            raise SourceAuthError(f"chirpstack rejected token ({resp.status_code})")
-        if resp.status_code >= 500:
-            raise SourceUnreachableError(f"chirpstack upstream {resp.status_code}")
-        if resp.status_code != 200:
-            raise SourceFetchError(f"probe unexpected {resp.status_code}: {resp.text[:200]}")
+        else:
+            request = api.ListTenantsRequest(limit=1, offset=0)
+            self._grpc.call(
+                service="api.TenantService",
+                method="List",
+                request=request,
+                response_type=api.ListTenantsResponse,
+                token=token,
+            )
 
     def list_gateways(
         self,
@@ -61,39 +76,66 @@ class Client:
         tenant_id: str | None,
         limit: int,
         offset: int,
-    ) -> dict[str, Any]:
-        """GET /api/gateways → {result: [...], totalCount: int}.
+    ) -> api.ListGatewaysResponse:
+        """ChirpStack v4 yêu cầu `tenant_id` cho list gateways.
 
-        Raises: same shape as probe(); 401 → SourceAuthError.
+        Tenant-scoped API key tự lọc — không truyền tenant_id sẽ trả empty
+        hoặc lỗi tuỳ build. Caller (adapter) đảm bảo tenant_id non-empty
+        cho path này.
         """
-        params: dict[str, Any] = {"limit": limit, "offset": offset}
-        if tenant_id:
-            params["tenantId"] = tenant_id
-        try:
-            resp = self._http.get(
-                "/api/gateways",
-                headers=_auth(token),
-                params=params,
-            )
-        except httpx.RequestError as e:
-            raise SourceUnreachableError(f"/api/gateways network error: {e}") from e
+        request = api.ListGatewaysRequest(
+            tenant_id=tenant_id or "",
+            limit=limit,
+            offset=offset,
+        )
+        return self._grpc.call(
+            service="api.GatewayService",
+            method="List",
+            request=request,
+            response_type=api.ListGatewaysResponse,
+            token=token,
+        )
 
-        if resp.status_code in (401, 403):
-            raise SourceAuthError(f"chirpstack rejected token ({resp.status_code})")
-        if resp.status_code >= 500:
-            raise SourceUnreachableError(f"chirpstack upstream {resp.status_code}")
-        if resp.status_code != 200:
-            raise SourceFetchError(
-                f"/api/gateways unexpected {resp.status_code}: {resp.text[:200]}"
-            )
-        try:
-            data = resp.json()
-        except ValueError as e:
-            raise SourceFetchError(f"/api/gateways non-JSON: {e}") from e
-        if not isinstance(data, dict):
-            raise SourceFetchError(f"/api/gateways expected object, got {type(data).__name__}")
-        return data
+    def list_applications(
+        self,
+        *,
+        token: str,
+        tenant_id: str | None,
+        limit: int,
+        offset: int,
+    ) -> api.ListApplicationsResponse:
+        """List applications trong tenant. Yêu cầu tenant_id."""
+        request = api.ListApplicationsRequest(
+            tenant_id=tenant_id or "",
+            limit=limit,
+            offset=offset,
+        )
+        return self._grpc.call(
+            service="api.ApplicationService",
+            method="List",
+            request=request,
+            response_type=api.ListApplicationsResponse,
+            token=token,
+        )
 
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    def list_devices(
+        self,
+        *,
+        token: str,
+        application_id: str,
+        limit: int,
+        offset: int,
+    ) -> api.ListDevicesResponse:
+        """List devices của 1 application."""
+        request = api.ListDevicesRequest(
+            application_id=application_id,
+            limit=limit,
+            offset=offset,
+        )
+        return self._grpc.call(
+            service="api.DeviceService",
+            method="List",
+            request=request,
+            response_type=api.ListDevicesResponse,
+            token=token,
+        )

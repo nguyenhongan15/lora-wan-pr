@@ -1,64 +1,89 @@
-"""ChirpStack JSON → records mapping (private).
+"""ChirpStack protobuf → records mapping (private).
 
-Gateway shape (v4 REST):
-  {
-    "gatewayId": "0102030405060708",   # EUI-64 hex
-    "name": "...",
-    "description": "...",
-    "location": {"latitude": 10.0, "longitude": 105.0, "altitude": 50.0,
-                 "source": "GPS", "accuracy": 5.0},
-    "tenantId": "...",
-    "createdAt": "...", "updatedAt": "...", "lastSeenAt": "...",
-  }
+Adapter chuyển từ REST sang gRPC-web (xem _client.py docstring), nên input
+mapping giờ là protobuf message types từ `chirpstack_api.api`:
 
-Một số deployment trả "id" thay cho "gatewayId"; accept cả 2.
-Skip gateway thiếu location hoặc lat/lon = 0 (gateway chưa có toạ độ).
+  api.GatewayListItem:
+    string gateway_id, string name, common.Location location,
+    google.protobuf.Timestamp last_seen_at, ...
+
+  api.DeviceListItem:
+    string dev_eui, string name, google.protobuf.Timestamp last_seen_at, ...
+
+Protobuf python attrs = snake_case. Timestamp WKT có `ToDatetime()` trả
+naive datetime UTC — ta gán tzinfo tường minh. Location sub-message luôn
+tồn tại trên wire (proto3 default = struct rỗng); skip khi lat=lon=0
+(placeholder "chưa cấu hình" — convention của ChirpStack UI).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timezone
 
-from ..base import GatewayRecord
+from chirpstack_api import api
+from google.protobuf.timestamp_pb2 import Timestamp
+
+from ..base import DeviceRecord, GatewayRecord
 
 
-def gateway_record(raw: dict[str, Any]) -> GatewayRecord | None:
-    eui = _opt_str(raw.get("gatewayId")) or _opt_str(raw.get("id"))
+def gateway_record(raw: api.GatewayListItem) -> GatewayRecord | None:
+    eui = (raw.gateway_id or "").strip()
     if not eui:
         return None
 
-    loc = raw.get("location")
-    if not isinstance(loc, dict):
-        return None
-    lat = _opt_float(loc.get("latitude"))
-    lon = _opt_float(loc.get("longitude"))
-    if lat is None or lon is None:
-        return None
+    # Proto3 message-typed field — luôn instantiate, kiểm tra qua lat/lon=0.
+    # Một số deployment đặt gateway chưa cấu hình location, ChirpStack UI
+    # cũng skip render những gateway đó.
+    loc = raw.location
+    lat = float(loc.latitude)
+    lon = float(loc.longitude)
     if lat == 0.0 and lon == 0.0:
-        return None  # placeholder toạ độ "chưa cấu hình"
+        return None
     if not -90.0 <= lat <= 90.0 or not -180.0 <= lon <= 180.0:
         return None
+
+    altitude = float(loc.altitude) if loc.altitude else None
 
     return GatewayRecord(
         external_id=eui,
         latitude=lat,
         longitude=lon,
-        altitude_m=_opt_float(loc.get("altitude")),
-        label=_opt_str(raw.get("name")),
+        altitude_m=altitude,
+        label=_opt_str(raw.name),
     )
 
 
-def _opt_float(v: Any) -> float | None:
-    if v is None:
+def device_record(raw: api.DeviceListItem) -> DeviceRecord | None:
+    """Map 1 DeviceListItem → DeviceRecord. Trả None nếu thiếu dev_eui.
+
+    `external_id` = `dev_eui` lowercased (canonical id ở ChirpStack); index
+    DB UNIQUE (source_type, external_id) → idempotent re-sync.
+    """
+    dev_eui = (raw.dev_eui or "").strip()
+    if not dev_eui:
         return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    dev_eui_lower = dev_eui.lower()
+    return DeviceRecord(
+        external_id=dev_eui_lower,
+        dev_eui=dev_eui_lower,
+        name=_opt_str(raw.name),
+        last_seen_at=_opt_ts(raw.last_seen_at),
+    )
 
 
-def _opt_str(v: Any) -> str | None:
+def _opt_ts(ts: Timestamp | None) -> datetime | None:
+    """Timestamp WKT → tz-aware UTC datetime. Trả None khi field chưa set
+    (seconds=nanos=0 — proto3 default cho message ZERO).
+    """
+    if ts is None:
+        return None
+    if ts.seconds == 0 and ts.nanos == 0:
+        return None
+    return ts.ToDatetime().replace(tzinfo=timezone.utc)
+
+
+def _opt_str(v: str | None) -> str | None:
     if v is None:
         return None
-    s = str(v).strip()
+    s = v.strip()
     return s or None

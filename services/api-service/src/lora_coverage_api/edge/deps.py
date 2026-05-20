@@ -31,13 +31,16 @@ from ..application.prediction_service import PredictionOrchestrator
 from ..application.repositories import (
     AddressResolution,
     CoverageQuery,
+    DeviceQuery,
     GatewayDirectory,
     SurveyIngest,
 )
 from ..application.sync import SyncService
+from ..application.webhook_auth import WebhookAuthService
 from ..config import Settings, get_settings
 from ..infrastructure.address_cache_pg import PgAddressCache
 from ..infrastructure.db import make_engine
+from ..infrastructure.device_repository_pg import PgDeviceRepository
 from ..infrastructure.gateway_directory_pg import PgGatewayDirectory
 from ..infrastructure.goong_client import GoongHttpClient
 from ..infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
@@ -68,6 +71,10 @@ def gateway_directory() -> GatewayDirectory:
 
 def survey_repository() -> SurveyIngest:
     return PgSurveyRepository(_engine())
+
+
+def device_query() -> DeviceQuery:
+    return PgDeviceRepository(_engine())
 
 
 @lru_cache(maxsize=1)
@@ -175,7 +182,14 @@ def address_resolution() -> AddressResolution:
 @lru_cache(maxsize=1)
 def _identity_service() -> IdentityService:
     s = _settings()
-    return IdentityService(jwt_secret=s.jwt_secret, jwt_ttl_hours=s.jwt_ttl_hours)
+    return IdentityService(
+        engine=_engine(),
+        jwt_secret=s.jwt_secret,
+        access_ttl_minutes=s.access_ttl_minutes,
+        refresh_ttl_days=s.refresh_ttl_days,
+        lockout_max_attempts=s.login_lockout_max_attempts,
+        lockout_window_minutes=s.login_lockout_window_minutes,
+    )
 
 
 def identity_service() -> IdentityService:
@@ -258,3 +272,18 @@ def _sync_service() -> SyncService:
 
 def sync_service() -> SyncService:
     return _sync_service()
+
+
+# ── ChirpStack per-user webhook auth ──────────────────────────────────────
+
+
+@lru_cache(maxsize=1)
+def _webhook_auth_service() -> WebhookAuthService:
+    """Shared instance — cùng CredentialCipher với LinkingService (1 HMAC
+    secret-domain cho cả credential fingerprint lẫn webhook token hash).
+    """
+    return WebhookAuthService(cipher=_credential_cipher())
+
+
+def webhook_auth_service() -> WebhookAuthService:
+    return _webhook_auth_service()

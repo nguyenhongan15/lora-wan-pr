@@ -1,7 +1,10 @@
 # ──────────────────────────────────────────────────────────────────────
 # LoRa Coverage Platform — local dev stack
 # v1 production: cùng file này chạy trên 1 VPS Hetzner CPX31.
-# Valkey commented out (TRIGGERED — chỉ enable khi traffic > ngưỡng).
+# Valkey = centralized rate-limit storage (Chapter 4 §High-Level Arch):
+#   api-service chạy --workers 2 → in-memory counter diverges per worker,
+#   effective limit ~2x ngưỡng config. Valkey shared store fix root cause
+#   thay vì band-aid (workers=1 sẽ giảm throughput).
 #
 # Chạy:  docker compose up -d
 #   → db (lora-wan-db) → migrate (chạy alembic 1 lần) → api-service
@@ -62,6 +65,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      cache:
+        condition: service_healthy
     environment:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -78,7 +83,10 @@ services:
       LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
       LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       JWT_SECRET: ${JWT_SECRET}
-      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
+      ACCESS_TTL_MINUTES: ${ACCESS_TTL_MINUTES:-15}
+      REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-30}
+      REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-false}
+      REFRESH_COOKIE_SAMESITE: ${REFRESH_COOKIE_SAMESITE:-lax}
       LINKING_FERNET_KEYS: ${LINKING_FERNET_KEYS}
       DEFAULT_DEVICE_TX_POWER_DBM: ${DEFAULT_DEVICE_TX_POWER_DBM:-14.0}
       DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI: ${DEFAULT_DEVICE_TX_ANTENNA_GAIN_DBI:-2.0}
@@ -89,6 +97,15 @@ services:
       STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-}
       STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
       STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
+      # ChirpStack per-user webhook ingest (plan ChirpStack per-user webhook).
+      # Production: WEBHOOK_BASE_URL phải là origin public-facing (vd
+      # https://api.example.com); empty trong production → startup fail-fast.
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
+      CHIRPSTACK_WEBHOOK_RATE_LIMIT: ${CHIRPSTACK_WEBHOOK_RATE_LIMIT:-600/minute}
+      # Centralized rate-limit store (Chapter 4 §Distributed Environments).
+      # Empty = in-memory (dev / single-worker). Compose mặc định trỏ tới
+      # service `cache` để 2 workers đếm chung counter, không bị divergence.
+      RATE_LIMIT_STORAGE_URI: ${RATE_LIMIT_STORAGE_URI:-redis://cache:6379/0}
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
@@ -111,14 +128,24 @@ services:
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
   # Production: build static rồi serve qua Nginx.
 
-  # ── Valkey (TRIGGERED — uncomment khi cần) ──────────────────────────
-  # cache:
-  #   image: valkey/valkey:8-alpine
-  #   container_name: lora-wan-cache
-  #   restart: unless-stopped
-  #   ports:
-  #     - "6379:6379"
-  #   command: ["valkey-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+  # ── Valkey — centralized rate-limit counter store ────────────────────
+  # Chapter 4 §Architecture: rate limiter middleware đọc/ghi counter qua
+  # cache shared, không phải in-memory per worker. slowapi → limits →
+  # redis client (sync) trỏ vào service này qua RATE_LIMIT_STORAGE_URI.
+  # KHÔNG expose port ra host trong production — chỉ api-service kết nối
+  # qua docker network. Dev có thể `docker compose port cache 6379` khi cần.
+  cache:
+    image: valkey/valkey:8-alpine
+    container_name: lora-wan-cache
+    restart: unless-stopped
+    # allkeys-lru: rate-limit counter TTL ngắn (vài phút) — LRU eviction safe.
+    # 64mb đủ cho ~hundreds of K key (mỗi key vài chục byte).
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   lora-wan-db-data:

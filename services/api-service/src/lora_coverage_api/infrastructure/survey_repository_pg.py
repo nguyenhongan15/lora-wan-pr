@@ -31,24 +31,38 @@ class PgSurveyRepository:
 
     # SQL dùng chung cho cả 2 path; ON CONFLICT DO NOTHING vô hại với uuid4
     # (xác suất collide ~0) và là yêu cầu cứng cho idempotent path.
+    # Provenance cols (plan ChirpStack webhook): NULL khi caller không cung cấp
+    # (legacy /survey upload path); set khi webhook ingest đẩy WebhookContext.
     _INSERT_SQL = text(
         """
         INSERT INTO ts.survey_quarantine (
             id, timestamp, location, rssi_dbm, snr_db,
             spreading_factor, frequency_mhz, device_id,
-            serving_gateway_id, uploader_id
+            serving_gateway_id, uploader_id,
+            external_id, source_type, contributor_user_id, linked_source_id
         )
         VALUES (
             :id, :ts,
             ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
             :rssi, :snr, :sf, :freq, :device_id,
-            :gw_id, :uploader_id
+            :gw_id, :uploader_id,
+            :external_id, :source_type, :contributor_user_id, :linked_source_id
         )
         ON CONFLICT (timestamp, id) DO NOTHING
         """
     )
 
-    def _row(self, batch: SurveyBatch, rec_id: UUID, r: Any) -> dict[str, Any]:
+    def _row(
+        self,
+        batch: SurveyBatch,
+        rec_id: UUID,
+        r: Any,
+        *,
+        external_id: str | None = None,
+        source_type: str | None = None,
+        linked_source_id: UUID | None = None,
+        contributor_user_id: UUID | None = None,
+    ) -> dict[str, Any]:
         return {
             "id": rec_id,
             "ts": r.timestamp,
@@ -61,6 +75,10 @@ class PgSurveyRepository:
             "device_id": r.device_id,
             "gw_id": r.serving_gateway_id,
             "uploader_id": batch.uploader_id,
+            "external_id": external_id,
+            "source_type": source_type,
+            "linked_source_id": linked_source_id,
+            "contributor_user_id": contributor_user_id,
         }
 
     def write_quarantine(self, batch: SurveyBatch) -> SurveyBatchId:
@@ -71,14 +89,41 @@ class PgSurveyRepository:
             conn.execute(self._INSERT_SQL, rows)
         return batch.batch_id
 
-    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
+    def write_quarantine_idempotent(
+        self,
+        batch: SurveyBatch,
+        record_ids: Sequence[UUID],
+        *,
+        external_ids: Sequence[str | None] | None = None,
+        source_type: str | None = None,
+        linked_source_id: UUID | None = None,
+        contributor_user_id: UUID | None = None,
+    ) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
                 f"record_ids size ({len(record_ids)}) != records ({len(batch.records)})"
             )
+        if external_ids is not None and len(external_ids) != len(batch.records):
+            raise ValueError(
+                f"external_ids size ({len(external_ids)}) != records ({len(batch.records)})"
+            )
         if not batch.records:
             return 0
-        rows = [self._row(batch, rid, r) for rid, r in zip(record_ids, batch.records, strict=True)]
+        ext_iter: Sequence[str | None] = (
+            external_ids if external_ids is not None else [None] * len(batch.records)
+        )
+        rows = [
+            self._row(
+                batch,
+                rid,
+                r,
+                external_id=ext,
+                source_type=source_type,
+                linked_source_id=linked_source_id,
+                contributor_user_id=contributor_user_id,
+            )
+            for rid, r, ext in zip(record_ids, batch.records, ext_iter, strict=True)
+        ]
         with self._engine.begin() as conn:
             result = conn.execute(self._INSERT_SQL, rows)
         # executemany với ON CONFLICT DO NOTHING: rowcount = số row thực sự

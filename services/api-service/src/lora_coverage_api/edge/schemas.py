@@ -364,12 +364,71 @@ class LinkedSourceResponse(BaseModel):
     last_sync_at: datetime | None
     last_sync_error: str | None
     created_at: datetime
+    # Webhook columns expose presence-only (plan ChirpStack per-user webhook
+    # ingest §1 "show-once"). Plaintext token CHỈ trả qua LinkSourceCreatedResponse
+    # tại link/rotate, không bao giờ trong list endpoint.
+    has_webhook_token: bool = False
+    webhook_rotated_at: datetime | None = None
 
 
 class LinkedSourceListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[LinkedSourceResponse]
+    total: int
+
+
+class LinkSourceCreatedResponse(BaseModel):
+    """Response của POST /me/sources khi link source thành công.
+
+    Plan ChirpStack per-user webhook ingest: source thuộc whitelist (hiện
+    chỉ chirpstack) → backend cấp `webhook_url` + `webhook_token` plaintext
+    KÈM 1 LẦN DUY NHẤT trong response này. Sau đó FE muốn xem = phải rotate.
+    Source khác (lpwanmapper): webhook_url/webhook_token = None.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: LinkedSourceResponse
+    webhook_url: str | None = None
+    webhook_token: str | None = None
+
+
+class WebhookSecretResponse(BaseModel):
+    """Response của POST /me/sources/{id}/rotate-webhook.
+
+    Trả plaintext token mới + URL hoàn chỉnh để FE hiển thị 1 lần. Token cũ
+    đã invalidate ngay khi response trả về (DB commit xong).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: LinkedSourceResponse
+    webhook_url: str
+    webhook_token: str
+
+
+# ── Devices (synced từ external source) ───────────────────────────────────
+
+
+class DeviceResponse(BaseModel):
+    """geo.devices row projected cho FE list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    dev_eui: str
+    name: str | None
+    source_type: str
+    last_seen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeviceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[DeviceResponse]
     total: int
 
 
@@ -386,6 +445,8 @@ class SyncResultResponse(BaseModel):
     gateways_updated: int = Field(..., ge=0)
     measurements_inserted: int = Field(..., ge=0)
     measurements_updated: int = Field(..., ge=0)
+    devices_inserted: int = Field(..., ge=0)
+    devices_updated: int = Field(..., ge=0)
     last_sync_at: datetime | None
     error: str | None
 

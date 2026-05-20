@@ -37,12 +37,13 @@ from sqlalchemy import Connection, text
 from ..identity import User
 from ..linking import CredentialCipher, LinkedSourceNotFoundError
 from ..sources import (
+    DeviceRecord,
     GatewayRecord,
     SourceError,
     UnknownSourceTypeError,
     get_adapter,
 )
-from ._upsert import MeasurementTarget, upsert_gateway, upsert_measurement
+from ._upsert import MeasurementTarget, upsert_device, upsert_gateway, upsert_measurement
 
 logger = structlog.get_logger("lora_coverage_api.sync")
 
@@ -56,6 +57,8 @@ class SyncResult:
     gateways_updated: int
     measurements_inserted: int
     measurements_updated: int
+    devices_inserted: int
+    devices_updated: int
     last_sync_at: datetime | None
     error: str | None
 
@@ -214,7 +217,7 @@ class SyncService:
                 error=_DECRYPT_ERR_TAG,
                 log=log,
                 started=started,
-                counts=(0, 0, 0, 0),
+                counts=(0, 0, 0, 0, 0, 0),
             )
 
         # Plan §3.4: contribute_to_community quyết định measurement đi thẳng
@@ -228,6 +231,14 @@ class SyncService:
             adapter = get_adapter(source_type)
             handle = adapter.connect(creds)
             gw_inserted, gw_updated, gw_uuid_by_external = _ingest_gateways(
+                conn,
+                adapter,
+                handle,
+                source_type=source_type,
+                user_id=user_id,
+                ls_id=ls_id,
+            )
+            dev_inserted, dev_updated = _ingest_devices(
                 conn,
                 adapter,
                 handle,
@@ -255,7 +266,7 @@ class SyncService:
                 error=err,
                 log=log,
                 started=started,
-                counts=(0, 0, 0, 0),
+                counts=(0, 0, 0, 0, 0, 0),
             )
 
         return self._finalise(
@@ -265,7 +276,7 @@ class SyncService:
             error=None,
             log=log,
             started=started,
-            counts=(gw_inserted, gw_updated, m_inserted, m_updated),
+            counts=(gw_inserted, gw_updated, m_inserted, m_updated, dev_inserted, dev_updated),
         )
 
     def _decrypt(self, blob: bytes) -> dict[str, str]:
@@ -280,10 +291,10 @@ class SyncService:
         error: str | None,
         log: Any,
         started: float,
-        counts: tuple[int, int, int, int],
+        counts: tuple[int, int, int, int, int, int],
     ) -> SyncResult:
         now = datetime.now(UTC)
-        gw_ins, gw_upd, m_ins, m_upd = counts
+        gw_ins, gw_upd, m_ins, m_upd, dev_ins, dev_upd = counts
         conn.execute(
             _UPDATE_SYNC_META,
             {
@@ -301,6 +312,8 @@ class SyncService:
                 gateways_updated=gw_upd,
                 measurements_inserted=m_ins,
                 measurements_updated=m_upd,
+                devices_inserted=dev_ins,
+                devices_updated=dev_upd,
                 duration_ms=duration_ms,
             )
         else:
@@ -316,6 +329,8 @@ class SyncService:
             gateways_updated=gw_upd,
             measurements_inserted=m_ins,
             measurements_updated=m_upd,
+            devices_inserted=dev_ins,
+            devices_updated=dev_upd,
             last_sync_at=now,
             error=error,
         )
@@ -351,6 +366,36 @@ def _ingest_gateways(
         else:
             updated += 1
     return inserted, updated, uuid_by_external
+
+
+def _ingest_devices(
+    conn: Connection,
+    adapter: Any,
+    handle: Any,
+    *,
+    source_type: str,
+    user_id: UUID,
+    ls_id: UUID,
+) -> tuple[int, int]:
+    """Stream devices từ adapter → upsert geo.devices. Provider không hỗ trợ
+    (lpwanmapper) trả iter(()) → (0, 0). Best-effort: 1 record xấu defensive
+    skip; SourceError ở pagination → propagate cho caller fail toàn sync."""
+    inserted = updated = 0
+    for rec in adapter.fetch_devices(handle):
+        if not isinstance(rec, DeviceRecord):  # defensive
+            continue
+        status = upsert_device(
+            conn,
+            rec,
+            source_type=source_type,
+            linked_source_id=ls_id,
+            contributor_user_id=user_id,
+        )
+        if status == "inserted":
+            inserted += 1
+        else:
+            updated += 1
+    return inserted, updated
 
 
 def _ingest_measurements(

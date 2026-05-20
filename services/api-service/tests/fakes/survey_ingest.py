@@ -35,11 +35,21 @@ class FakeSurveyIngest:
         self._quarantined.append(batch)
         return batch.batch_id
 
-    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
+    def write_quarantine_idempotent(
+        self,
+        batch: SurveyBatch,
+        record_ids: Sequence[UUID],
+        *,
+        external_ids: Sequence[str | None] | None = None,
+        source_type: str | None = None,
+        linked_source_id: UUID | None = None,
+        contributor_user_id: UUID | None = None,
+    ) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
                 f"record_ids size ({len(record_ids)}) != records ({len(batch.records)})"
             )
+        _ = external_ids, source_type, linked_source_id, contributor_user_id
         inserted = 0
         for rid, rec in zip(record_ids, batch.records, strict=True):
             key = (rec.timestamp, rid)

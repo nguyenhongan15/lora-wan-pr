@@ -1,84 +1,100 @@
-"""ChirpStack network-server webhook endpoint.
+"""ChirpStack per-user webhook ingest endpoint.
 
-Path-based token auth: ChirpStack tự cấu hình URL `/api/v1/webhooks/chirpstack/{token}`.
-Token allowlist + uploader mapping nằm ở env `CHIRPSTACK_WEBHOOK_TOKENS`.
+Path token mapping per-user (plan ChirpStack per-user webhook ingest):
+URL = `/api/v1/webhooks/chirpstack/source/{token}`. Token plaintext do
+backend cấp lúc user link source; ChirpStack HTTP Integration cấu hình
+URL chứa token; mỗi uplink push về đây mang đúng provenance của user đó.
 
-Body: ChirpStack uplink JSON nguyên gốc (rxInfo[], txInfo, object{}, ...).
-Service xử lý qua ChirpstackWebhookService → SurveyRepo.write_quarantine_idempotent.
+Resolve flow:
+  1. slowapi rate limit per-token → chặn 1 misconfigured ChirpStack flood.
+  2. WebhookAuthService.resolve(token) → WebhookContext{user_id, ls_id,
+     source_type, contribute} hoặc raise 401.
+  3. ChirpstackWebhookService.ingest_uplink(payload, context) → idempotent
+     write vào ts.survey_quarantine với provenance đầy đủ.
 
-Trả 202 Accepted vì insert có thể bị skip do dedup — không phải "0 rỗng = lỗi".
+Endpoint legacy `/chirpstack/{token}` + env CHIRPSTACK_WEBHOOK_TOKENS đã
+remove (plan §2 quyết định "migrate hẳn"). Admin re-link sau deploy để
+được cấp URL mới.
+
+Body: ChirpStack uplink JSON nguyên gốc — Pydantic không validate shape
+(`dict[str, Any]`) vì adapter là pure function đã validate từng field
+(rejected_reasons list[str]).
+
+Trả 202 Accepted: insert có thể bị skip do dedup — không phải "0 rỗng = lỗi".
 """
 
 from __future__ import annotations
 
-import secrets
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
 from ...application.chirpstack_webhook_service import ChirpstackWebhookService
-from ...config import Settings
-from ...domain.survey import UploaderId
-from ..deps import settings_dep, survey_repository
+from ...application.webhook_auth import WebhookAuthService
+from ...config import get_settings
+from ..deps import _engine, survey_repository, webhook_auth_service
+from ..rate_limit import limiter
 from ..schemas import WebhookIngestResponse
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 logger = structlog.get_logger("lora_coverage_api.webhooks")
 
+# Settings resolve 1 lần — decorator @limiter.limit cần string lúc import.
+# Test override env trước khi import router (consistent với auth.py).
+_settings = get_settings()
 
-def _resolve_token(token: str, settings: Settings) -> UploaderId:
-    """Constant-time match token → uploader. 401 nếu không hợp lệ.
 
-    Theo rule-design-security.md §allowlist: chỉ accept token có trong map.
-    Dùng `secrets.compare_digest` cho từng key để tránh timing attack.
+def _webhook_token_key(request: Request) -> str:
+    """slowapi key_func: rate-limit bucket = path token.
+
+    Misconfigured ChirpStack flooding 1 token KHÔNG ảnh hưởng tới user khác.
+    Token được hash bởi slowapi storage trước khi dùng làm key — plaintext
+    không leak trong storage backend.
+
+    Fallback: nếu path không có token (route mismatch), key = client IP để
+    tránh None → key_func crash.
     """
-    token_map = settings.chirpstack_webhook_token_map
-    if not token_map:
-        # Production phải config; nếu thiếu config thì 503 cho rõ.
-        raise HTTPException(
-            status_code=503,
-            detail="ChirpStack webhook chưa được cấu hình.",
-        )
-    matched: UploaderId | None = None
-    for known_token, uploader_uuid in token_map.items():
-        if secrets.compare_digest(known_token, token):
-            matched = UploaderId(uploader_uuid)
-            # Không break — giữ constant-time tương đối (so với map nhỏ là đủ).
-    if matched is None:
-        raise HTTPException(status_code=401, detail="invalid webhook token")
-    return matched
+    token = request.path_params.get("token")
+    if isinstance(token, str) and token:
+        return f"webhook:{token}"
+    return f"webhook:ip:{request.client.host if request.client else 'unknown'}"
 
 
-def webhook_service() -> ChirpstackWebhookService:
+def _webhook_service() -> ChirpstackWebhookService:
     return ChirpstackWebhookService(repository=survey_repository())
 
 
 @router.post(
-    "/chirpstack/{token}",
+    "/chirpstack/source/{token}",
     response_model=WebhookIngestResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="ChirpStack uplink ingest (network-server webhook)",
+    summary="ChirpStack uplink ingest (per-user webhook URL)",
     responses={
-        401: {"description": "Invalid webhook token"},
-        503: {"description": "Webhook tokens not configured"},
+        401: {"description": "Invalid or revoked webhook token"},
+        429: {"description": "Rate limit exceeded for this token"},
     },
 )
+@limiter.limit(_settings.chirpstack_webhook_rate_limit, key_func=_webhook_token_key)
 async def chirpstack_webhook(
+    request: Request,
     token: str,
     payload: dict[str, Any],
-    request: Request,
-    settings: Settings = Depends(settings_dep),
-    service: ChirpstackWebhookService = Depends(webhook_service),
+    auth: WebhookAuthService = Depends(webhook_auth_service),
+    service: ChirpstackWebhookService = Depends(_webhook_service),
 ) -> WebhookIngestResponse:
-    uploader_id = _resolve_token(token, settings)
+    with _engine().begin() as conn:
+        context = auth.resolve(conn, token)
 
-    receipt = service.ingest_uplink(payload, uploader_id)
+    receipt = service.ingest_uplink(payload, context)
 
-    # Log với trace_id để correlate khi debug retry/dedup.
+    # Log với trace_id để correlate khi debug retry/dedup. Token KHÔNG bao
+    # giờ log — context.linked_source_id là handle public an toàn.
     logger.info(
         "chirpstack_uplink_ingested",
+        linked_source_id=str(context.linked_source_id),
+        user_id=str(context.user_id),
         accepted=receipt.accepted_count,
         inserted=receipt.inserted_count,
         rejected=receipt.rejected_count,

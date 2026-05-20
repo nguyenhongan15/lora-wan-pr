@@ -12,6 +12,7 @@ from typing import Any
 
 from lora_coverage_api.application.sources import (
     DataSource,
+    DeviceRecord,
     GatewayRecord,
     MeasurementRecord,
     SourceAuthError,
@@ -29,9 +30,11 @@ class FakeDataSource(DataSource):
         self,
         gateways: list[GatewayRecord] | None = None,
         measurements: list[MeasurementRecord] | None = None,
+        devices: list[DeviceRecord] | None = None,
     ) -> None:
         self._gateways = gateways or []
         self._measurements = measurements or []
+        self._devices = devices or []
         self.connect_calls = 0
 
     def connect(self, credentials: Mapping[str, Any]) -> dict:
@@ -58,3 +61,6 @@ class FakeDataSource(DataSource):
         for m in self._measurements:
             if since is None or m.time > since:
                 yield m
+
+    def fetch_devices(self, handle: Any) -> Iterator[DeviceRecord]:
+        yield from self._devices

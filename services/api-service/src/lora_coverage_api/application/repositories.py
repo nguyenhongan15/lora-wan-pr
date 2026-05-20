@@ -79,12 +79,30 @@ class SurveyIngest(Protocol):
         """
         ...
 
-    def write_quarantine_idempotent(self, batch: SurveyBatch, record_ids: Sequence[UUID]) -> int:
+    def write_quarantine_idempotent(
+        self,
+        batch: SurveyBatch,
+        record_ids: Sequence[UUID],
+        *,
+        external_ids: Sequence[str | None] | None = None,
+        source_type: str | None = None,
+        linked_source_id: UUID | None = None,
+        contributor_user_id: UUID | None = None,
+    ) -> int:
         """Như `write_quarantine` nhưng ID do caller cung cấp + ON CONFLICT
         DO NOTHING ở (timestamp, id).
 
         Dùng cho ChirpStack webhook (network server có thể retry cùng uplink
         khi mất ack). `record_ids` PHẢI cùng độ dài với `batch.records`.
+
+        Provenance kwargs (plan ChirpStack webhook step 4):
+          * `external_ids` — per-record natural key text (vd "dedup_id:rx_index"
+            cho ChirpStack). Cùng độ dài với batch.records nếu set; None ngầm
+            mỗi entry None.
+          * `source_type` / `linked_source_id` / `contributor_user_id` —
+            batch-level provenance, áp dụng cho mọi row trong batch. Webhook
+            ingest đọc từ `WebhookContext`; legacy path (chưa migrate) pass
+            None để giữ behaviour cũ.
 
         Trả số record THỰC SỰ insert (đã trừ duplicate skip).
         """
@@ -152,6 +170,45 @@ class UserDevice:
 
     device_id: str
     count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedSourceDevice:
+    """Read-model: 1 device entry trong `geo.devices` (sync REST).
+
+    Khác `UserDevice` (đếm điểm trong survey_training). Field map 1-1 với
+    cột DB — edge router projects sang DeviceResponse.
+    """
+
+    id: UUID
+    dev_eui: str
+    name: str | None
+    source_type: str
+    last_seen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeviceQuery(Protocol):
+    """Read-side cho `geo.devices`. Sync orchestrator owns write path qua
+    `application/sync/_upsert.py`; capability này phục vụ FE list devices
+    của 1 linked_source mà user đã verify ownership ở edge."""
+
+    def list_by_linked_source(
+        self,
+        *,
+        linked_source_id: UUID,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[Sequence[LinkedSourceDevice], int]:
+        """Trả (items page, total count) cho 1 linked_source.
+
+        Sort: `last_seen_at DESC NULLS LAST, dev_eui ASC` — FE hiển thị
+        thiết bị mới hoạt động lên đầu, NULL (chưa từng uplink) xuống cuối.
+        Ownership đã được edge verify (linked_source thuộc user); repository
+        không re-check.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)

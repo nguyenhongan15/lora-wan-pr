@@ -14,7 +14,7 @@ from .errors import (
     LinkedSourceNotFoundError,
     LinkingError,
 )
-from .service import LinkedSource, LinkingService
+from .service import LinkedSource, LinkingService, LinkResult
 
 __all__ = [
     "CredentialAlreadyLinkedError",
@@ -24,4 +24,5 @@ __all__ = [
     "LinkedSourceNotFoundError",
     "LinkingError",
     "LinkingService",
+    "LinkResult",
 ]

@@ -36,14 +36,15 @@ class Claims:
     expires_at: datetime
 
 
-def issue(user_id: UUID, *, secret: str, ttl_hours: int) -> tuple[str, datetime]:
+def issue(user_id: UUID, *, secret: str, ttl: timedelta) -> tuple[str, datetime]:
     """Encode JWT cho `user_id`. Trả (token, expires_at).
 
     `expires_at` cần ở interface để caller (route /login) report `expires_in`
-    cho client mà không phải decode lại.
+    cho client mà không phải decode lại. `ttl` là `timedelta` để caller
+    chọn granularity (phút/giờ/ngày) tự nhiên.
     """
     now = datetime.now(UTC)
-    exp = now + timedelta(hours=ttl_hours)
+    exp = now + ttl
     payload = {
         "sub": str(user_id),
         "iat": int(now.timestamp()),

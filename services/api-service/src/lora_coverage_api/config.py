@@ -5,9 +5,7 @@ KHÔNG hardcode default cho secrets. Default chỉ cho dev convenience.
 
 from __future__ import annotations
 
-from uuid import UUID
-
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,10 +27,26 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: str = Field(
         default="http://localhost:5173",
-        description="Comma-separated; strict whitelist (xem rule-design-cors.md).",
+        description=(
+            "Comma-separated strict origin whitelist (xem rule-design-cors.md). "
+            "WILDCARD '*' bị reject vì allow_credentials=True (plan-auth-v2)."
+        ),
     )
 
-    # ── Identity (plan-auth-v1 §3.1) ──────────────────────────────────────
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def _no_cors_wildcard(cls, v: str) -> str:
+        # Plan-auth-v2 CORS rule: STRICTLY WHITELISTED ORIGINS. Cookie refresh
+        # yêu cầu allow_credentials=True; spec CORS cấm pair "*" + credentials.
+        # Reject ngay startup thay vì để browser silently fail trên prod.
+        if "*" in v:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS không được chứa '*' — cần whitelist tường minh "
+                "vì allow_credentials=True. Liệt kê đầy đủ origin (vd https://app.example.com)."
+            )
+        return v
+
+    # ── Identity (plan-auth-v1 §3.1 + plan-auth-v2 step 2) ────────────────
     # Required: app fail-fast nếu thiếu, không có dev fallback. Ai cũng có
     # thể gen `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
     jwt_secret: str = Field(
@@ -40,12 +54,40 @@ class Settings(BaseSettings):
         min_length=32,
         description="HS256 signing key cho access token. Bắt buộc — không default.",
     )
-    jwt_ttl_hours: int = Field(
-        default=24,
+    # Short-lived access token theo "Short-Lived JWTs with Revocable Refresh
+    # Tokens". 15 phút là sweet spot: đủ ngắn để limit token-theft window, đủ
+    # dài để client không phải refresh quá thường xuyên.
+    access_ttl_minutes: int = Field(
+        default=15,
         ge=1,
-        le=720,
-        description="Access token TTL (giờ). v1 không có refresh nên TTL dài hơn.",
+        le=1440,
+        description="Access JWT TTL (phút). Short-lived per plan-auth-v2.",
     )
+    refresh_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Refresh token TTL (ngày). Rotation-on-use + family revocation.",
+    )
+
+    # ── Refresh cookie (plan-auth-v2 step 2) ──────────────────────────────
+    # HttpOnly + Secure + SameSite=Lax + path scope. Secure default False để
+    # local dev (http://localhost) hoạt động; production .env override =True.
+    refresh_cookie_secure: bool = Field(
+        default=False,
+        description="Set-Cookie Secure flag. TRUE bắt buộc cho production (HTTPS).",
+    )
+    refresh_cookie_samesite: str = Field(
+        default="lax",
+        description="Set-Cookie SameSite. 'lax' đủ chống CSRF cho POST endpoints.",
+    )
+
+    @field_validator("refresh_cookie_samesite")
+    @classmethod
+    def _samesite_valid(cls, v: str) -> str:
+        if v.lower() not in ("lax", "strict", "none"):
+            raise ValueError("refresh_cookie_samesite phải là lax|strict|none")
+        return v.lower()
 
     # ── Linking (plan-auth-v1 §3.3) ───────────────────────────────────────
     # Comma-separated Fernet keys cho MultiFernet rotation. Key đầu = encrypt
@@ -128,14 +170,80 @@ class Settings(BaseSettings):
         description="Device RX antenna gain fallback (dBi). 0 = PCB integrated.",
     )
 
-    rate_limit_default: str = Field(default="60/minute")
-    rate_limit_anon: str = Field(default="10/minute")
+    # ── Auth rate limits + lockout (plan-auth-v2 step 1) ─────────────────
+    # slowapi-style strings: "<count>/<period>" (period: second|minute|hour|day).
+    # Key = client IP (X-Forwarded-For aware nếu deploy sau reverse proxy).
+    auth_login_rate_limit: str = Field(
+        default="10/minute",
+        description="Rate limit cho POST /auth/login per IP.",
+    )
+    auth_register_rate_limit: str = Field(
+        default="5/hour",
+        description="Rate limit cho POST /auth/register per IP (chống spam account).",
+    )
+    # Lockout per email (không per IP — IP bypass dễ qua VPN, email là resource
+    # bị attack). Tradeoff: attacker có thể DoS lock victim's email — chấp nhận
+    # vì window 15 min ngắn + đã có IP rate-limit ở tầng trên.
+    login_lockout_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Số lần sai password liên tiếp trước khi lock account.",
+    )
+    login_lockout_window_minutes: int = Field(
+        default=15,
+        ge=1,
+        le=1440,
+        description="Thời gian lock (phút) sau khi vượt max_attempts.",
+    )
 
-    chirpstack_webhook_tokens: str = Field(
+    # ── Rate-limit storage (Chapter 4 §Distributed Environments) ─────────
+    # Empty = in-memory per worker (dev / single-worker test). Production
+    # PHẢI set redis://host:port/db để workers chia sẻ counter — nếu không
+    # effective limit = n_workers × ngưỡng config (state divergence). Format
+    # theo `limits` library: redis|memcached|mongodb://... — xem
+    # https://limits.readthedocs.io/en/stable/storage.html.
+    rate_limit_storage_uri: str = Field(
+        default="",
+        description="URI store cho rate-limit counter. Rỗng = in-memory. Prod: redis://cache:6379/0.",
+    )
+
+    @model_validator(mode="after")
+    def _rate_limit_storage_required_in_prod(self) -> Settings:
+        # Fail-fast giống _webhook_base_url_required_in_prod: prod không có
+        # shared store → silent multi-worker divergence khó debug, để
+        # operator phát hiện tại startup chứ không phải tại incident.
+        if self.app_env == "production" and not self.rate_limit_storage_uri:
+            raise ValueError(
+                "RATE_LIMIT_STORAGE_URI bắt buộc khi APP_ENV=production — "
+                "in-memory storage không sync giữa workers, rate-limit effective "
+                "sẽ là (n_workers × ngưỡng). Đặt ví dụ: "
+                "RATE_LIMIT_STORAGE_URI=redis://cache:6379/0"
+            )
+        return self
+
+    # ── ChirpStack per-user webhook ingest ────────────────────────────────
+    # Plan ChirpStack per-user webhook ingest. Legacy env-map
+    # `chirpstack_webhook_tokens` đã remove — DB-backed per-user token
+    # (auth.linked_sources.webhook_token_hash). Admin/user re-link sau deploy
+    # để được cấp URL mới.
+    chirpstack_webhook_rate_limit: str = Field(
+        default="600/minute",
+        description=(
+            "Rate limit cho POST /webhooks/chirpstack/source/{token} per token. "
+            "ChirpStack v4 mặc định không vượt 100 msg/s/app; 600/minute là trần "
+            "thoải mái cho deployment đơn ứng dụng vài chục device."
+        ),
+    )
+    # FE build webhook URL hiển thị cho user copy paste vào ChirpStack HTTP
+    # Integration. Phải là origin public-facing (vd https://api.example.com),
+    # KHÔNG được rỗng ở production — validator chặn từ startup.
+    webhook_base_url: str = Field(
         default="",
         description=(
-            "Comma-separated 'token:uploader_uuid' pairs cho ChirpStack webhook auth. "
-            "Vd: 'abc123:11111111-1111-1111-1111-111111111111,def456:2222...'"
+            "Public base URL của API (vd https://api.example.com). FE concat "
+            "với '/api/v1/webhooks/chirpstack/source/<token>' để ra URL đầy đủ. "
+            "Bắt buộc cho app_env=production."
         ),
     )
 
@@ -181,27 +289,15 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
-    @property
-    def chirpstack_webhook_token_map(self) -> dict[str, UUID]:
-        """Parse `chirpstack_webhook_tokens` env → {token: uploader_uuid}.
-
-        Pair sai format hoặc UUID không hợp lệ → bị bỏ qua âm thầm
-        (start-up không fail vì 1 dòng env xấu, log đã bắn ở chỗ kiểm tra).
-        """
-        out: dict[str, UUID] = {}
-        for entry in self.chirpstack_webhook_tokens.split(","):
-            s = entry.strip()
-            if not s or ":" not in s:
-                continue
-            token, uid = s.split(":", 1)
-            token = token.strip()
-            if not token:
-                continue
-            try:
-                out[token] = UUID(uid.strip())
-            except ValueError:
-                continue
-        return out
+    @model_validator(mode="after")
+    def _webhook_base_url_required_in_prod(self) -> Settings:
+        if self.app_env == "production" and not self.webhook_base_url:
+            raise ValueError(
+                "WEBHOOK_BASE_URL bắt buộc khi APP_ENV=production — FE cần "
+                "origin public-facing để build URL hiển thị cho user. "
+                "Đặt ví dụ: WEBHOOK_BASE_URL=https://api.example.com"
+            )
+        return self
 
 
 def get_settings() -> Settings:

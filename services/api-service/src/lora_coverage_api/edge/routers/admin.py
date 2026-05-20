@@ -104,6 +104,8 @@ def _sync_to_response(r: SyncResult) -> SyncResultResponse:
         gateways_updated=r.gateways_updated,
         measurements_inserted=r.measurements_inserted,
         measurements_updated=r.measurements_updated,
+        devices_inserted=r.devices_inserted,
+        devices_updated=r.devices_updated,
         last_sync_at=r.last_sync_at,
         error=r.error,
     )

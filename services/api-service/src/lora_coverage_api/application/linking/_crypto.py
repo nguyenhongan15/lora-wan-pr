@@ -70,3 +70,14 @@ class CredentialCipher:
         """
         payload = json.dumps(dict(canonical), separators=(",", ":"), sort_keys=True).encode("utf-8")
         return hmac.new(self._hmac_key, payload, hashlib.sha256).hexdigest()
+
+    def webhook_token_hash(self, token: str) -> bytes:
+        """HMAC-SHA256(token) raw 32-byte digest.
+
+        Webhook plaintext token chỉ tồn tại 1 lần khi cấp / rotate; DB chỉ
+        lưu hash này (`auth.linked_sources.webhook_token_hash bytea`). Cùng
+        HMAC key với `fingerprint` — cùng security-domain "data ingest auth".
+        Trả raw bytes (không hex) để DB lookup `WHERE webhook_token_hash = :h`
+        so sánh bytea trực tiếp, tiết kiệm 50% storage so với hex.
+        """
+        return hmac.new(self._hmac_key, token.encode("utf-8"), hashlib.sha256).digest()

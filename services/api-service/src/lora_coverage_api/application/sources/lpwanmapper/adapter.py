@@ -17,7 +17,13 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Any
 
-from ..base import ConnectionHandle, DataSource, GatewayRecord, MeasurementRecord
+from ..base import (
+    ConnectionHandle,
+    DataSource,
+    DeviceRecord,
+    GatewayRecord,
+    MeasurementRecord,
+)
 from ..errors import SourceAuthError
 from . import _client, _mapping
 
@@ -69,6 +75,14 @@ class LpwanmapperSource(DataSource):
             for rec in _mapping.measurement_records(uplink):
                 if since is None or rec.time > since:
                     yield rec
+
+    def fetch_devices(self, handle: ConnectionHandle) -> Iterator[DeviceRecord]:
+        # lpwanmapper /login + /data không expose device registry — chỉ
+        # uplink records có devEui inline. SyncService không upsert
+        # geo.devices cho source này. (Mở rộng tương lai: derive distinct
+        # devEui từ /data, nhưng metadata name/last_seen sẽ thiếu.)
+        del handle
+        return iter(())
 
     def _fetch_data_with_reauth(self, handle: dict[str, Any]) -> list[dict[str, Any]]:
         client: _client.Client = handle["client"]

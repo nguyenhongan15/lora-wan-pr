@@ -20,9 +20,17 @@
 // move historical rows lên training) + sync (data mới vào training nếu cờ
 // đang on). Map dùng key ["surveys"] → invalidation kích re-fetch.
 
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
-import { patchSource, syncSource, unlinkSource } from "./client.js";
+import {
+  patchSource,
+  rotateWebhook,
+  syncSource,
+  unlinkSource,
+} from "./client.js";
+import { DevicesPanel } from "./DevicesPanel.jsx";
+import { WebhookSetupInstructions } from "./WebhookSetupInstructions.jsx";
 import { strings } from "../strings.js";
 
 const tCard = strings.sources.card;
@@ -37,6 +45,17 @@ export function LinkedSourceCard({ source }) {
     qc.invalidateQueries({ queryKey: ["sources"] });
   const invalidateSurveys = () =>
     qc.invalidateQueries({ queryKey: ["surveys"] });
+  const invalidateDevices = () =>
+    qc.invalidateQueries({ queryKey: ["devices", source.id] });
+
+  const [showDevices, setShowDevices] = useState(false);
+  // Plaintext webhook token sau rotate — show-once. State scope = card,
+  // dismiss → biến mất, không persist.
+  const [rotatedSecret, setRotatedSecret] = useState(
+    /** @type {{ url: string, token: string } | null} */ (null),
+  );
+
+  const isChirpstack = source.source_type === "chirpstack";
 
   const contributeM = useMutation({
     mutationFn: async (/** @type {boolean} */ enabled) => {
@@ -67,6 +86,7 @@ export function LinkedSourceCard({ source }) {
     onSuccess: () => {
       invalidate();
       invalidateSurveys();
+      invalidateDevices();
     },
   });
 
@@ -75,8 +95,20 @@ export function LinkedSourceCard({ source }) {
     onSuccess: invalidate,
   });
 
+  const rotateM = useMutation({
+    mutationFn: () => rotateWebhook(source.id),
+    onSuccess: (resp) => {
+      setRotatedSecret({ url: resp.webhook_url, token: resp.webhook_token });
+      invalidate();
+    },
+  });
+
   function onDelete() {
     if (window.confirm(tCard.confirmDelete)) deleteM.mutate();
+  }
+
+  function onRotate() {
+    if (window.confirm(tCard.confirmRotateWebhook)) rotateM.mutate();
   }
 
   const lastSyncErr = source.last_sync_error;
@@ -84,7 +116,8 @@ export function LinkedSourceCard({ source }) {
     contributeM.isPending ||
     statusM.isPending ||
     syncM.isPending ||
-    deleteM.isPending;
+    deleteM.isPending ||
+    rotateM.isPending;
 
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -111,6 +144,7 @@ export function LinkedSourceCard({ source }) {
             {tCard.syncOk(
               syncM.data.gateways_inserted + syncM.data.gateways_updated,
               syncM.data.measurements_inserted,
+              syncM.data.devices_inserted + syncM.data.devices_updated,
             )}
           </div>
         )}
@@ -158,6 +192,29 @@ export function LinkedSourceCard({ source }) {
           {syncM.isPending ? tCard.btnSyncPending : tCard.btnSyncNow}
         </button>
 
+        {isChirpstack && (
+          <>
+            <button
+              type="button"
+              onClick={onRotate}
+              disabled={anyPending}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+            >
+              {rotateM.isPending
+                ? tCard.btnRotateWebhookPending
+                : tCard.btnRotateWebhook}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDevices((v) => !v)}
+              disabled={anyPending}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+            >
+              {showDevices ? tCard.btnHideDevices : tCard.btnShowDevices}
+            </button>
+          </>
+        )}
+
         <button
           type="button"
           onClick={onDelete}
@@ -168,7 +225,30 @@ export function LinkedSourceCard({ source }) {
         </button>
       </div>
 
-      <CardError error={contributeM.error || statusM.error || deleteM.error} />
+      {rotatedSecret && (
+        <div className="mt-4">
+          <WebhookSetupInstructions
+            webhookUrl={rotatedSecret.url}
+            webhookToken={rotatedSecret.token}
+            onDismiss={() => setRotatedSecret(null)}
+          />
+        </div>
+      )}
+
+      {showDevices && isChirpstack && (
+        <div className="mt-4">
+          <DevicesPanel linkedSourceId={source.id} />
+        </div>
+      )}
+
+      <CardError
+        error={
+          contributeM.error ||
+          statusM.error ||
+          deleteM.error ||
+          rotateM.error
+        }
+      />
     </article>
   );
 }

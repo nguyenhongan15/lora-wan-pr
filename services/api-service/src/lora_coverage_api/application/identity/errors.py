@@ -63,3 +63,50 @@ class AdminSelfModificationError(IdentityError):
 
     http_status = 400
     code = "admin_self_modification"
+
+
+class AccountLockedError(IdentityError):
+    """Account đang trong lockout window do quá nhiều lần login sai.
+
+    Plan-auth-v2. Edge handler đọc `retry_after_seconds` → set HTTP header
+    Retry-After + include trong body. Không leak email tồn tại: response
+    giống `InvalidCredentialsError` về structure, khác ở status 429 + code.
+    Frontend phân biệt qua `code` field.
+    """
+
+    http_status = 429
+    code = "account_locked"
+
+    def __init__(self, message: str, retry_after_seconds: int) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+# ── Refresh token errors (plan-auth-v2 step 2) ─────────────────────────────
+# 401 cho cả 3 — frontend treat đồng nhất "phiên hết hạn, re-login". Phân
+# biệt qua `code` để log audit / hiển thị message phù hợp.
+
+
+class RefreshTokenInvalidError(IdentityError):
+    """Refresh token không tồn tại, đã revoked, hoặc malformed."""
+
+    http_status = 401
+    code = "refresh_invalid"
+
+
+class RefreshTokenExpiredError(IdentityError):
+    """Refresh token quá expires_at (30 ngày từ issue)."""
+
+    http_status = 401
+    code = "refresh_expired"
+
+
+class RefreshTokenReusedError(IdentityError):
+    """Refresh token đã rotated nhưng bị present lại — theft signal.
+
+    Service đã revoke family trước khi raise. Client thấy lỗi này = phiên đã
+    bị compromise, phải re-login.
+    """
+
+    http_status = 401
+    code = "refresh_reused"

@@ -14,6 +14,10 @@ dependencies = [
     "alembic>=1.13",
     "structlog>=24.4",
     "slowapi>=0.1.9",
+    # Centralized rate-limit counter store (Chapter 4 §Architecture). slowapi
+    # delegate xuống `limits` library; `limits` cần `redis` extra cho
+    # storage_uri="redis://..." (Valkey nói tiếng Redis cùng protocol RESP2/3).
+    "redis>=5.0",
     "orjson>=3.10",
     "prometheus-client>=0.21",
     "httpx>=0.27",
@@ -32,6 +36,11 @@ dependencies = [
     # offline (CLI precompute), không touch runtime API. Đặt ở api-service vì
     # script reuse Stage1ItuModel + CrcCovlibBackend.
     "scikit-image>=0.24",
+    # ChirpStack v4 không có REST API built-in. Public deployments thường
+    # chỉ expose gRPC-web (qua nginx, port 443) — không có sidecar
+    # chirpstack-rest-api. Adapter ChirpStack giao tiếp qua gRPC-web frame
+    # (5-byte length-prefix) + protobuf message types từ package này.
+    "chirpstack-api>=4.10",
 ]
 
 [tool.uv.sources]

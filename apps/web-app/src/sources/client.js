@@ -30,10 +30,44 @@ export const LinkedSource = z.object({
   last_sync_at: z.string().nullable(),
   last_sync_error: z.string().nullable(),
   created_at: z.string(),
+  // Webhook presence-only (plan ChirpStack per-user webhook ingest §1). Token
+  // plaintext CHỈ xuất hiện trong LinkSourceCreated / WebhookSecret response.
+  has_webhook_token: z.boolean().default(false),
+  webhook_rotated_at: z.string().nullable().default(null),
 });
 
 export const LinkedSourceList = z.object({
   items: z.array(LinkedSource),
+  total: z.number().int().nonnegative(),
+});
+
+// POST /me/sources response — `webhook_url` + `webhook_token` chỉ có khi
+// vừa link source thuộc whitelist (chirpstack). Source khác → cả 2 = null.
+export const LinkSourceCreated = z.object({
+  source: LinkedSource,
+  webhook_url: z.string().nullable(),
+  webhook_token: z.string().nullable(),
+});
+
+// POST /me/sources/{id}/rotate-webhook response — luôn có plaintext token mới.
+export const WebhookSecret = z.object({
+  source: LinkedSource,
+  webhook_url: z.string(),
+  webhook_token: z.string(),
+});
+
+export const Device = z.object({
+  id: z.string().uuid(),
+  dev_eui: z.string(),
+  name: z.string().nullable(),
+  source_type: z.string(),
+  last_seen_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const DeviceList = z.object({
+  items: z.array(Device),
   total: z.number().int().nonnegative(),
 });
 
@@ -65,6 +99,8 @@ export const SyncResult = z.object({
   gateways_updated: z.number().int().nonnegative(),
   measurements_inserted: z.number().int().nonnegative(),
   measurements_updated: z.number().int().nonnegative(),
+  devices_inserted: z.number().int().nonnegative(),
+  devices_updated: z.number().int().nonnegative(),
   last_sync_at: z.string().nullable(),
   error: z.string().nullable(),
 });
@@ -73,6 +109,10 @@ export const SyncResult = z.object({
  * @typedef {z.infer<typeof LinkedSource>} LinkedSourceT
  * @typedef {z.infer<typeof LinkedSourceList>} LinkedSourceListT
  * @typedef {z.infer<typeof LinkSourceRequest>} LinkSourceRequestT
+ * @typedef {z.infer<typeof LinkSourceCreated>} LinkSourceCreatedT
+ * @typedef {z.infer<typeof WebhookSecret>} WebhookSecretT
+ * @typedef {z.infer<typeof Device>} DeviceT
+ * @typedef {z.infer<typeof DeviceList>} DeviceListT
  * @typedef {z.infer<typeof LinkedSourcePatchRequest>} LinkedSourcePatchRequestT
  * @typedef {z.infer<typeof SyncResult>} SyncResultT
  */
@@ -111,8 +151,14 @@ export async function listSources() {
 /**
  * POST /api/v1/me/sources — backend test() credential trước khi insert,
  * sai → 400 credential_test_failed (KHÔNG persist).
+ *
+ * Response chứa `webhook_url`/`webhook_token` plaintext 1 lần khi source
+ * thuộc whitelist (chirpstack). Caller phải hiển thị + cảnh báo "copy ngay,
+ * sau không xem lại được" — backend KHÔNG bao giờ trả token lần 2 (phải
+ * rotate). Source khác (lpwanmapper): cả 2 = null.
+ *
  * @param {LinkSourceRequestT} req
- * @returns {Promise<LinkedSourceT>}
+ * @returns {Promise<LinkSourceCreatedT>}
  */
 export async function linkSource(req) {
   const parsed = LinkSourceRequest.parse(req);
@@ -122,7 +168,43 @@ export async function linkSource(req) {
     body: JSON.stringify(parsed),
   });
   if (!res.ok) await _throwProblem(res);
-  return LinkedSource.parse(await res.json());
+  return LinkSourceCreated.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/me/sources/{id}/rotate-webhook — sinh token mới, invalidate
+ * token cũ. Source không hỗ trợ webhook → 400.
+ *
+ * @param {string} id
+ * @returns {Promise<WebhookSecretT>}
+ */
+export async function rotateWebhook(id) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/me/sources/${id}/rotate-webhook`,
+    { method: "POST" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return WebhookSecret.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/me/sources/{id}/devices — list devices đã sync.
+ *
+ * @param {string} id
+ * @param {{ offset?: number, limit?: number }} [opts]
+ * @returns {Promise<DeviceListT>}
+ */
+export async function listDevices(id, opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const url =
+    `${API_BASE_URL}/api/v1/me/sources/${id}/devices` +
+    (qs ? `?${qs}` : "");
+  const res = await authFetch(url);
+  if (!res.ok) await _throwProblem(res);
+  return DeviceList.parse(await res.json());
 }
 
 /**

@@ -6,7 +6,7 @@ import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
 import { getUser, subscribe } from "./auth/store.js";
-import { logout } from "./auth/client.js";
+import { bootstrap, logout } from "./auth/client.js";
 import { SourcesPage } from "./sources/SourcesPage.jsx";
 import { strings } from "./strings.js";
 
@@ -19,6 +19,15 @@ export function App() {
   const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
   const tHeader = strings.auth.header;
+
+  // App mount → rehydrate session từ HttpOnly cookie (auth v2). Nếu cookie
+  // còn valid, POST /auth/refresh + GET /me restore in-memory token + user.
+  // Cookie hết hạn / bị revoke → bootstrap trả null, user vẫn logged-out.
+  useEffect(() => {
+    bootstrap().catch(() => {
+      // Lỗi mạng / parse: coi như chưa login, không show banner — silent.
+    });
+  }, []);
 
   // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin. Khi điều
   // kiện không còn (logout / token expire / admin bị demote giữa session)
@@ -34,9 +43,9 @@ export function App() {
     else setAuthOpen(true);
   }
 
-  function onLogout() {
-    logout();
+  async function onLogout() {
     setMenuOpen(false);
+    await logout();
   }
 
   return (

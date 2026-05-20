@@ -618,6 +618,9 @@ export const strings = {
         apiTokenHint: "Tạo trong ChirpStack UI → API keys.",
         tenantIdLabel: "Tenant ID (tuỳ chọn)",
         tenantIdHint: "Để trống nếu API key đã scope sẵn theo tenant.",
+        skipSslLabel: "Bỏ qua xác minh SSL",
+        skipSslHint:
+          "Chỉ tick nếu server thiếu intermediate cert hoặc dùng self-signed. KHÔNG dùng cho production.",
       },
     },
     card: {
@@ -637,11 +640,46 @@ export const strings = {
       btnSyncNow: "Sync ngay",
       btnSyncPending: "Đang sync…",
       btnDelete: "Xoá liên kết",
+      btnRotateWebhook: "Tạo lại webhook URL",
+      btnRotateWebhookPending: "Đang tạo…",
+      btnShowDevices: "Xem thiết bị",
+      btnHideDevices: "Ẩn thiết bị",
       confirmDelete:
         "Xoá liên kết sẽ ngừng pull dữ liệu mới. Dữ liệu đã đóng góp vẫn giữ nguyên trên bản đồ. Tiếp tục?",
-      /** @param {number} g @param {number} m */
-      syncOk: (g, m) =>
-        `Sync xong: ${g} gateway, ${m} điểm đo mới.`,
+      confirmRotateWebhook:
+        "Tạo webhook URL mới sẽ vô hiệu hoá URL hiện tại NGAY LẬP TỨC — ChirpStack sẽ bị 401 cho tới khi bạn cập nhật URL mới. Tiếp tục?",
+      /** @param {number} g @param {number} m @param {number} d */
+      syncOk: (g, m, d) =>
+        `Sync xong: ${g} gateway, ${d} thiết bị, ${m} điểm đo mới.`,
+    },
+
+    webhookSetup: {
+      title: "Webhook ChirpStack — copy ngay",
+      subtitle:
+        "Đây là URL+token DUY NHẤT để ChirpStack đẩy uplink về tài khoản của bạn. Token chỉ hiển thị 1 LẦN — copy ngay; muốn xem lại phải tạo lại (token cũ sẽ bị vô hiệu).",
+      urlLabel: "Webhook URL",
+      tokenLabel: "Webhook token",
+      copyBtn: "Sao chép URL",
+      copyDone: "Đã copy!",
+      dismissBtn: "Đã copy xong",
+      stepsTitle: "Hướng dẫn 4 bước trong ChirpStack",
+      steps: [
+        "Mở ChirpStack UI → chọn Application chứa device của bạn.",
+        "Vào tab Integrations → Add → HTTP.",
+        "Dán URL ở trên vào ô \"Endpoint URL (uplink)\". Encoding: JSON.",
+        "Lưu lại. Mỗi uplink sẽ tự đẩy về web-app với đúng provenance của bạn.",
+      ],
+    },
+
+    devices: {
+      heading: "Thiết bị đã sync",
+      loading: "Đang tải thiết bị…",
+      empty: "Chưa có thiết bị nào. Bấm \"Sync ngay\" để kéo từ provider.",
+      errorLoad: "Không tải được danh sách thiết bị.",
+      headers: ["DevEUI", "Tên", "Lần cuối thấy"],
+      lastSeenNever: "—",
+      /** @param {number} n */
+      total: (n) => `${n} thiết bị`,
     },
     errors: {
       errorCodeLabel: "Mã lỗi",
@@ -656,6 +694,8 @@ export const strings = {
             return "Nguồn không tồn tại hoặc đã bị xoá.";
           case "linking_error":
             return "Yêu cầu không hợp lệ.";
+          case "webhook_auth_failed":
+            return "Webhook token không hợp lệ hoặc đã bị thu hồi.";
           default:
             return "";
         }

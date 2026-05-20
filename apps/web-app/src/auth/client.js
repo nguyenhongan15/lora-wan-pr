@@ -1,10 +1,10 @@
 // @ts-check
-// Auth API client — register / login / logout / fetchMe.
+// Auth API client — register / login / refresh / logout / bootstrap / fetchMe.
 //
-// Tại sao tách khỏi api/client.js:
-//   * Concern khác: identity vs coverage/gateway.
-//   * Login + register KHÔNG cần Bearer (chưa có token). fetchMe CẦN → dùng
-//     authFetch. Mixing trong api/client.js sẽ rối.
+// v2 (2026-05-19): refresh token sống trong HttpOnly cookie `lora_refresh`.
+// Access JWT (TTL 15 min) trả trong response body, store in-memory. Mọi fetch
+// tới `/api/v1/auth/*` set `credentials: "include"` để browser attach/cookie
+// cookie tự động.
 //
 // Schema mirror backend (services/api-service/.../edge/schemas.py):
 //   RegisterRequest, LoginRequest, TokenResponse, UserResponse.
@@ -103,8 +103,7 @@ export async function register(req) {
 }
 
 /**
- * POST /api/v1/auth/login → set session vào store, trả về user.
- * Caller chỉ cần `await login(...)` — store đã update, subscribe sẽ fire.
+ * POST /api/v1/auth/login → set refresh cookie + access token, lưu session.
  *
  * @param {LoginRequestT} req
  * @returns {Promise<UserT>}
@@ -113,6 +112,7 @@ export async function login(req) {
   const parsed = LoginRequest.parse(req);
   const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
     method: "POST",
+    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(parsed),
   });
@@ -120,8 +120,8 @@ export async function login(req) {
 
   const token = TokenResponse.parse(await res.json());
 
-  // Token có rồi nhưng chưa có user payload (TokenResponse không kèm user
-  // info). Gọi /me ngay để lấy User → set 1 lần cả 2.
+  // /me để lấy User payload (login response không kèm). Bearer trực tiếp —
+  // không qua authFetch để tránh side-effect refresh nếu access vừa expire.
   const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
     headers: { authorization: `Bearer ${token.access_token}` },
   });
@@ -133,11 +133,68 @@ export async function login(req) {
 }
 
 /**
- * Logout — purely client-side. v1 KHÔNG có /auth/logout (plan §14: no
- * server-side revoke list — token expire tự nhiên trong 60 phút).
+ * POST /api/v1/auth/refresh → access token mới + rotate cookie.
+ * Trả null nếu cookie hết hạn / không có (caller xử lý gracefully).
+ *
+ * Nên dùng `bootstrap()` thay vì gọi refresh trực tiếp ở UI; refresh ngầm
+ * trong authFetch interceptor đã đủ cho 99% trường hợp.
+ *
+ * @returns {Promise<TokenResponseT | null>}
  */
-export function logout() {
+export async function refresh() {
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (res.status === 401) return null;
+  if (!res.ok) await _throwProblem(res);
+  return TokenResponse.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/auth/logout → server revoke refresh token + clear cookie,
+ * client clear in-memory store.
+ *
+ * Idempotent ở server (cookie thiếu = no-op). Network error → vẫn clear local
+ * để UI logged-out ngay; server bị orphan token sẽ tự expire sau TTL.
+ */
+export async function logout() {
+  try {
+    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // Mạng lỗi — vẫn clear local. Refresh cookie có thể sống thêm tới TTL,
+    // nhưng access in-memory đã clear → next reload sẽ thử refresh, server
+    // có thể trả 200 (cookie vẫn valid) — UX không hoàn hảo nhưng acceptable.
+  }
   clear();
+}
+
+/**
+ * App-load hook: khôi phục session từ HttpOnly cookie nếu có.
+ * Gọi 1 lần ở App mount; idempotent (resolve sớm nếu đã có session).
+ *
+ * @returns {Promise<UserT | null>}
+ */
+export async function bootstrap() {
+  if (getToken()) return null; // đã có session (HMR hoặc race), không cần
+  const token = await refresh();
+  if (!token) {
+    clear();
+    return null;
+  }
+  const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+    headers: { authorization: `Bearer ${token.access_token}` },
+  });
+  if (!meRes.ok) {
+    clear();
+    return null;
+  }
+  const user = User.parse(await meRes.json());
+  setSession(token.access_token, user);
+  return user;
 }
 
 /**
@@ -150,7 +207,7 @@ export async function fetchMe() {
   if (!getToken()) return null;
   const res = await authFetch(`${API_BASE_URL}/api/v1/auth/me`);
   if (res.status === 401) {
-    // authFetch đã clear store rồi.
+    // authFetch đã thử refresh + clear nếu fail.
     return null;
   }
   if (!res.ok) await _throwProblem(res);

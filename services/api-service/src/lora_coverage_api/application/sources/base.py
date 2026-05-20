@@ -34,6 +34,26 @@ class GatewayRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceRecord:
+    """Uniform device snapshot.
+
+    Projection của provider device registry. KHÔNG phải dependency của
+    ingest path (survey_quarantine vẫn lưu raw device_id text); table
+    `geo.devices` thuần là metadata cho FE "user X có Y devices".
+
+    `external_id` = natural key của device theo provider (ChirpStack: devEui).
+    `dev_eui` = field hiển thị; với ChirpStack thường trùng external_id (devEui
+    là canonical id), provider khác có thể tách (ID nội bộ ≠ EUI).
+    `last_seen_at` tz-aware UTC nếu provider trả.
+    """
+
+    external_id: str
+    dev_eui: str
+    name: str | None
+    last_seen_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class MeasurementRecord:
     """Uniform measurement record.
 
@@ -124,6 +144,17 @@ class DataSource(ABC):
 
         Order: ascending time within same device, ngược lại không xác định.
         Caller dedup theo external_id.
+
+        Raises: same as fetch_gateways.
+        """
+
+    @abstractmethod
+    def fetch_devices(self, handle: ConnectionHandle) -> Iterator[DeviceRecord]:
+        """Yield mọi device visible với credential này. Order unspecified.
+
+        Provider không expose devices (lpwanmapper, csv) → trả iter(()).
+        Caller (SyncService) upsert vào geo.devices, ON CONFLICT update
+        `name` + `last_seen_at`.
 
         Raises: same as fetch_gateways.
         """

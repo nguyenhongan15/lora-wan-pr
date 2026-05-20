@@ -10,6 +10,8 @@ Credentials shape:
   - api_url (required): base URL của ChirpStack REST, vd "https://cs.example.com:8080"
   - api_token (required): API key (Bearer)
   - tenant_id (optional): UUID — nếu set, scope query theo tenant đó
+  - verify_ssl (optional): "true"/"false" string; default "true". Set
+    "false" khi server thiếu intermediate cert hoặc dùng self-signed.
 
 Khác lpwanmapper:
   - lpwanmapper /login trả luôn gateways trong response → 1 call.
@@ -27,7 +29,13 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Any
 
-from ..base import ConnectionHandle, DataSource, GatewayRecord, MeasurementRecord
+from ..base import (
+    ConnectionHandle,
+    DataSource,
+    DeviceRecord,
+    GatewayRecord,
+    MeasurementRecord,
+)
 from ..errors import SourceAuthError
 from . import _client, _mapping
 
@@ -35,6 +43,8 @@ from . import _client, _mapping
 # enforce). Pick 100 — đủ lớn để hạn chế round-trip với fleet vài trăm gw,
 # vẫn fit response time hợp lý.
 _GATEWAY_PAGE_SIZE = 100
+_APPLICATION_PAGE_SIZE = 100
+_DEVICE_PAGE_SIZE = 250  # ChirpStack server max — minimize round-trips
 
 
 class ChirpStackSource(DataSource):
@@ -47,10 +57,18 @@ class ChirpStackSource(DataSource):
         tenant_id_raw = credentials.get("tenant_id")
         tenant_id = str(tenant_id_raw).strip() if tenant_id_raw else None
 
-        client = _client.Client(base_url=str(api_url).rstrip("/"))
-        # Lightweight authenticated probe — list 1 tenant. 401 → SourceAuthError,
-        # khác lỗi → SourceUnreachable/Fetch theo client.
-        client.probe(token=str(api_token))
+        # `verify_ssl` đi qua wire dưới dạng string vì credentials schema
+        # = dict[str, str] (xem edge/schemas.LinkSourceRequest). Parse lỏng:
+        # chỉ "false" (case-insensitive) tắt verify; mọi giá trị khác giữ
+        # default True. Tránh accident tắt verify do typo.
+        verify_raw = credentials.get("verify_ssl")
+        verify = str(verify_raw).strip().lower() != "false" if verify_raw else True
+
+        client = _client.Client(base_url=str(api_url).rstrip("/"), verify=verify)
+        # Probe = đúng endpoint sẽ dùng sau khi link (xem _client.probe). Truyền
+        # tenant_id để tenant-scoped key vẫn validate được (ListTenants yêu cầu
+        # global admin).
+        client.probe(token=str(api_token), tenant_id=tenant_id)
         return {
             "client": client,
             "token": str(api_token),
@@ -82,17 +100,15 @@ class ChirpStackSource(DataSource):
                 limit=_GATEWAY_PAGE_SIZE,
                 offset=offset,
             )
-            results = page.get("result")
-            if not isinstance(results, list) or not results:
+            results = list(page.result)
+            if not results:
                 return
             for raw in results:
-                if not isinstance(raw, dict):
-                    continue
                 rec = _mapping.gateway_record(raw)
                 if rec is not None:
                     yield rec
             offset += len(results)
-            # Trả ít hơn page-size = trang cuối; tránh dùng totalCount vì 1 số
+            # Trả ít hơn page-size = trang cuối; tránh dùng total_count vì 1 số
             # build trả -1 hoặc bỏ qua field này.
             if len(results) < _GATEWAY_PAGE_SIZE:
                 return
@@ -109,3 +125,60 @@ class ChirpStackSource(DataSource):
         # động, đủ validate multi-source architecture.
         del handle, since
         return iter(())
+
+    def fetch_devices(self, handle: ConnectionHandle) -> Iterator[DeviceRecord]:
+        """Stream mọi device visible với credential này.
+
+        Two-level pagination: list_applications → từng app list_devices.
+        ChirpStack v4 không có endpoint "list all devices in tenant" — phải
+        đi qua application boundary. Adapter ẩn complexity này: caller chỉ
+        thấy iterator phẳng.
+        """
+        client: _client.Client = handle["client"]
+        token: str = handle["token"]
+        tenant_id: str | None = handle["tenant_id"]
+
+        for app_id in self._iter_application_ids(client, token, tenant_id):
+            offset = 0
+            while True:
+                page = client.list_devices(
+                    token=token,
+                    application_id=app_id,
+                    limit=_DEVICE_PAGE_SIZE,
+                    offset=offset,
+                )
+                results = list(page.result)
+                if not results:
+                    break
+                for raw in results:
+                    rec = _mapping.device_record(raw)
+                    if rec is not None:
+                        yield rec
+                offset += len(results)
+                if len(results) < _DEVICE_PAGE_SIZE:
+                    break
+
+    def _iter_application_ids(
+        self,
+        client: _client.Client,
+        token: str,
+        tenant_id: str | None,
+    ) -> Iterator[str]:
+        offset = 0
+        while True:
+            page = client.list_applications(
+                token=token,
+                tenant_id=tenant_id,
+                limit=_APPLICATION_PAGE_SIZE,
+                offset=offset,
+            )
+            results = list(page.result)
+            if not results:
+                return
+            for raw in results:
+                app_id = (raw.id or "").strip()
+                if app_id:
+                    yield app_id
+            offset += len(results)
+            if len(results) < _APPLICATION_PAGE_SIZE:
+                return

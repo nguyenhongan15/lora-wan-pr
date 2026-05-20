@@ -15,10 +15,12 @@ Quyết định:
     (`COALESCE(EXCLUDED.x, table.x)`).
   * Measurement DO UPDATE: chỉ provenance fields. Payload (rssi/snr/sf...) là
     immutable observation — không bao giờ update.
-  * `code` (NOT NULL UNIQUE legacy column) = `external_id` cho lpwanmapper. Sau
-    backfill_provenance, legacy rows cũng follow convention này, nên ON CONFLICT
-    (source_type, external_id) khớp đúng row → không trigger
-    `gateways_code_key` violation.
+  * `code` (NOT NULL UNIQUE) = canonical identity của gateway hardware (EUI).
+    Cùng 1 physical gateway có thể visible qua nhiều source (vd lpwanmapper
+    + chirpstack cùng "thấy" 1 gateway DNIIT). Để tránh `gateways_code_key`
+    violation khi user khác link source khác cho cùng hardware, ON CONFLICT
+    target = (code). First-writer-wins giữ nguyên source_type/external_id
+    của row gốc; provenance fields COALESCE để legacy NULL được tag dần.
   * `frequency_mhz` default 923.0 (AS923-2 ĐN) khi adapter không trả; check
     constraint `chk_freq_lora_band` chỉ cho 433/868/915/923 nên caller phải
     pass giá trị hợp lệ.
@@ -35,7 +37,7 @@ from uuid import UUID
 
 from sqlalchemy import Connection, text
 
-from ..sources import GatewayRecord, MeasurementRecord
+from ..sources import DeviceRecord, GatewayRecord, MeasurementRecord
 
 UpsertResult = Literal["inserted", "updated"]
 MeasurementTarget = Literal["quarantine", "training"]
@@ -55,8 +57,9 @@ _GATEWAY_UPSERT_SQL = text("""
         :altitude_m, :freq_mhz,
         :external_id, :source_type, :contributor_user_id, :linked_source_id
     )
-    ON CONFLICT (source_type, external_id) WHERE external_id IS NOT NULL
-    DO UPDATE SET
+    -- Conflict target = code (EUI). Cùng hardware visible qua nhiều source
+    -- vẫn ON CONFLICT chính xác — xem module docstring.
+    ON CONFLICT (code) DO UPDATE SET
         location            = EXCLUDED.location,
         altitude_m          = EXCLUDED.altitude_m,
         -- First-writer-wins (plan-auth §3.3 fix): existing trước EXCLUDED →
@@ -64,6 +67,10 @@ _GATEWAY_UPSERT_SQL = text("""
         -- của user link trước. NULL legacy → fall back EXCLUDED tag dần.
         contributor_user_id = COALESCE(geo.gateways.contributor_user_id, EXCLUDED.contributor_user_id),
         linked_source_id    = COALESCE(geo.gateways.linked_source_id,    EXCLUDED.linked_source_id),
+        -- source_type / external_id: cũng first-writer-wins. NULL legacy
+        -- (gateway có code nhưng chưa tag source) → fall back EXCLUDED.
+        source_type         = COALESCE(geo.gateways.source_type,         EXCLUDED.source_type),
+        external_id         = COALESCE(geo.gateways.external_id,         EXCLUDED.external_id),
         updated_at          = now()
     RETURNING (xmax = 0) AS inserted, id
 """)
@@ -159,6 +166,57 @@ def upsert_gateway(
         },
     ).one()
     return ("inserted" if row.inserted else "updated", row.id)
+
+
+_DEVICE_UPSERT_SQL = text("""
+    INSERT INTO geo.devices (
+        dev_eui, name, source_type, external_id,
+        linked_source_id, contributor_user_id, last_seen_at
+    )
+    VALUES (
+        :dev_eui, :name, :source_type, :external_id,
+        :linked_source_id, :contributor_user_id, :last_seen_at
+    )
+    ON CONFLICT (source_type, external_id) DO UPDATE SET
+        name             = COALESCE(EXCLUDED.name, geo.devices.name),
+        -- last_seen_at chỉ tiến: GREATEST tránh ghi đè timestamp cũ nếu
+        -- provider tạm thời trả NULL hoặc timestamp đi lùi.
+        last_seen_at     = GREATEST(geo.devices.last_seen_at, EXCLUDED.last_seen_at),
+        linked_source_id = COALESCE(geo.devices.linked_source_id, EXCLUDED.linked_source_id),
+        contributor_user_id = COALESCE(geo.devices.contributor_user_id, EXCLUDED.contributor_user_id),
+        updated_at       = now()
+    RETURNING (xmax = 0) AS inserted
+""")
+
+
+def upsert_device(
+    conn: Connection,
+    rec: DeviceRecord,
+    *,
+    source_type: str,
+    linked_source_id: UUID | None,
+    contributor_user_id: UUID | None,
+) -> UpsertResult:
+    """Insert hoặc update 1 device row. KHÔNG raise — caller wrap transaction.
+
+    geo.devices KHÔNG phải dependency của ingest path; chỉ là projection
+    cho FE list. Update conflict overwrite metadata (name) + advance
+    last_seen_at; giữ contributor cũ (first-writer-wins) — user khác link
+    cùng deployment ChirpStack (cùng tenant) không "cướp" device.
+    """
+    row = conn.execute(
+        _DEVICE_UPSERT_SQL,
+        {
+            "dev_eui": rec.dev_eui,
+            "name": rec.name,
+            "source_type": source_type,
+            "external_id": rec.external_id,
+            "linked_source_id": linked_source_id,
+            "contributor_user_id": contributor_user_id,
+            "last_seen_at": rec.last_seen_at,
+        },
+    ).one()
+    return "inserted" if row.inserted else "updated"
 
 
 def upsert_measurement(

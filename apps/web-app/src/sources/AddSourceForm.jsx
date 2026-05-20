@@ -14,6 +14,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
 import { linkSource } from "./client.js";
+import { WebhookSetupInstructions } from "./WebhookSetupInstructions.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.sources.addForm;
@@ -33,6 +34,7 @@ const tErr = strings.sources.errors;
  *   api_url: string,
  *   api_token: string,
  *   tenant_id: string,
+ *   verify_ssl: boolean,
  * }} Creds
  */
 
@@ -43,6 +45,7 @@ const EMPTY_CREDS = Object.freeze({
   api_url: "",
   api_token: "",
   tenant_id: "",
+  verify_ssl: true,
 });
 
 export function AddSourceForm() {
@@ -53,15 +56,28 @@ export function AddSourceForm() {
   const [creds, setCreds] = useState(
     /** @type {Creds} */ ({ ...EMPTY_CREDS }),
   );
+  // Webhook plaintext giữ ở state nội bộ (show-once). User dismiss → null
+  // → biến mất khỏi DOM. KHÔNG persist vào localStorage / sessionStorage.
+  const [webhookSecret, setWebhookSecret] = useState(
+    /** @type {{ url: string, token: string } | null} */ (null),
+  );
   const qc = useQueryClient();
 
   const m = useMutation({
     mutationFn: linkSource,
-    onSuccess: () => {
+    onSuccess: (created) => {
       // Clear credential ngay khỏi state — không lingering.
       setLabel("");
       setCreds({ ...EMPTY_CREDS });
       qc.invalidateQueries({ queryKey: ["sources"] });
+      // ChirpStack source → backend trả plaintext webhook URL+token 1 lần;
+      // hiển thị qua banner show-once. Source khác → cả 2 = null, skip.
+      if (created.webhook_url && created.webhook_token) {
+        setWebhookSecret({
+          url: created.webhook_url,
+          token: created.webhook_token,
+        });
+      }
     },
   });
 
@@ -91,6 +107,10 @@ export function AddSourceForm() {
       };
       const tenant = creds.tenant_id.trim();
       if (tenant) credentials.tenant_id = tenant;
+      // Backend credentials schema = dict[str, str]; gửi string thay vì
+      // bool. Adapter chỉ tắt verify khi gặp "false" (xem chirpstack/
+      // adapter.connect). Mặc định gửi explicit để intent rõ trong audit log.
+      credentials.verify_ssl = creds.verify_ssl ? "true" : "false";
     }
     m.mutate({
       source_type: sourceType,
@@ -157,12 +177,16 @@ export function AddSourceForm() {
             apiUrl={creds.api_url}
             apiToken={creds.api_token}
             tenantId={creds.tenant_id}
+            verifySsl={creds.verify_ssl}
             onChangeApiUrl={(v) => setCreds((c) => ({ ...c, api_url: v }))}
             onChangeApiToken={(v) =>
               setCreds((c) => ({ ...c, api_token: v }))
             }
             onChangeTenantId={(v) =>
               setCreds((c) => ({ ...c, tenant_id: v }))
+            }
+            onChangeVerifySsl={(v) =>
+              setCreds((c) => ({ ...c, verify_ssl: v }))
             }
           />
         )}
@@ -178,12 +202,22 @@ export function AddSourceForm() {
         </div>
       </form>
 
-      {m.isSuccess && (
+      {m.isSuccess && !webhookSecret && (
         <div
           role="status"
           className="mt-3 rounded-md border border-green-300 bg-green-50 p-3 text-sm text-green-800"
         >
           {t.successHint}
+        </div>
+      )}
+
+      {webhookSecret && (
+        <div className="mt-3">
+          <WebhookSetupInstructions
+            webhookUrl={webhookSecret.url}
+            webhookToken={webhookSecret.token}
+            onDismiss={() => setWebhookSecret(null)}
+          />
         </div>
       )}
 
@@ -253,18 +287,22 @@ function LpwanmapperFields({
  *   apiUrl: string,
  *   apiToken: string,
  *   tenantId: string,
+ *   verifySsl: boolean,
  *   onChangeApiUrl: (v: string) => void,
  *   onChangeApiToken: (v: string) => void,
  *   onChangeTenantId: (v: string) => void,
+ *   onChangeVerifySsl: (v: boolean) => void,
  * }} props
  */
 function ChirpStackFields({
   apiUrl,
   apiToken,
   tenantId,
+  verifySsl,
   onChangeApiUrl,
   onChangeApiToken,
   onChangeTenantId,
+  onChangeVerifySsl,
 }) {
   const tt = t.chirpstack;
   return (
@@ -323,6 +361,25 @@ function ChirpStackFields({
           className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
         />
         <p className="mt-1 text-xs text-slate-500">{tt.tenantIdHint}</p>
+      </div>
+
+      <div className="sm:col-span-2">
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={!verifySsl}
+            onChange={(e) => onChangeVerifySsl(!e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+          />
+          <span>
+            <span className="font-medium text-amber-700">
+              {tt.skipSslLabel}
+            </span>
+            <span className="ml-1 text-xs text-slate-500">
+              {tt.skipSslHint}
+            </span>
+          </span>
+        </label>
       </div>
     </>
   );

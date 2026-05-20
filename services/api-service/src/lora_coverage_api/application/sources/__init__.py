@@ -13,6 +13,7 @@ from . import chirpstack, lpwanmapper  # noqa: F401
 from .base import (
     ConnectionHandle,
     DataSource,
+    DeviceRecord,
     GatewayRecord,
     MeasurementRecord,
 )
@@ -28,6 +29,7 @@ from .registry import get_adapter, known_source_types, register
 __all__ = [
     "ConnectionHandle",
     "DataSource",
+    "DeviceRecord",
     "GatewayRecord",
     "MeasurementRecord",
     "SourceAuthError",
