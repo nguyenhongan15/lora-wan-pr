@@ -131,4 +131,5 @@ def consume(conn: Connection, presented_token: str) -> UUID:
         # Race: 1 request khác đã consume giữa SELECT và UPDATE.
         raise PasswordResetTokenUsedError("Reset token đã được sử dụng")
 
-    return row.user_id
+    user_id: UUID = row.user_id
+    return user_id

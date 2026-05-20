@@ -5,6 +5,8 @@ KHÔNG hardcode default cho secrets. Default chỉ cho dev convenience.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -77,12 +79,12 @@ class Settings(BaseSettings):
         default=False,
         description="Set-Cookie Secure flag. TRUE bắt buộc cho production (HTTPS).",
     )
-    refresh_cookie_samesite: str = Field(
+    refresh_cookie_samesite: Literal["lax", "strict", "none"] = Field(
         default="lax",
         description="Set-Cookie SameSite. 'lax' đủ chống CSRF cho POST endpoints.",
     )
 
-    @field_validator("refresh_cookie_samesite")
+    @field_validator("refresh_cookie_samesite", mode="before")
     @classmethod
     def _samesite_valid(cls, v: str) -> str:
         if v.lower() not in ("lax", "strict", "none"):

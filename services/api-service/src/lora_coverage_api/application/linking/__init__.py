@@ -20,9 +20,9 @@ __all__ = [
     "CredentialAlreadyLinkedError",
     "CredentialCipher",
     "CredentialTestFailedError",
+    "LinkResult",
     "LinkedSource",
     "LinkedSourceNotFoundError",
     "LinkingError",
     "LinkingService",
-    "LinkResult",
 ]

@@ -167,6 +167,8 @@ class SyncService:
                 linked_source_id=linked_source_id,
                 gateways_inserted=0,
                 gateways_updated=0,
+                devices_inserted=0,
+                devices_updated=0,
                 measurements_inserted=0,
                 measurements_updated=0,
                 last_sync_at=None,

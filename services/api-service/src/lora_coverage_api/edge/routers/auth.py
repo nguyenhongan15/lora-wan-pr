@@ -100,7 +100,7 @@ def _audit_metadata(request: Request) -> tuple[str | None, str | None]:
 )
 @limiter.limit(_settings.auth_register_rate_limit)
 def register(
-    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    request: Request,
     body: RegisterRequest,
     identity: IdentityService = Depends(identity_service),
 ) -> UserResponse:
@@ -196,7 +196,7 @@ def me(user: User = Depends(current_user)) -> UserResponse:
 )
 @limiter.limit(_settings.auth_password_reset_request_rate_limit)
 def password_reset_request(
-    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    request: Request,
     body: PasswordResetRequestRequest,
     identity: IdentityService = Depends(identity_service),
 ) -> Response:
@@ -211,7 +211,7 @@ def password_reset_request(
 )
 @limiter.limit(_settings.auth_password_reset_confirm_rate_limit)
 def password_reset_confirm(
-    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    request: Request,
     body: PasswordResetConfirmRequest,
     identity: IdentityService = Depends(identity_service),
 ) -> Response:

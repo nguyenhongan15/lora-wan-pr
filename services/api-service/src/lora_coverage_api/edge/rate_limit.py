@@ -7,7 +7,7 @@ Architecture (Chapter 4 — "Design a Rate Limiter"):
                        └──→ Cache (Valkey) ← shared counter store
 
 Worker per-process in-memory storage không sync giữa N workers → effective
-rate-limit = (N × ngưỡng config). Centralized data store fix root cause:
+rate-limit = (N * ngưỡng config). Centralized data store fix root cause:
 mọi worker SET/GET counter cùng 1 Valkey key, atomic operations đảm bảo
 correctness dưới race condition (chapter §Distributed Environments).
 

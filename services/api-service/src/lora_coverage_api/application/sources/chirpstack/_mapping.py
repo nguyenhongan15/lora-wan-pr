@@ -18,7 +18,7 @@ tồn tại trên wire (proto3 default = struct rỗng); skip khi lat=lon=0
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from chirpstack_api import api
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -79,7 +79,8 @@ def _opt_ts(ts: Timestamp | None) -> datetime | None:
         return None
     if ts.seconds == 0 and ts.nanos == 0:
         return None
-    return ts.ToDatetime().replace(tzinfo=timezone.utc)
+    dt: datetime = ts.ToDatetime().replace(tzinfo=UTC)
+    return dt
 
 
 def _opt_str(v: str | None) -> str | None:

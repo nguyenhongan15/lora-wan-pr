@@ -31,8 +31,7 @@ class Mailer(Protocol):
         *,
         reset_url: str,
         expires_in_minutes: int,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class MailerError(Exception):

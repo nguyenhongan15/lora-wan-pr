@@ -74,7 +74,10 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 # 3rd-party packages thiếu type stub. ML service phụ thuộc nặng — không cần
 # fail strict mypy vì lib upstream.
-module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*"]
+# chirpstack_api + google.protobuf: stubs (types-protobuf) cover phần protobuf
+# nhưng chirpstack_api generated protobuf không có py.typed — coverage cục bộ,
+# bỏ qua cho đỡ noise.
+module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*", "chirpstack_api", "chirpstack_api.*", "google.protobuf", "google.protobuf.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

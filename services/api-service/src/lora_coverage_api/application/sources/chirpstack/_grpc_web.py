@@ -142,7 +142,7 @@ class GrpcWebClient:
         # ListDevicesResponse khi application không có device — total_count=0
         # + result=[] đều default → protobuf serialize = 0 bytes). Đừng raise
         # ở đây; ParseFromString(b'') trả message rỗng OK.
-        result = response_type()
+        result: ResponseT = response_type()
         try:
             result.ParseFromString(data)
         except Exception as exc:

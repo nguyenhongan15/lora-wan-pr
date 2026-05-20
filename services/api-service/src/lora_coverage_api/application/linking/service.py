@@ -496,4 +496,4 @@ class LinkingService:
             ) from exc
 
 
-__all__ = ["LinkedSource", "LinkingService", "LinkResult"]
+__all__ = ["LinkResult", "LinkedSource", "LinkingService"]

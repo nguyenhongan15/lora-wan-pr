@@ -276,7 +276,7 @@ async def lookup(
 )
 @limiter.limit(_settings.coverage_batch_rate_limit)
 async def lookup_batch(
-    request: Request,  # noqa: ARG001 — required by slowapi.Limiter để extract IP
+    request: Request,
     payload: CoverageBatchRequest,
     geocoder: AddressResolution = Depends(address_resolution),
     service: PredictionOrchestrator = Depends(prediction_orchestrator),
