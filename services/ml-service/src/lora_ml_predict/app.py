@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     port: int = 8001
     host: str = "0.0.0.0"
     model_version: str = "stage2-stub-v0.1.0"
+    # Set to False to simulate "no active model" (503)
+    is_model_active: bool = True
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -31,6 +33,9 @@ class TargetSchema(BaseModel):
     longitude: float
     spreading_factor: int
     frequency_mhz: float
+
+class BatchTargetSchema(TargetSchema):
+    stage1_pl_db: float | None = None
 
 class GatewaySchema(BaseModel):
     id: str
@@ -51,6 +56,19 @@ class PredictionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     residual_db: float
     model_version: str
+    ood: bool = False
+
+class BatchPredictionRequest(BaseModel):
+    gateway: GatewaySchema
+    targets: list[BatchTargetSchema]
+
+class BatchResidualItem(BaseModel):
+    residual_db: float | None
+    ood: bool
+
+class BatchPredictionResponse(BaseModel):
+    model_version: str
+    residuals: list[BatchResidualItem]
 
 async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]):
     if credentials.credentials != settings.auth_token:
@@ -60,6 +78,13 @@ async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials, Depe
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+def check_model_active():
+    if not settings.is_model_active:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="no active model"
+        )
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -67,16 +92,42 @@ async def healthz():
 @app.post("/residual", response_model=PredictionResponse)
 async def predict_residual(
     request: PredictionRequest,
-    _auth: Annotated[None, Depends(verify_token)]
+    _auth: Annotated[None, Depends(verify_token)],
+    _active: Annotated[None, Depends(check_model_active)]
 ):
     """
-    Placeholder for Stage 2 residual prediction.
-    In a real implementation, this would load a model and features.
+    POST /residual — per-target, used by point-prediction via api-service.
     """
-    # For now, return a 0.0 residual (no correction)
+    # Placeholder: In a real implementation, feature engineering + model inference go here.
     return PredictionResponse(
         residual_db=0.0,
-        model_version=settings.model_version
+        model_version=settings.model_version,
+        ood=False
+    )
+
+@app.post("/residuals/batch", response_model=BatchPredictionResponse)
+async def predict_residuals_batch(
+    request: BatchPredictionRequest,
+    _auth: Annotated[None, Depends(verify_token)],
+    _active: Annotated[None, Depends(check_model_active)]
+):
+    """
+    POST /residuals/batch — bulk, for min-SF precompute.
+    """
+    # Batch size limit check (optional but recommended)
+    if len(request.targets) > 5000:
+        logger.warning("Batch size too large: %d", len(request.targets))
+        # We could raise an error, but let's just process it for now or truncate.
+
+    # Placeholder logic: return 0.0 residuals for all targets
+    residuals = [
+        BatchResidualItem(residual_db=0.0, ood=False)
+        for _ in request.targets
+    ]
+    
+    return BatchPredictionResponse(
+        model_version=settings.model_version,
+        residuals=residuals
     )
 
 def main():
