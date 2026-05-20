@@ -13,13 +13,14 @@ reset link lại nếu cần (mỗi request invalidate token cũ → safe).
 
 from __future__ import annotations
 
-import logging
 import smtplib
 from email.message import EmailMessage
 
+import structlog
+
 from ..application.identity import Mailer, MailerError
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger("lora_coverage_api.mailer")
 
 
 class SmtpMailer(Mailer):
@@ -72,7 +73,12 @@ class SmtpMailer(Mailer):
         except (smtplib.SMTPException, OSError) as exc:
             # OSError bắt timeout + hostname không resolve. KHÔNG log
             # `to_email` (PII) — chỉ log host:port để debug.
-            logger.error("SMTP send failed: host=%s:%s err=%s", self._host, self._port, exc)
+            logger.error(
+                "smtp_send_failed",
+                host=self._host,
+                port=self._port,
+                error=str(exc),
+            )
             raise MailerError("Không gửi được email reset password") from exc
 
 
@@ -91,10 +97,10 @@ class NoOpMailer(Mailer):
         expires_in_minutes: int,
     ) -> None:
         logger.warning(
-            "[NoOpMailer] Password reset for %s (TTL %d min): %s",
-            to_email,
-            expires_in_minutes,
-            reset_url,
+            "noop_mailer_password_reset",
+            to_email=to_email,
+            ttl_minutes=expires_in_minutes,
+            reset_url=reset_url,
         )
 
 
