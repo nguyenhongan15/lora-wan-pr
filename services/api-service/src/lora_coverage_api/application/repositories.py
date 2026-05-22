@@ -52,6 +52,12 @@ class GatewayDirectory(Protocol):
 
     def get_by_id(self, gateway_id: GatewayId) -> Gateway | None: ...
 
+    def get_by_code(self, code: str) -> Gateway | None:
+        """Lookup by business code (vd 'DAD-012'). Dùng cho CSV upload —
+        user nhập gateway code thay vì UUID. Trả None nếu không tồn tại.
+        """
+        ...
+
     def create(self, gateway: Gateway) -> Gateway:
         """Insert mới. Trả gateway đã có id từ DB."""
         ...
@@ -88,6 +94,7 @@ class SurveyIngest(Protocol):
         source_type: str | None = None,
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
+        submitted_for_community: bool = False,
     ) -> int:
         """Như `write_quarantine` nhưng ID do caller cung cấp + ON CONFLICT
         DO NOTHING ở (timestamp, id).
@@ -103,6 +110,11 @@ class SurveyIngest(Protocol):
             batch-level provenance, áp dụng cho mọi row trong batch. Webhook
             ingest đọc từ `WebhookContext`; legacy path (chưa migrate) pass
             None để giữ behaviour cũ.
+          * `submitted_for_community` (plan community-data-contribution §3.4):
+            cờ batch-level đẩy xuống cột `submitted_for_community`. Caller
+            (webhook ingest theo `WebhookContext.contribute`; CSV upload theo
+            checkbox) quyết định; pipeline TrustValidator phía sau đọc cờ
+            này để biết có promote hay không.
 
         Trả số record THỰC SỰ insert (đã trừ duplicate skip).
         """

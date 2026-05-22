@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
 import { listSources } from "./client.js";
 import { AddSourceForm } from "./AddSourceForm.jsx";
+import { CsvContributeCard } from "./CsvContributeCard.jsx";
 import { LinkedSourceCard } from "./LinkedSourceCard.jsx";
 import { strings } from "../strings.js";
 
@@ -52,6 +53,8 @@ export function SourcesPage() {
           ))}
         </div>
       )}
+
+      <CsvContributeCard />
     </div>
   );
 }

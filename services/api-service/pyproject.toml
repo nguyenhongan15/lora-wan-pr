@@ -6,6 +6,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    # FastAPI multipart/form-data parsing — required cho POST /me/uploads/csv
+    # (UploadFile + Form). FastAPI báo ImportError lúc xử lý request nếu thiếu.
+    "python-multipart>=0.0.9",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "sqlalchemy>=2.0",

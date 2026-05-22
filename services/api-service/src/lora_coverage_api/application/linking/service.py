@@ -30,6 +30,12 @@ from sqlalchemy.exc import IntegrityError
 
 from ..identity import User
 from ..sources import SourceAuthError, get_adapter
+from ..trust import (
+    TrustValidator,
+    UnknownContributorError,
+    mark_submitted_for_linked_source,
+    promote_pending_for_linked_source,
+)
 from ._crypto import CredentialCipher
 from .errors import (
     CredentialAlreadyLinkedError,
@@ -168,35 +174,20 @@ _UPDATE_WEBHOOK_HASH_OWNED = text("""
 """)
 
 
-# Backfill khi user opt-in lần đầu: copy mọi measurement đã sync vào quarantine
-# sang training. Idempotent qua ON CONFLICT (user toggle off→on→off→on không
-# nhân đôi rows). Plan §3.4 + a-philosophy §8 (pull complexity downwards):
-# 1 SQL transactional, KHÔNG batching ở v1 (background queue đẩy sang v2).
+# Backfill flow (plan community-data-contribution §3.4):
+#   1. Flip submitted_for_community false→true cho mọi quarantine row của
+#      ls_id (mark_submitted_for_linked_source).
+#   2. Load contributor reputation 1 lần (stable threshold cho cả batch).
+#   3. Loop validate + promote (promote_pending_for_linked_source) — pass
+#      → INSERT training, fail → SET reject_reason.
+#
+# Plan thay INSERT...SELECT bulk vì cần per-record TrustValidator gating;
+# loop chấp nhận cost ITU compute per row (lịch sử mỗi user giới hạn).
 #
 # `SET LOCAL statement_timeout`: scope = transaction → revert tự động khi
-# commit/rollback. 25s buffer dưới uvicorn 30s default → timeout fail rollback
-# trước khi worker bị giết.
-_SET_BACKFILL_TIMEOUT = text("SET LOCAL statement_timeout = '25s'")
-
-_BACKFILL_QUARANTINE_TO_TRAINING = text("""
-    INSERT INTO ts.survey_training (
-        id, timestamp, location, rssi_dbm, snr_db,
-        spreading_factor, frequency_mhz, device_id,
-        serving_gateway_id, uploader_id,
-        external_id, source_type, contributor_user_id, linked_source_id
-    )
-    SELECT
-        gen_random_uuid(), timestamp, location, rssi_dbm, snr_db,
-        spreading_factor, frequency_mhz, device_id,
-        serving_gateway_id, uploader_id,
-        external_id, source_type, contributor_user_id, linked_source_id
-    FROM ts.survey_quarantine
-    WHERE linked_source_id = :ls_id
-      AND reject_reason IS NULL
-      AND external_id IS NOT NULL
-    ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
-    DO NOTHING
-""")
+# commit/rollback. 60s buffer rộng hơn bulk SQL cũ vì loop có thể chạy lâu
+# với batch lớn + ITU compute per row.
+_SET_BACKFILL_TIMEOUT = text("SET LOCAL statement_timeout = '60s'")
 
 
 def _row_to_linked_source(row: Any) -> LinkedSource:
@@ -217,8 +208,14 @@ def _row_to_linked_source(row: Any) -> LinkedSource:
 
 
 class LinkingService:
-    def __init__(self, *, cipher: CredentialCipher) -> None:
+    """Stateless modulo (cipher, trust). `trust` inject để set_contribution
+    chạy promote pipeline khi user opt-in cộng đồng (plan community-data-
+    contribution §3.4).
+    """
+
+    def __init__(self, *, cipher: CredentialCipher, trust: TrustValidator) -> None:
         self._cipher = cipher
+        self._trust = trust
 
     # ── public interface ──────────────────────────────────────────────────
 
@@ -436,16 +433,18 @@ class LinkingService:
     ) -> LinkedSource:
         """Toggle `contribute_to_community`.
 
-        enabled=true → backfill quarantine→training cho ls_id ngay trong cùng
-        transaction. Plan §3.4: data đã pull về phải xuất hiện trên map cộng
-        đồng ngay sau opt-in, KHÔNG đợi sync kế tiếp.
+        enabled=true → mark mọi quarantine row của ls_id submitted_for_community
+        =true, sau đó chạy TrustValidator pipeline per-row. Pass → INSERT
+        training; fail → SET reject_reason. Plan community-data-contribution
+        §3.4: data đã pull về phải hiện ngay trên map cộng đồng sau opt-in
+        (nếu pass validate), KHÔNG đợi sync kế tiếp.
 
-        Idempotent (ON CONFLICT DO NOTHING): toggle off→on→off→on không nhân
-        đôi training rows. Không xoá khỏi training khi opt-out — privacy edge
-        case này tách thành tác vụ riêng (không trong scope fix hiện tại).
+        enabled=false → flip cờ trên linked_source. KHÔNG xoá khỏi training
+        + KHÔNG revert submitted_for_community trên rows cũ (data đã được
+        cộng đồng tiêu thụ; opt-out scope = "không pull thêm" thôi).
 
-        Sync mới (sau toggle) sẽ tự routing về training nhờ
-        SyncService đọc `contribute_to_community` qua _LOCK_OWNED_ROW.
+        Sync mới (sau opt-in) tự đẩy `submitted_for_community=true` cho rows
+        mới qua SyncService đọc `contribute_to_community`.
         """
         row = conn.execute(
             _UPDATE_CONTRIBUTION_OWNED,
@@ -466,19 +465,40 @@ class LinkingService:
         return _row_to_linked_source(row)
 
     def _backfill_to_training(self, conn: Connection, *, user_id: UUID, ls_id: UUID) -> None:
-        """INSERT...SELECT quarantine→training cho 1 linked_source. Audit-only:
-        không trả gì, không raise (caller transaction wrap). Log row_count +
-        duration_ms để observe (plan revisit a2 nếu >5% timeout)."""
+        """Mark submitted + run trust pipeline cho 1 linked_source.
+
+        Audit-only: không trả gì, không raise (caller transaction wrap).
+        UnknownContributorError swallow (user bị xoá giữa lúc PATCH — rất
+        hiếm, log warning); promote loop per-row trao quyết định cho
+        TrustValidator. Log accepted/rejected/duration_ms để observe.
+        """
         started = time.monotonic()
         conn.execute(_SET_BACKFILL_TIMEOUT)
-        result = conn.execute(_BACKFILL_QUARANTINE_TO_TRAINING, {"ls_id": ls_id})
-        row_count = result.rowcount
+        flipped = mark_submitted_for_linked_source(conn, linked_source_id=ls_id)
+        try:
+            contributor = self._trust.load_contributor(conn, user_id)
+        except UnknownContributorError:
+            logger.warning(
+                "contribute_backfill_skipped_unknown_user",
+                user_id=str(user_id),
+                linked_source_id=str(ls_id),
+            )
+            return
+        result = promote_pending_for_linked_source(
+            conn,
+            self._trust,
+            contributor,
+            linked_source_id=ls_id,
+        )
         duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "contribute_backfill_completed",
             user_id=str(user_id),
             linked_source_id=str(ls_id),
-            row_count=row_count,
+            rows_flipped=flipped,
+            accepted=result.accepted,
+            rejected=result.rejected,
+            by_reason=result.by_reason,
             duration_ms=duration_ms,
         )
 

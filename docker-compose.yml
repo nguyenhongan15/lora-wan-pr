@@ -153,6 +153,7 @@ services:
       COVERAGE_PREDICT_RATE_LIMIT: ${COVERAGE_PREDICT_RATE_LIMIT:-30/minute}
       COVERAGE_LOOKUP_RATE_LIMIT: ${COVERAGE_LOOKUP_RATE_LIMIT:-30/minute}
       COVERAGE_BATCH_RATE_LIMIT: ${COVERAGE_BATCH_RATE_LIMIT:-1/minute}
+      ME_CSV_UPLOAD_RATE_LIMIT: ${ME_CSV_UPLOAD_RATE_LIMIT:-10/hour}
       # Centralized rate-limit store (Chapter 4 §Distributed Environments).
       # Empty = in-memory (dev / single-worker). Compose mặc định trỏ tới
       # service `cache` để 2 workers đếm chung counter, không bị divergence.

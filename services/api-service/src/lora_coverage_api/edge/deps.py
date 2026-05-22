@@ -37,6 +37,7 @@ from ..application.repositories import (
     SurveyIngest,
 )
 from ..application.sync import SyncService
+from ..application.trust import TrustValidator
 from ..application.webhook_auth import WebhookAuthService
 from ..config import Settings, get_settings
 from ..infrastructure.address_cache_pg import PgAddressCache
@@ -278,9 +279,33 @@ def _credential_cipher() -> CredentialCipher:
     return CredentialCipher(keys=_settings().linking_fernet_keys_list)
 
 
+# ── Trust validator (plan community-data-contribution §3.4) ───────────────
+
+
+@lru_cache(maxsize=1)
+def _trust_validator() -> TrustValidator:
+    """Shared TrustValidator — LinkingService.set_contribution, SyncService
+    post-batch promote, ChirpStack webhook ingest post-write, CSV upload
+    endpoint đều dùng cùng instance (single Stage1ItuModel + GatewayDirectory).
+    """
+    settings = _settings()
+    return TrustValidator(
+        model=Stage1ItuModel(
+            model_version=settings.ml_model_version,
+            backend=_itu_backend(),
+            env_profile=resolve_environment_profile(settings.lora_env_profile),
+        ),
+        directory=gateway_directory(),
+    )
+
+
+def trust_validator() -> TrustValidator:
+    return _trust_validator()
+
+
 @lru_cache(maxsize=1)
 def _linking_service() -> LinkingService:
-    return LinkingService(cipher=_credential_cipher())
+    return LinkingService(cipher=_credential_cipher(), trust=_trust_validator())
 
 
 def linking_service() -> LinkingService:
@@ -289,7 +314,7 @@ def linking_service() -> LinkingService:
 
 @lru_cache(maxsize=1)
 def _sync_service() -> SyncService:
-    return SyncService(cipher=_credential_cipher())
+    return SyncService(cipher=_credential_cipher(), trust=_trust_validator())
 
 
 def sync_service() -> SyncService:

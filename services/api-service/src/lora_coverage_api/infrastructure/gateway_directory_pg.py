@@ -175,6 +175,18 @@ class PgGatewayDirectory:
             row = conn.execute(sql, {"id": gateway_id}).mappings().first()
         return _row_to_gateway(dict(row)) if row else None
 
+    def get_by_code(self, code: str) -> Gateway | None:
+        sql = text(
+            f"""
+            SELECT {_SELECT_COLS}
+            FROM geo.gateways
+            WHERE code = :code
+            """
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(sql, {"code": code}).mappings().first()
+        return _row_to_gateway(dict(row)) if row else None
+
     # ── Write paths ───────────────────────────────────────────────────────
     def create(self, gateway: Gateway) -> Gateway:
         sql = text(

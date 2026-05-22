@@ -23,6 +23,23 @@ RSSI_MAX_DBM = -30.0
 SNR_MIN_DB = -30.0
 SNR_MAX_DB = 30.0
 
+# Bounding box Vietnam (lat_min, lat_max, lng_min, lng_max). Dùng cho hard
+# gate L1 của TrustValidator: measurement đóng góp cộng đồng phải nằm trong
+# VN (Scope Vietnam only). Personal-upload không bắt buộc — caller (validator)
+# tự áp dụng theo context.
+VIETNAM_LAT_MIN = 8.18
+VIETNAM_LAT_MAX = 23.39
+VIETNAM_LNG_MIN = 102.14
+VIETNAM_LNG_MAX = 109.47
+
+
+def is_in_vietnam(latitude: float, longitude: float) -> bool:
+    """True nếu (lat, lng) nằm trong bbox Vietnam. Helper cho L1 hard gate."""
+    return (
+        VIETNAM_LAT_MIN <= latitude <= VIETNAM_LAT_MAX
+        and VIETNAM_LNG_MIN <= longitude <= VIETNAM_LNG_MAX
+    )
+
 
 class SurveyBatchStatus(StrEnum):
     QUARANTINED = "quarantined"  # Đã nhận, chờ validate
@@ -31,7 +48,14 @@ class SurveyBatchStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SurveyRecord:
-    """1 reading từ thiết bị field. Toạ độ WGS84."""
+    """1 reading từ thiết bị field. Toạ độ WGS84.
+
+    `submitted_for_community`: caller-driven flag (CSV upload checkbox,
+    ChirpStack webhook context kế thừa từ linked_source.contribute_to_community,
+    sync orchestrator giữ false để pipeline tự quyết). True → record sẽ chạy
+    qua TrustValidator pipeline; pass → promote sang ts.survey_training. False
+    → mãi mãi ở quarantine, chỉ user owner xem được (personal-only).
+    """
 
     timestamp: datetime
     latitude: float
@@ -42,6 +66,7 @@ class SurveyRecord:
     frequency_mhz: float = 923.0
     device_id: str | None = None
     serving_gateway_id: GatewayId | None = None
+    submitted_for_community: bool = False
 
     def __post_init__(self) -> None:
         if not -90.0 <= self.latitude <= 90.0:

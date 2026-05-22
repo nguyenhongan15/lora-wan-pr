@@ -39,14 +39,16 @@ class PgSurveyRepository:
             id, timestamp, location, rssi_dbm, snr_db,
             spreading_factor, frequency_mhz, device_id,
             serving_gateway_id, uploader_id,
-            external_id, source_type, contributor_user_id, linked_source_id
+            external_id, source_type, contributor_user_id, linked_source_id,
+            submitted_for_community
         )
         VALUES (
             :id, :ts,
             ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
             :rssi, :snr, :sf, :freq, :device_id,
             :gw_id, :uploader_id,
-            :external_id, :source_type, :contributor_user_id, :linked_source_id
+            :external_id, :source_type, :contributor_user_id, :linked_source_id,
+            :submitted_for_community
         )
         ON CONFLICT (timestamp, id) DO NOTHING
         """
@@ -62,6 +64,7 @@ class PgSurveyRepository:
         source_type: str | None = None,
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
+        submitted_for_community: bool = False,
     ) -> dict[str, Any]:
         return {
             "id": rec_id,
@@ -79,6 +82,7 @@ class PgSurveyRepository:
             "source_type": source_type,
             "linked_source_id": linked_source_id,
             "contributor_user_id": contributor_user_id,
+            "submitted_for_community": submitted_for_community,
         }
 
     def write_quarantine(self, batch: SurveyBatch) -> SurveyBatchId:
@@ -98,6 +102,7 @@ class PgSurveyRepository:
         source_type: str | None = None,
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
+        submitted_for_community: bool = False,
     ) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
@@ -121,6 +126,7 @@ class PgSurveyRepository:
                 source_type=source_type,
                 linked_source_id=linked_source_id,
                 contributor_user_id=contributor_user_id,
+                submitted_for_community=submitted_for_community,
             )
             for rid, r, ext in zip(record_ids, batch.records, ext_iter, strict=True)
         ]
@@ -163,24 +169,13 @@ class PgSurveyRepository:
         # JOIN auth.linked_sources + auth.users CHỈ cho mode=community (cần
         # filter contribute + disabled). Mode self/user bypass — defense in
         # depth không cần thiết vì target_user_id đã do edge ép buộc.
+        #
+        # Mode self|user: UNION ts.survey_training (đã đóng góp) với
+        # ts.survey_quarantine (CSV cá nhân + community-pending + rejected).
+        # User upload CSV chưa nhấn "Đóng góp cộng đồng" thì row chỉ ở
+        # quarantine — filter "Của tôi" cần thấy nên cả 2 bảng đều phải query.
         where: list[str] = []
         params: dict[str, object] = {"limit": limit, "offset": offset}
-        join_sql = ""
-
-        if contributor.mode == "community":
-            join_sql = (
-                "JOIN auth.linked_sources ls ON ls.id = t.linked_source_id "
-                "JOIN auth.users u ON u.id = t.contributor_user_id"
-            )
-            where.append("ls.contribute_to_community = true")
-            where.append("ls.status = 'active'")
-            where.append("u.disabled = false")
-        else:  # self | user
-            where.append("t.contributor_user_id = :contributor_user_id")
-            params["contributor_user_id"] = contributor.target_user_id
-            if contributor.linked_source_id is not None:
-                where.append("t.linked_source_id = :linked_source_id")
-                params["linked_source_id"] = contributor.linked_source_id
 
         if bbox is not None:
             where.append(
@@ -216,29 +211,74 @@ class PgSurveyRepository:
             where.append("t.timestamp <= :time_to")
             params["time_to"] = time_to
 
-        where_sql = "WHERE " + " AND ".join(where)
         sort_column = _SORT_COLUMN[sort_by]
         sort_dir = "ASC" if sort_order == "asc" else "DESC"
-        # Tie-breaker: timestamp DESC để khi rssi/snr trùng giá trị, OFFSET
-        # vẫn deterministic giữa các page.
-        order_sql = (
-            f"ORDER BY {sort_column} {sort_dir}, t.timestamp DESC"
-            if sort_by != "timestamp"
-            else f"ORDER BY {sort_column} {sort_dir}"
-        )
-        sql = text(
-            f"""
-            SELECT
-                ST_Y(t.location::geometry) AS lat,
-                ST_X(t.location::geometry) AS lon,
-                t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id
-            FROM ts.survey_training t
-            {join_sql}
-            {where_sql}
-            {order_sql}
-            LIMIT :limit OFFSET :offset
-            """
-        )
+
+        if contributor.mode == "community":
+            where.append("ls.contribute_to_community = true")
+            where.append("ls.status = 'active'")
+            where.append("u.disabled = false")
+            where_sql = "WHERE " + " AND ".join(where)
+            # Tie-breaker: timestamp DESC để khi rssi/snr trùng giá trị, OFFSET
+            # vẫn deterministic giữa các page.
+            order_sql = (
+                f"ORDER BY {sort_column} {sort_dir}, t.timestamp DESC"
+                if sort_by != "timestamp"
+                else f"ORDER BY {sort_column} {sort_dir}"
+            )
+            sql = text(
+                f"""
+                SELECT
+                    ST_Y(t.location::geometry) AS lat,
+                    ST_X(t.location::geometry) AS lon,
+                    t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id
+                FROM ts.survey_training t
+                JOIN auth.linked_sources ls ON ls.id = t.linked_source_id
+                JOIN auth.users u ON u.id = t.contributor_user_id
+                {where_sql}
+                {order_sql}
+                LIMIT :limit OFFSET :offset
+                """
+            )
+        else:  # self | user
+            where.insert(0, "t.contributor_user_id = :contributor_user_id")
+            params["contributor_user_id"] = contributor.target_user_id
+            if contributor.linked_source_id is not None:
+                where.append("t.linked_source_id = :linked_source_id")
+                params["linked_source_id"] = contributor.linked_source_id
+            where_sql = "WHERE " + " AND ".join(where)
+            # Sort columns reference inner alias `t`; outer subquery aliases
+            # cùng tên column (timestamp/rssi_dbm/snr_db) — đổi prefix `t.` →
+            # `u.` để áp dụng trên unioned result.
+            outer_sort_column = sort_column.replace("t.", "u.")
+            outer_order_sql = (
+                f"ORDER BY {outer_sort_column} {sort_dir}, u.timestamp DESC"
+                if sort_by != "timestamp"
+                else f"ORDER BY {outer_sort_column} {sort_dir}"
+            )
+            inner_select = (
+                "SELECT "
+                "ST_Y(t.location::geometry) AS lat, "
+                "ST_X(t.location::geometry) AS lon, "
+                "t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id, "
+                "t.timestamp"
+            )
+            sql = text(
+                f"""
+                SELECT lat, lon, rssi_dbm, snr_db, spreading_factor, serving_gateway_id
+                FROM (
+                    {inner_select}
+                    FROM ts.survey_training t
+                    {where_sql}
+                    UNION ALL
+                    {inner_select}
+                    FROM ts.survey_quarantine t
+                    {where_sql}
+                ) u
+                {outer_order_sql}
+                LIMIT :limit OFFSET :offset
+                """
+            )
 
         with self._engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()

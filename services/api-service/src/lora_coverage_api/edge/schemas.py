@@ -206,6 +206,79 @@ class WebhookIngestResponse(BaseModel):
     rejected_reasons: list[str] = Field(default_factory=list)
 
 
+# ── CSV upload (plan community-data-contribution §4) ──────────────────────
+
+
+class CsvUploadResponse(BaseModel):
+    """Per-row outcome breakdown sau khi parse + ingest + (optional) promote.
+
+    `parse_rejected_count` = row CSV bị adapter loại (sai schema, RSSI ngoài
+    range, gateway_code không tồn tại). `inserted_count` = row thực sự vào
+    quarantine. `promoted_count` + `promote_rejected_count` chỉ > 0 khi
+    submit_to_community=true; nếu không thì cả 2 = 0.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parsed_count: int = Field(..., ge=0)
+    parse_rejected_count: int = Field(..., ge=0)
+    parse_rejected_reasons: list[str] = Field(default_factory=list)
+    inserted_count: int = Field(..., ge=0)
+    promoted_count: int = Field(..., ge=0)
+    promote_rejected_count: int = Field(..., ge=0)
+    promote_rejected_by_reason: dict[str, int] = Field(default_factory=dict)
+
+
+class CsvUploadStats(BaseModel):
+    """Tổng quan CSV của 1 user — dùng cho card "Tải lên CSV của tôi"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = Field(..., ge=0, description="Tổng quarantine row source_type=csv_upload")
+    pending: int = Field(
+        ...,
+        ge=0,
+        description="Row còn pending (chưa promote, chưa reject) — số sẽ chạy validator khi user click Đóng góp",
+    )
+    promoted: int = Field(..., ge=0, description="Row đã promote sang training")
+    rejected: int = Field(..., ge=0, description="Row đã reject (set reject_reason)")
+
+
+class CsvPromoteResponse(BaseModel):
+    """Kết quả 1 lần đóng góp tất cả CSV pending."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    promoted_count: int = Field(..., ge=0)
+    promote_rejected_count: int = Field(..., ge=0)
+    promote_rejected_by_reason: dict[str, int] = Field(default_factory=dict)
+
+
+class CsvUploadBatch(BaseModel):
+    """1 batch = 1 lần upload CSV. Key = uploaded_at (mỗi transaction NOW()
+    đồng nhất). FE dùng `uploaded_at` ISO để gọi DELETE."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uploaded_at: datetime
+    total: int = Field(..., ge=0)
+    pending: int = Field(..., ge=0)
+    promoted: int = Field(..., ge=0)
+    rejected: int = Field(..., ge=0)
+
+
+class CsvUploadBatchList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CsvUploadBatch] = Field(default_factory=list)
+
+
+class CsvBatchDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted_count: int = Field(..., ge=0)
+
+
 # ── Address lookup (F2 funnel) ────────────────────────────────────────────
 
 

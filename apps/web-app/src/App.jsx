@@ -1,5 +1,5 @@
 // @ts-check
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { AdminGateways } from "./components/AdminGateways.jsx";
 import { AdminPage } from "./admin/AdminPage.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
@@ -33,6 +33,28 @@ export function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [resetToken, setResetToken] = useState(_readResetTokenFromUrl);
+  // Handoff state cho luồng Bulk → Predict: BulkLookup gọi onViewOnMap với
+  // danh sách điểm đã predict; App lưu vào ref-state, chuyển tab, và truyền
+  // xuống CoverageMap (mode="predict"). Sau khi CoverageMap consume xong,
+  // gọi onConsumed → null state để không render lại nếu user navigate qua lại.
+  const [bulkHandoff, setBulkHandoff] = useState(
+    /** @type {import("./components/BulkLookup.jsx").BulkHandoffPoint[] | null} */ (
+      null
+    ),
+  );
+  // useCallback giữ identity stable qua các App render không liên quan
+  // (auth bootstrap, menu toggle, …). Nếu callback đổi ref, CoverageMap effect
+  // dep `onBulkHandoffConsumed` sẽ trigger lại trong khi bulkHandoff vẫn còn,
+  // gây flicker / fitBounds chạy 2 lần.
+  const handleViewBulkOnMap = useCallback(
+    /** @param {import("./components/BulkLookup.jsx").BulkHandoffPoint[]} points */
+    (points) => {
+      setBulkHandoff(points);
+      setTab("predict");
+    },
+    [],
+  );
+  const handleBulkHandoffConsumed = useCallback(() => setBulkHandoff(null), []);
   const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
   const tHeader = strings.auth.header;
@@ -51,10 +73,10 @@ export function App() {
     });
   }, [resetToken]);
 
-  // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin. Khi điều
-  // kiện không còn (logout / token expire / admin bị demote giữa session)
-  // mà đang ở tab đó → switch về "map" để tránh render component không có
-  // quyền (sẽ 401/403 và hiện error vô ích).
+  // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin.
+  // Khi điều kiện không còn (logout / token expire / admin bị demote giữa
+  // session) mà đang ở tab đó → switch về "map" để tránh render component
+  // không có quyền (sẽ 401/403 và hiện error vô ích).
   useEffect(() => {
     if (!user && tab === "sources") setTab("map");
     if (!user?.is_admin && tab === "adminPanel") setTab("map");
@@ -183,12 +205,19 @@ export function App() {
       <main className="min-h-0 flex-1">
         {tab === "map" && <CoverageMap mode="points" />}
         {tab === "heatmap" && <CoverageMap mode="heatmap" />}
-        {tab === "predict" && <CoverageMap mode="predict" />}
-        {tab === "bulk" && (
-          <div className="h-full overflow-y-auto">
-            <BulkLookup />
-          </div>
+        {tab === "predict" && (
+          <CoverageMap
+            mode="predict"
+            bulkHandoff={bulkHandoff}
+            onBulkHandoffConsumed={handleBulkHandoffConsumed}
+          />
         )}
+        {/* Bulk tab luôn mount để state (csvText, kết quả mutation, sf) sống
+            sót khi user "Xem trên bản đồ" → quay lại tab Tra cứu hàng loạt.
+            Display:none giữ instance React + DOM. */}
+        <div className={tab === "bulk" ? "h-full overflow-y-auto" : "hidden"}>
+          <BulkLookup onViewOnMap={handleViewBulkOnMap} />
+        </div>
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />

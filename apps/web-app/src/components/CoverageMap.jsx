@@ -506,7 +506,11 @@ function appendCopyLinkButton(parent, lat, lng, sf) {
 
 
 /**
- * @param {{ mode?: "points" | "heatmap" | "predict" }} props
+ * @param {{
+ *   mode?: "points" | "heatmap" | "predict",
+ *   bulkHandoff?: import("./BulkLookup.jsx").BulkHandoffPoint[] | null,
+ *   onBulkHandoffConsumed?: () => void,
+ * }} props
  *   mode === "points": render survey points (mặc định, tab "Bản đồ điểm đo").
  *     Click bản đồ → auto-predict 1 điểm + vẽ marker.
  *   mode === "heatmap": survey layer tắt — placeholder cho heatmap raster
@@ -514,7 +518,7 @@ function appendCopyLinkButton(parent, lat, lng, sf) {
  *   mode === "predict": survey layer tắt — chỉ hiển thị gateway. Click bản đồ
  *     lấy toạ độ vào panel; user bấm "Dự đoán" để chạy prediction + vẽ marker.
  */
-export function CoverageMap({ mode = "points" }) {
+export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoffConsumed }) {
   const containerRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -536,6 +540,15 @@ export function CoverageMap({ mode = "points" }) {
   const gatewayAddressCacheRef = useRef(
     /** @type {Map<string, string | null>} */ (new Map()),
   );
+  // Tracking handoff array đã xử lý (theo reference identity). Defense in
+  // depth: nếu effect re-fire vì 1 dep khác đổi mà bulkHandoff vẫn cùng ref,
+  // skip để không re-clear + redraw + re-fitBounds.
+  const consumedBulkHandoffRef = useRef(
+    /** @type {readonly unknown[] | null} */ (null),
+  );
+  // Đảm bảo URL deep-link predict chỉ chạy 1 lần / mount. Tránh race với
+  // bulk handoff khi cả 2 cùng có sẵn lúc mount.
+  const deepLinkConsumedRef = useRef(false);
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
   const initialPointsFilterRef = useRef(readPointsFilterUrlState());
@@ -659,24 +672,14 @@ export function CoverageMap({ mode = "points" }) {
   const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
   const deviceIdForQuery = contributor === "me" ? deviceId : null;
 
-  // Gateway list cũng đi qua resolver contributor — "Bản đồ của tôi" chỉ
-  // hiện gateway từng phục vụ survey của user. Predict/heatmap luôn dùng
-  // community (gateway là hạ tầng tham chiếu, không phụ thuộc user).
-  const gatewayContributor = mode === "points" ? contributor : "community";
-  const gatewayLinkedSource =
-    mode === "points" ? linkedSourceForQuery : null;
-
-  // Bbox=undefined → backend trả gateway/điểm đo toàn cầu. Initial map view
-  // vẫn anchor ở Đà Nẵng (INITIAL_CENTER + INITIAL_ZOOM), user pan/zoom-out
-  // để xem dữ liệu ngoài vùng.
+  // Gateway là hạ tầng chung — luôn dùng community bất kể filter. Trước đây
+  // "Bản đồ của tôi" filter gateway theo survey của user nhưng CSV upload
+  // chưa đóng góp nằm ở quarantine → query gateway INNER JOIN training trượt
+  // → không hiện gateway nào. Gateway list không phụ thuộc data ownership.
   const gatewaysQ = useQuery({
-    queryKey: ["gateways", gatewayContributor, gatewayLinkedSource],
-    queryFn: () =>
-      listGateways(undefined, {
-        contributor: gatewayContributor,
-        linkedSourceId: gatewayLinkedSource ?? undefined,
-      }),
-    retry: gatewayContributor === "community" ? 3 : false,
+    queryKey: ["gateways", "community"],
+    queryFn: () => listGateways(undefined, { contributor: "community" }),
+    retry: 3,
   });
 
   const surveysQ = useQuery({
@@ -1135,9 +1138,9 @@ export function CoverageMap({ mode = "points" }) {
    *    RSSI / SNR / Confidence + link gateway phục vụ.
    * Theo business-logic.md §4.2 — dual-layer rule cho 1 feature phục vụ
    * cả end-user (Layer 1) lẫn kỹ sư P1/P2 (Layer 2).
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep") => HTMLDivElement}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep", label?: string | null) => HTMLDivElement}
    */
-  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed) => {
+  const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label) => {
     const root = document.createElement("div");
     root.style.cssText = "font:12px/1.4 system-ui;max-width:360px;min-width:320px";
 
@@ -1148,6 +1151,16 @@ export function CoverageMap({ mode = "points" }) {
     title.style.cssText = "font-weight:600;color:#0f172a";
     title.textContent = t.popup.predictTitle;
     root.appendChild(title);
+
+    // Nhãn user-supplied (chỉ có khi handoff từ bulk). textContent đảm bảo
+    // không bị XSS từ CSV label.
+    if (label) {
+      const labelRow = document.createElement("div");
+      labelRow.style.cssText =
+        "font-weight:500;color:#1e293b;margin-top:2px;word-break:break-word";
+      labelRow.textContent = label;
+      root.appendChild(labelRow);
+    }
 
     const subtitle = document.createElement("div");
     subtitle.style.cssText =
@@ -1292,9 +1305,9 @@ export function CoverageMap({ mode = "points" }) {
   /**
    * Pure marker-drawing helper — không phụ thuộc state, chỉ dùng refs.
    * Cho phép gọi từ effect mà không gây stale closure.
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep") => void}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep", label?: string | null) => void}
    */
-  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed) => {
+  const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label) => {
     const map = mapRef.current;
     if (!map) return;
 
@@ -1313,7 +1326,7 @@ export function CoverageMap({ mode = "points" }) {
       offset: 16,
       maxWidth: "380px",
     }).setDOMContent(
-      buildPopupNode(lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed),
+      buildPopupNode(lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label),
     );
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
@@ -1373,14 +1386,55 @@ export function CoverageMap({ mode = "points" }) {
     setPredictMarkerCount(0);
   }, []);
 
+  // Bulk → Predict handoff: BulkLookup chuyển 1 batch ok-items qua App,
+  // App truyền xuống đây. Clear marker cũ, vẽ lại + fitBounds, rồi notify
+  // parent reset state (tránh vẽ lại nếu user toggle tab qua lại).
+  useEffect(() => {
+    if (mode !== "predict") return;
+    if (!bulkHandoff || bulkHandoff.length === 0) return;
+    // Ref guard: cùng array ref = cùng batch đã consume → skip.
+    if (consumedBulkHandoffRef.current === bulkHandoff) return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    consumedBulkHandoffRef.current = bulkHandoff;
+    // Đã tiêu thụ bulk handoff thì coi deep-link như cũng đã xử lý — tránh
+    // marker rác từ ?lat=&lng= cũ append lên trên bulk markers (race).
+    deepLinkConsumedRef.current = true;
+
+    clearAllSearchMarkers();
+    const bounds = new maplibregl.LngLatBounds();
+    for (const p of bulkHandoff) {
+      // Bulk endpoint không nhận tx_power/environment → BE dùng defaults
+      // (14 dBm outdoor). Popup hiển thị các giá trị này cho consistency.
+      // Truyền label để user phân biệt được marker tương ứng row CSV nào.
+      drawSearchMarker(p.lat, p.lng, p.prediction, p.sf, p.isAuto, 14, "outdoor", p.label);
+      bounds.extend([p.lng, p.lat]);
+    }
+    if (bulkHandoff.length === 1) {
+      map.flyTo({ center: [bulkHandoff[0].lng, bulkHandoff[0].lat], zoom: 14 });
+    } else {
+      map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 800 });
+    }
+    onBulkHandoffConsumed?.();
+  }, [mode, mapLoaded, bulkHandoff, drawSearchMarker, clearAllSearchMarkers, onBulkHandoffConsumed]);
+
   // Initial URL deep-link: predict 1 lần sau khi map mount.
   // Chỉ tab "Dự đoán điểm" mới tiêu thụ URL state — tab "Bản đồ điểm đo" và
   // "Bản đồ phủ sóng" không hiển thị popup "Vị trí từ URL" kể cả khi URL có
   // ?lat=&lng= (do tab predict ghi sẵn từ lần dự đoán trước).
   useEffect(() => {
     if (mode !== "predict") return;
+    if (deepLinkConsumedRef.current) return;
+    // Nếu bulk handoff đang chờ xử lý → để bulk effect lo, deep-link skip để
+    // không append marker rác. Mark consumed để không revisit khi handoff
+    // được reset về null.
+    if (bulkHandoff && bulkHandoff.length > 0) {
+      deepLinkConsumedRef.current = true;
+      return;
+    }
     const url = initialUrlRef.current;
     if (!url) return;
+    deepLinkConsumedRef.current = true;
     let cancelled = false;
     const isAuto = url.sf === "auto";
     /** @type {number} */
@@ -1403,7 +1457,7 @@ export function CoverageMap({ mode = "points" }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, drawSearchMarker]);
+  }, [mode, drawSearchMarker, bulkHandoff]);
 
   /**
    * Predict mode: chạy prediction từ pickedCoords + SF hiện tại, vẽ marker
@@ -1677,13 +1731,17 @@ export function CoverageMap({ mode = "points" }) {
         </div>
 
         {/* Legend cố định ở góc dưới trái — chừa chỗ cho ScaleControl của
-            maplibre (mounted ở "bottom-left", cao ~24px). */}
-        <div className="absolute bottom-10 left-2 z-10">
-          <MapLegend
-            gatewayCount={gatewaysQ.data?.total}
-            surveyCount={mode === "points" ? surveysQ.data?.total : null}
-          />
-        </div>
+            maplibre (mounted ở "bottom-left", cao ~24px). Ẩn ở tab "Bản đồ
+            phủ sóng" vì RSSI band không áp dụng cho min-SF map (đã có
+            legend riêng trong MinSFPanel). */}
+        {mode !== "heatmap" && (
+          <div className="absolute bottom-10 left-2 z-10">
+            <MapLegend
+              gatewayCount={gatewaysQ.data?.total}
+              surveyCount={mode === "points" ? surveysQ.data?.total : null}
+            />
+          </div>
+        )}
 
         {(gatewaysQ.isError || surveysQ.isError) && (
           <div className="absolute right-3 top-3 z-10 max-w-sm rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-md">

@@ -312,7 +312,7 @@ export const ResolvedAddress = z.object({
   latitude: z.number(),
   longitude: z.number(),
   display_name: z.string(),
-  provider: z.enum(["postgres", "nominatim", "vietmap", "goong", "google"]),
+  provider: z.enum(["cache", "nominatim", "vietmap", "goong", "google"]),
   confidence: z.number().min(0).max(1),
 });
 
@@ -401,14 +401,16 @@ export const CoverageBatchResponse = z.object({
 /**
  * POST /api/v1/coverage/batch
  * @param {CoverageBatchRequestT} req
+ * @param {AbortSignal} [signal] huỷ giữa chừng (user resubmit / reset)
  * @returns {Promise<CoverageBatchResponseT>}
  */
-export async function lookupCoverageBatch(req) {
+export async function lookupCoverageBatch(req, signal) {
   const parsed = CoverageBatchRequest.parse(req);
   const res = await fetch(`${API_BASE_URL}/api/v1/coverage/batch`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(parsed),
+    signal,
   });
   if (!res.ok) {
     const ct = res.headers.get("content-type") ?? "";
@@ -538,4 +540,167 @@ export async function listMyDevices(opts) {
     });
   }
   return MyDeviceList.parse(await res.json());
+}
+
+// ── CSV upload survey (plan community-data-contribution) ──────────────────
+
+export const CsvUploadResponse = z.object({
+  parsed_count: z.number().int().nonnegative(),
+  parse_rejected_count: z.number().int().nonnegative(),
+  parse_rejected_reasons: z.array(z.string()).default([]),
+  inserted_count: z.number().int().nonnegative(),
+  promoted_count: z.number().int().nonnegative(),
+  promote_rejected_count: z.number().int().nonnegative(),
+  promote_rejected_by_reason: z.record(z.string(), z.number().int().nonnegative()).default({}),
+});
+
+/** @typedef {z.infer<typeof CsvUploadResponse>} CsvUploadResponseT */
+
+/**
+ * POST /api/v1/me/uploads/csv — multipart upload of survey measurements.
+ *
+ * `submitToCommunity=false` (default) → CSV chỉ ở quarantine, chỉ chính user
+ * xem trong dashboard "Bản đồ của tôi". `true` → mỗi row chạy qua
+ * TrustValidator (L1 bbox + gateway, L2 ITU physics, L3 reputation); pass →
+ * vào ts.survey_training public dataset.
+ *
+ * @param {File} file
+ * @param {boolean} submitToCommunity
+ * @returns {Promise<CsvUploadResponseT>}
+ */
+export async function uploadMeasurementsCsv(file, submitToCommunity) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("submit_to_community", submitToCommunity ? "true" : "false");
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv`, {
+    method: "POST",
+    body: fd,
+    // KHÔNG set content-type: browser tự thêm boundary cho multipart/form-data.
+  });
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/problem+json") || ct.includes("application/json")) {
+      throw new ApiError(ProblemDetails.parse(await res.json()));
+    }
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to upload CSV",
+      status: res.status,
+    });
+  }
+  return CsvUploadResponse.parse(await res.json());
+}
+
+export const CsvUploadStats = z.object({
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  promoted: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+});
+
+/** @typedef {z.infer<typeof CsvUploadStats>} CsvUploadStatsT */
+
+/**
+ * GET /api/v1/me/uploads/csv/stats — tổng quan CSV của user. Dùng cho card
+ * "Tải lên CSV của tôi" ở trang Nguồn dữ liệu để hiển thị backlog pending.
+ *
+ * @returns {Promise<CsvUploadStatsT>}
+ */
+export async function fetchCsvUploadStats() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv/stats`);
+  if (!res.ok) {
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to load CSV stats",
+      status: res.status,
+    });
+  }
+  return CsvUploadStats.parse(await res.json());
+}
+
+export const CsvUploadBatch = z.object({
+  uploaded_at: z.string(),
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  promoted: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+});
+
+export const CsvUploadBatchList = z.object({
+  items: z.array(CsvUploadBatch).default([]),
+});
+
+/** @typedef {z.infer<typeof CsvUploadBatch>} CsvUploadBatchT */
+
+/**
+ * GET /api/v1/me/uploads/csv/batches — list các lần upload (group uploaded_at).
+ *
+ * @returns {Promise<CsvUploadBatchT[]>}
+ */
+export async function listCsvUploadBatches() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv/batches`);
+  if (!res.ok) {
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to list CSV batches",
+      status: res.status,
+    });
+  }
+  const parsed = CsvUploadBatchList.parse(await res.json());
+  return parsed.items;
+}
+
+/**
+ * DELETE /api/v1/me/uploads/csv/batches?uploaded_at=ISO — xoá 1 batch.
+ *
+ * @param {string} uploadedAt ISO 8601 trả về từ list endpoint (truyền nguyên).
+ */
+export async function deleteCsvUploadBatch(uploadedAt) {
+  const url = new URL(`${API_BASE_URL}/api/v1/me/uploads/csv/batches`);
+  url.searchParams.set("uploaded_at", uploadedAt);
+  const res = await authFetch(url.toString(), { method: "DELETE" });
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/problem+json") || ct.includes("application/json")) {
+      throw new ApiError(ProblemDetails.parse(await res.json()));
+    }
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to delete CSV batch",
+      status: res.status,
+    });
+  }
+  return await res.json();
+}
+
+export const CsvPromoteResponse = z.object({
+  promoted_count: z.number().int().nonnegative(),
+  promote_rejected_count: z.number().int().nonnegative(),
+  promote_rejected_by_reason: z.record(z.string(), z.number().int().nonnegative()).default({}),
+});
+
+/** @typedef {z.infer<typeof CsvPromoteResponse>} CsvPromoteResponseT */
+
+/**
+ * POST /api/v1/me/uploads/csv/promote — chạy TrustValidator over toàn bộ
+ * csv_upload pending của user (mark submitted_for_community + validator loop).
+ *
+ * @returns {Promise<CsvPromoteResponseT>}
+ */
+export async function promoteCsvUploads() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv/promote`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/problem+json") || ct.includes("application/json")) {
+      throw new ApiError(ProblemDetails.parse(await res.json()));
+    }
+    throw new ApiError({
+      type: "about:blank",
+      title: "Failed to promote CSV uploads",
+      status: res.status,
+    });
+  }
+  return CsvPromoteResponse.parse(await res.json());
 }

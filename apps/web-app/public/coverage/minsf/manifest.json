@@ -1,125 +1,175 @@
 {
-  "generated_at": "2026-05-18T22:49:56Z",
+  "generated_at": "2026-05-21T09:04:29Z",
   "grid_m": 50.0,
   "radius_km": "auto",
   "model": "ITU-R P.1812 + P.2108",
+  "location_percent": 95.0,
+  "environment": "outdoor",
   "gateways": [
     {
       "code": "24e124fffef4778e",
       "name": "24e124fffef4778e",
       "lat": 20.89967088823762,
       "lon": 106.63570404052736,
-      "elapsed_s": 39001.0,
+      "elapsed_s": 38940.6,
       "cells": 2137444,
-      "covered_cells": 64359
+      "covered_cells": 22915,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "7076ff0054070418",
       "name": "7076ff0054070418",
       "lat": 20.90107409448514,
       "lon": 106.59278869628908,
-      "elapsed_s": 39808.9,
+      "elapsed_s": 39488.7,
       "cells": 2137444,
-      "covered_cells": 91284
+      "covered_cells": 29473,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "7276ff002e0507da",
       "name": "DNIIT GW 0507da",
       "lat": 16.0740935,
       "lon": 108.1524913,
-      "elapsed_s": 32053.9,
+      "elapsed_s": 31605.9,
       "cells": 2137444,
-      "covered_cells": 39940
+      "covered_cells": 18325,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "7276ff002e06029f",
       "name": "DNIIT GW 06029f",
       "lat": 16.0659959,
       "lon": 108.1532551,
-      "elapsed_s": 32516.3,
+      "elapsed_s": 32259.7,
       "cells": 2137444,
-      "covered_cells": 57671
+      "covered_cells": 28220,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "7276ff002e061f5b",
       "name": "DNIIT GW 061f5b",
       "lat": 16.075590133666992,
       "lon": 108.22207641601562,
-      "elapsed_s": 27146.0,
+      "elapsed_s": 26640.7,
       "cells": 2137444,
-      "covered_cells": 60222
+      "covered_cells": 23374,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "7276ff002e062cf2",
       "name": "DNIIT GW 062cf2",
       "lat": 16.11829376220703,
       "lon": 108.27363586425781,
-      "elapsed_s": 23760.1,
+      "elapsed_s": 22964.3,
       "cells": 2137444,
-      "covered_cells": 1153398
+      "covered_cells": 393133,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "a840411eebb44150",
       "name": "DNIIT GW b44150",
-      "lat": 16.0740984,
-      "lon": 108.15253,
-      "elapsed_s": 32021.7,
+      "lat": 16.073963507473916,
+      "lon": 108.1526301279979,
+      "elapsed_s": 31669.3,
       "cells": 2137444,
-      "covered_cells": 37874
+      "covered_cells": 14432,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "a84041ffff1ec39f",
       "name": "DNIIT GW 1ec39f",
-      "lat": 16.0741086,
-      "lon": 108.1525171,
-      "elapsed_s": 32035.0,
+      "lat": 16.091299730870233,
+      "lon": 108.21745634078981,
+      "elapsed_s": 26210.2,
       "cells": 2137444,
-      "covered_cells": 38805
+      "covered_cells": 32394,
+      "location_percent": 95.0,
+      "environment": "outdoor"
+    },
+    {
+      "code": "a84041ffff1ee248",
+      "name": "Gateway Indoor2 S04.10",
+      "lat": 16.074187,
+      "lon": 108.149817,
+      "elapsed_s": 13355.9,
+      "cells": 1071225,
+      "covered_cells": 20082,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "ac1f09fffe00ab20",
       "name": "DNIIT GW 00ab20",
-      "lat": 16.05469,
-      "lon": 108.22009,
-      "elapsed_s": 26863.3,
+      "lat": 16.0548,
+      "lon": 108.21993,
+      "elapsed_s": 26774.8,
       "cells": 2137444,
-      "covered_cells": 69875
+      "covered_cells": 24795,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "ac1f09fffe00ab25",
       "name": "DNIIT GW 00ab25",
       "lat": 16.11073,
       "lon": 108.12857,
-      "elapsed_s": 27886.7,
+      "elapsed_s": 27472.6,
       "cells": 2137444,
-      "covered_cells": 87797
+      "covered_cells": 53919,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "ac1f09fffe06fcf2",
       "name": "DNIIT GW 06fcf2",
       "lat": 16.054765682623003,
       "lon": 108.21985626414313,
-      "elapsed_s": 25007.1,
+      "elapsed_s": 25093.8,
       "cells": 2137444,
-      "covered_cells": 73922
+      "covered_cells": 25431,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "ac1f09fffe0fd629",
       "name": "DNIIT GW 0fd629",
       "lat": 16.06815,
       "lon": 108.15448,
-      "elapsed_s": 26386.3,
+      "elapsed_s": 26114.9,
       "cells": 2137444,
-      "covered_cells": 66188
+      "covered_cells": 31755,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     },
     {
       "code": "ac1f09fffe0fd63b",
       "name": "DNIIT GW 0fd63b",
       "lat": 15.98571,
       "lon": 108.23986,
-      "elapsed_s": 26368.8,
+      "elapsed_s": 26071.9,
       "cells": 2137444,
-      "covered_cells": 122175
+      "covered_cells": 37816,
+      "location_percent": 95.0,
+      "environment": "outdoor"
+    },
+    {
+      "code": "c795b211a13c6b34",
+      "name": "Gateway Indoor VNGALAXY",
+      "lat": 16.07482,
+      "lon": 108.15205,
+      "elapsed_s": 11561.7,
+      "cells": 1071225,
+      "covered_cells": 1639,
+      "location_percent": 95.0,
+      "environment": "outdoor"
     }
   ]
 }

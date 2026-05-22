@@ -437,6 +437,7 @@ export const strings = {
     fields: {
       file: "File CSV",
       sf: "Spreading Factor",
+      sfAuto: "Tự động",
       csv: "Hoặc dán CSV trực tiếp",
     },
     csvHint:
@@ -448,6 +449,9 @@ export const strings = {
     parseErrorTitle: "Parse error:",
     sampleCsv: "Dùng CSV mẫu",
     download: "Tải kết quả CSV",
+    viewOnMap: "Xem trên bản đồ",
+    viewOnMapEmpty: "Không có điểm hợp lệ để hiển thị",
+    reset: "Xoá kết quả",
     summary: {
       /** @param {number} ok @param {number} err */
       counts: (ok, err) => `${ok} thành công · ${err} lỗi`,
@@ -467,11 +471,23 @@ export const strings = {
       noColumn: "CSV cần ít nhất 1 cột: address, latitude hoặc longitude.",
       /** @param {number} line @param {number} got @param {number} want */
       colCountMismatch: (line, got, want) =>
-        `Dòng ${line}: số cột ${got} ≠ header ${want}`,
+        `Dòng ${line}: số cột ${got} > header ${want}`,
       noRecord: "Không có dòng nào hợp lệ.",
       /** @param {number} line @param {string} reason */
       rowError: (line, reason) => `Dòng ${line}: ${reason}`,
+      /** @param {number} n */
+      tooManyRows: (n) =>
+        `CSV có ${n} dòng — vượt giới hạn 500. Hãy chia nhỏ file.`,
+      /** @param {string} raw */
+      latOutOfRange: (raw) => `latitude "${raw}" ngoài khoảng [-90, 90]`,
+      /** @param {string} raw */
+      lngOutOfRange: (raw) => `longitude "${raw}" ngoài khoảng [-180, 180]`,
+      partialCoords:
+        "có latitude nhưng thiếu longitude (hoặc ngược lại) — cần đủ cặp.",
+      emptyRow:
+        "không có address và cũng không có cặp latitude+longitude hợp lệ.",
     },
+    staleResults: "Bảng hiển thị kết quả của CSV trước. Bấm Tra cứu để cập nhật.",
   },
 
   auth: {
@@ -731,6 +747,105 @@ export const strings = {
             return "";
         }
       },
+    },
+  },
+
+  contributeUpload: {
+    tabLabel: "Đóng góp dữ liệu",
+    title: "Tải lên dữ liệu phép đo",
+    description:
+      "Tải file CSV chứa các phép đo LoRa của bạn. Mặc định chỉ bạn xem được. Nếu tick \"Đóng góp cho cộng đồng\", dữ liệu sẽ qua kiểm định độ tin cậy trước khi gia nhập bộ dữ liệu chung.",
+    fields: {
+      file: "File CSV",
+      community: "Đóng góp cho cộng đồng",
+      communityHint:
+        "Mỗi điểm sẽ được kiểm tra: nằm trong Việt Nam, gateway tồn tại, RSSI khớp dự đoán ITU. Điểm không đạt sẽ ở lại quarantine riêng cho bạn.",
+    },
+    checklist: {
+      title: "Checklist trước khi đóng góp",
+      items: [
+        "Có đủ latitude, longitude (toạ độ WGS84).",
+        "Vị trí nằm trong lãnh thổ Việt Nam.",
+        "gateway_code đã được liên kết với tài khoản (xem tab Nguồn dữ liệu).",
+        "Tài khoản nên đã xác minh email — ngưỡng vật lý sẽ lỏng hơn.",
+      ],
+    },
+    submit: "Tải lên",
+    submitPending: "Đang xử lý…",
+    reset: "Chọn lại file",
+    csvHint:
+      "Cột bắt buộc: timestamp, latitude, longitude, rssi_dbm, snr_db, spreading_factor, gateway_code. Cột tuỳ chọn: frequency_mhz, device_id. Tối đa 1000 dòng.",
+    fileSelected: (/** @type {string} */ name, /** @type {number} */ size) =>
+      `Đã chọn: ${name} (${(size / 1024).toFixed(1)} KB)`,
+    noFileSelected: "Chưa chọn file.",
+    summary: {
+      title: "Kết quả",
+      parsed: (/** @type {number} */ n) => `${n} dòng đọc được`,
+      parseRejected: (/** @type {number} */ n) => `${n} dòng bị loại khi đọc`,
+      inserted: (/** @type {number} */ n) => `${n} dòng đã ghi vào quarantine`,
+      promoted: (/** @type {number} */ n) => `${n} dòng đã được duyệt vào bộ cộng đồng`,
+      promoteRejected: (/** @type {number} */ n) => `${n} dòng không qua kiểm định`,
+    },
+    parseErrorTitle: "Một số dòng không hợp lệ:",
+    rejectReasons: {
+      title: "Lý do bị kiểm định loại:",
+      /** @param {string} reason @param {number} count */
+      row: (reason, count) => `${reason}: ${count} dòng`,
+    },
+    rejectReasonLabel: {
+      out_of_region: "Toạ độ ngoài Việt Nam",
+      unknown_gateway: "Gateway không có trong hệ thống",
+      physics_outlier: "RSSI lệch quá xa so với dự đoán ITU",
+      physics_unavailable: "Không tính được dự đoán ITU (DEM không phủ điểm)",
+      unknown: "Không xác định",
+    },
+    errors: {
+      title: "Lỗi tải lên",
+      fileEmpty: "Vui lòng chọn 1 file CSV.",
+      fileTooLarge: "File vượt 1 MB. Hãy chia nhỏ.",
+    },
+    samplePrompt: "Cần file mẫu? Xem cấu trúc cột ở phần \"CSV hint\" bên trên.",
+  },
+
+  csvContributeCard: {
+    title: "Dữ liệu CSV của tôi",
+    subtitle:
+      "File CSV bạn đã tải lên được lưu riêng tư. Bấm Đóng góp để chạy kiểm định độ tin cậy và gửi các điểm hợp lệ vào bộ dữ liệu cộng đồng.",
+    loading: "Đang tải tổng quan…",
+    stats: {
+      total: (/** @type {number} */ n) => `${n} điểm đã tải lên`,
+      pending: (/** @type {number} */ n) => `${n} điểm sẵn sàng đóng góp`,
+      promoted: (/** @type {number} */ n) => `${n} điểm đã vào bộ cộng đồng`,
+      rejected: (/** @type {number} */ n) => `${n} điểm bị kiểm định loại`,
+    },
+    emptyHint: "Bạn chưa có file CSV nào. Tải lên ở mục \"Loại nguồn → Tải lên file CSV\" phía trên.",
+    nothingToPromote: "Tất cả điểm CSV đã được kiểm định. Tải thêm file mới để tiếp tục đóng góp.",
+    btnPromote: "Đóng góp cộng đồng",
+    btnPromotePending: "Đang kiểm định…",
+    successTitle: "Đã chạy kiểm định",
+    successLine: (
+      /** @type {number} */ accepted,
+      /** @type {number} */ rejected,
+    ) => `${accepted} điểm được duyệt, ${rejected} điểm bị loại.`,
+    errorTitle: "Không chạy được kiểm định",
+    rejectBreakdownTitle: "Phân loại lý do bị loại:",
+    batches: {
+      title: "File đã tải lên",
+      loading: "Đang tải danh sách…",
+      empty: "Chưa có file nào.",
+      header: {
+        uploadedAt: "Thời điểm",
+        total: "Tổng",
+        pending: "Pending",
+        promoted: "Đã đóng góp",
+        rejected: "Bị loại",
+        actions: "",
+      },
+      btnDelete: "Xoá",
+      btnDeletePending: "Đang xoá…",
+      confirmDelete: (/** @type {number} */ n) =>
+        `Xoá ${n} điểm của file này? Không thể hoàn tác.`,
+      deleteErrorTitle: "Không xoá được file",
     },
   },
 };

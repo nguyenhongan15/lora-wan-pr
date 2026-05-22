@@ -283,6 +283,12 @@ class Settings(BaseSettings):
         default="1/minute",
         description="Rate limit cho POST /coverage/batch per IP (≤500 item/req).",
     )
+    # CSV upload tốn DB insert + ITU compute mỗi row khi submit_to_community
+    # → cap thấp. User chỉ upload survey log định kỳ; 10/hour đủ flexibility.
+    me_csv_upload_rate_limit: str = Field(
+        default="10/hour",
+        description="Rate limit cho POST /me/uploads/csv per user (CSV survey upload).",
+    )
 
     # ── Rate-limit storage (Chapter 4 §Distributed Environments) ─────────
     # Empty = in-memory per worker (dev / single-worker test). Production

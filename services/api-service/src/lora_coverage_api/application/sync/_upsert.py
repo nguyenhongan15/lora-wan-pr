@@ -2,7 +2,7 @@
 
 Hai function:
   * upsert_gateway       → geo.gateways (key: source_type, external_id)
-  * upsert_measurement   → ts.survey_quarantine HOẶC ts.survey_training
+  * upsert_measurement   → ts.survey_quarantine
                            (key: timestamp, source_type, external_id)
 
 Caller (sync orchestrator hoặc CLI) quản lý transaction. Mỗi function chạy 1
@@ -24,10 +24,11 @@ Quyết định:
   * `frequency_mhz` default 923.0 (AS923-2 ĐN) khi adapter không trả; check
     constraint `chk_freq_lora_band` chỉ cho 433/868/915/923 nên caller phải
     pass giá trị hợp lệ.
-  * Target routing (plan §3.4): caller chọn quarantine|training dựa trên
-    `linked_sources.contribute_to_community` — tách 2 SQL thay vì template
-    table-name (an toàn, explicit). Training cần `gen_random_uuid()` vì id
-    không có DEFAULT (quarantine có).
+  * Target routing (plan community-data-contribution §3.4): measurement
+    LUÔN ghi quarantine với cờ `submitted_for_community` set theo
+    `linked_sources.contribute_to_community`. Trust pipeline (xem
+    application/trust/promotion.py) chịu trách nhiệm copy sang training sau
+    khi pass 3 lớp validation — KHÔNG còn path ghi thẳng training.
 """
 
 from __future__ import annotations
@@ -40,7 +41,6 @@ from sqlalchemy import Connection, text
 from ..sources import DeviceRecord, GatewayRecord, MeasurementRecord
 
 UpsertResult = Literal["inserted", "updated"]
-MeasurementTarget = Literal["quarantine", "training"]
 
 DEFAULT_FREQUENCY_MHZ = 923.0  # AS923-2 (Đà Nẵng / VN)
 _ALLOWED_FREQ_MHZ = (433.0, 868.0, 915.0, 923.0)
@@ -81,54 +81,32 @@ _QUARANTINE_UPSERT_SQL = text("""
         timestamp, location, rssi_dbm, snr_db,
         spreading_factor, frequency_mhz, device_id,
         serving_gateway_id, uploader_id,
-        external_id, source_type, contributor_user_id, linked_source_id
+        external_id, source_type, contributor_user_id, linked_source_id,
+        submitted_for_community
     )
     VALUES (
         :ts,
         ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
         :rssi, :snr, :sf, :freq, :device_id,
         :gw_id, :uploader_id,
-        :external_id, :source_type, :contributor_user_id, :linked_source_id
+        :external_id, :source_type, :contributor_user_id, :linked_source_id,
+        :submitted_for_community
     )
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
     DO UPDATE SET
         -- First-writer-wins: xem comment trong _GATEWAY_UPSERT_SQL.
         contributor_user_id = COALESCE(ts.survey_quarantine.contributor_user_id, EXCLUDED.contributor_user_id),
-        linked_source_id    = COALESCE(ts.survey_quarantine.linked_source_id,    EXCLUDED.linked_source_id)
-    RETURNING (xmax = 0) AS inserted
+        linked_source_id    = COALESCE(ts.survey_quarantine.linked_source_id,    EXCLUDED.linked_source_id),
+        -- Cờ contribute promoted (false → true) khi user opt-in giữa hai
+        -- lần sync — GREATEST giữ true nếu một trong hai bên đã true,
+        -- không bao giờ revert true→false (consistency với plan §3.4:
+        -- opt-out không xoá data đã đẩy lên cộng đồng).
+        submitted_for_community = GREATEST(
+            ts.survey_quarantine.submitted_for_community::int,
+            EXCLUDED.submitted_for_community::int
+        )::boolean
+    RETURNING (xmax = 0) AS inserted, id
 """)
-
-
-# survey_training: id NOT NULL không có DEFAULT (quarantine có
-# `DEFAULT gen_random_uuid()`) → INSERT phải tự gọi gen_random_uuid().
-_TRAINING_UPSERT_SQL = text("""
-    INSERT INTO ts.survey_training (
-        id, timestamp, location, rssi_dbm, snr_db,
-        spreading_factor, frequency_mhz, device_id,
-        serving_gateway_id, uploader_id,
-        external_id, source_type, contributor_user_id, linked_source_id
-    )
-    VALUES (
-        gen_random_uuid(),
-        :ts,
-        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
-        :rssi, :snr, :sf, :freq, :device_id,
-        :gw_id, :uploader_id,
-        :external_id, :source_type, :contributor_user_id, :linked_source_id
-    )
-    ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
-    DO UPDATE SET
-        -- First-writer-wins: xem comment trong _GATEWAY_UPSERT_SQL.
-        contributor_user_id = COALESCE(ts.survey_training.contributor_user_id, EXCLUDED.contributor_user_id),
-        linked_source_id    = COALESCE(ts.survey_training.linked_source_id,    EXCLUDED.linked_source_id)
-    RETURNING (xmax = 0) AS inserted
-""")
-
-
-_MEASUREMENT_UPSERT_SQL_BY_TARGET = {
-    "quarantine": _QUARANTINE_UPSERT_SQL,
-    "training": _TRAINING_UPSERT_SQL,
-}
 
 
 def upsert_gateway(
@@ -228,22 +206,23 @@ def upsert_measurement(
     uploader_id: UUID,
     contributor_user_id: UUID | None = None,
     linked_source_id: UUID | None = None,
-    target: MeasurementTarget = "quarantine",
+    submitted_for_community: bool = False,
 ) -> UpsertResult:
-    """Insert hoặc update provenance của 1 measurement.
+    """Insert hoặc update provenance của 1 measurement trong ts.survey_quarantine.
 
     `serving_gateway_id` (UUID PK của geo.gateways) caller resolve trước qua
     map external_id → uuid (build từ output của upsert_gateway).
 
-    `target` quyết định table đích (plan §3.4):
-      * "quarantine" — sync khi linked_source.contribute_to_community=false
-      * "training"   — sync khi contribute_to_community=true (lên map cộng đồng)
-    Caller (sync orchestrator) đọc cờ từ row `auth.linked_sources` rồi pass.
+    `submitted_for_community` (plan community-data-contribution §3.4):
+      * False — personal-only, mãi mãi ở quarantine (chỉ user owner xem được).
+      * True  — đủ điều kiện chạy qua TrustValidator pipeline; pass → promote
+        sang training. Sync orchestrator pass theo `linked_sources.
+        contribute_to_community`; CSV upload pass theo checkbox của user.
     """
     freq = rec.frequency_mhz if rec.frequency_mhz is not None else DEFAULT_FREQUENCY_MHZ
 
     row = conn.execute(
-        _MEASUREMENT_UPSERT_SQL_BY_TARGET[target],
+        _QUARANTINE_UPSERT_SQL,
         {
             "ts": rec.time,
             "lat": rec.latitude,
@@ -259,6 +238,7 @@ def upsert_measurement(
             "source_type": source_type,
             "contributor_user_id": contributor_user_id,
             "linked_source_id": linked_source_id,
+            "submitted_for_community": submitted_for_community,
         },
     ).one()
     return "inserted" if row.inserted else "updated"

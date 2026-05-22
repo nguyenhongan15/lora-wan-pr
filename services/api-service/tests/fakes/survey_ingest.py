@@ -44,12 +44,19 @@ class FakeSurveyIngest:
         source_type: str | None = None,
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
+        submitted_for_community: bool = False,
     ) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
                 f"record_ids size ({len(record_ids)}) != records ({len(batch.records)})"
             )
-        _ = external_ids, source_type, linked_source_id, contributor_user_id
+        _ = (
+            external_ids,
+            source_type,
+            linked_source_id,
+            contributor_user_id,
+            submitted_for_community,
+        )
         inserted = 0
         for rid, rec in zip(record_ids, batch.records, strict=True):
             key = (rec.timestamp, rid)

@@ -15,12 +15,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
 import { linkSource } from "./client.js";
 import { WebhookSetupInstructions } from "./WebhookSetupInstructions.jsx";
+import { ContributeUpload } from "../components/ContributeUpload.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.sources.addForm;
 const tErr = strings.sources.errors;
 
-/** @typedef {"lpwanmapper" | "chirpstack"} SourceType */
+/** @typedef {"lpwanmapper" | "chirpstack" | "csv_upload"} SourceType */
 
 /**
  * Union shape — chứa toàn bộ field của mọi adapter. Tùy `sourceType` mà
@@ -124,85 +125,94 @@ export function AddSourceForm() {
       <h2 className="text-base font-semibold text-slate-900">{t.title}</h2>
       <p className="mt-1 text-sm text-slate-600">{t.subtitle}</p>
 
-      <form onSubmit={onSubmit} className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div className="sm:col-span-2">
-          <label
-            htmlFor="src-type"
-            className="block text-sm font-medium text-slate-700"
-          >
-            {t.sourceTypeLabel}
-          </label>
-          <select
-            id="src-type"
-            value={sourceType}
-            onChange={(e) =>
-              onChangeSourceType(/** @type {SourceType} */ (e.target.value))
-            }
-            className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
-          >
-            <option value="lpwanmapper">lpwanmapper</option>
-            <option value="chirpstack">chirpstack</option>
-          </select>
+      <div className="mt-4">
+        <label
+          htmlFor="src-type"
+          className="block text-sm font-medium text-slate-700"
+        >
+          {t.sourceTypeLabel}
+        </label>
+        <select
+          id="src-type"
+          value={sourceType}
+          onChange={(e) =>
+            onChangeSourceType(/** @type {SourceType} */ (e.target.value))
+          }
+          className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+        >
+          <option value="lpwanmapper">lpwanmapper</option>
+          <option value="chirpstack">chirpstack</option>
+          <option value="csv_upload">Tải lên file CSV</option>
+        </select>
+      </div>
+
+      {sourceType === "csv_upload" ? (
+        <div className="mt-4">
+          <ContributeUpload />
         </div>
+      ) : (
+        <form onSubmit={onSubmit} className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label
+              htmlFor="src-label"
+              className="block text-sm font-medium text-slate-700"
+            >
+              {t.labelLabel}
+            </label>
+            <input
+              id="src-label"
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t.labelPlaceholder}
+              required
+              maxLength={100}
+              autoComplete="off"
+              className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
+            />
+          </div>
 
-        <div className="sm:col-span-2">
-          <label
-            htmlFor="src-label"
-            className="block text-sm font-medium text-slate-700"
-          >
-            {t.labelLabel}
-          </label>
-          <input
-            id="src-label"
-            type="text"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder={t.labelPlaceholder}
-            required
-            maxLength={100}
-            autoComplete="off"
-            className="mt-1 w-full rounded-md border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500"
-          />
-        </div>
+          {sourceType === "lpwanmapper" ? (
+            <LpwanmapperFields
+              email={creds.email}
+              password={creds.password}
+              onChangeEmail={(v) => setCreds((c) => ({ ...c, email: v }))}
+              onChangePassword={(v) =>
+                setCreds((c) => ({ ...c, password: v }))
+              }
+            />
+          ) : (
+            <ChirpStackFields
+              apiUrl={creds.api_url}
+              apiToken={creds.api_token}
+              tenantId={creds.tenant_id}
+              verifySsl={creds.verify_ssl}
+              onChangeApiUrl={(v) => setCreds((c) => ({ ...c, api_url: v }))}
+              onChangeApiToken={(v) =>
+                setCreds((c) => ({ ...c, api_token: v }))
+              }
+              onChangeTenantId={(v) =>
+                setCreds((c) => ({ ...c, tenant_id: v }))
+              }
+              onChangeVerifySsl={(v) =>
+                setCreds((c) => ({ ...c, verify_ssl: v }))
+              }
+            />
+          )}
 
-        {sourceType === "lpwanmapper" ? (
-          <LpwanmapperFields
-            email={creds.email}
-            password={creds.password}
-            onChangeEmail={(v) => setCreds((c) => ({ ...c, email: v }))}
-            onChangePassword={(v) => setCreds((c) => ({ ...c, password: v }))}
-          />
-        ) : (
-          <ChirpStackFields
-            apiUrl={creds.api_url}
-            apiToken={creds.api_token}
-            tenantId={creds.tenant_id}
-            verifySsl={creds.verify_ssl}
-            onChangeApiUrl={(v) => setCreds((c) => ({ ...c, api_url: v }))}
-            onChangeApiToken={(v) =>
-              setCreds((c) => ({ ...c, api_token: v }))
-            }
-            onChangeTenantId={(v) =>
-              setCreds((c) => ({ ...c, tenant_id: v }))
-            }
-            onChangeVerifySsl={(v) =>
-              setCreds((c) => ({ ...c, verify_ssl: v }))
-            }
-          />
-        )}
+          <div className="sm:col-span-2">
+            <button
+              type="submit"
+              disabled={m.isPending}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+            >
+              {m.isPending ? t.submitPending : t.submit}
+            </button>
+          </div>
+        </form>
+      )}
 
-        <div className="sm:col-span-2">
-          <button
-            type="submit"
-            disabled={m.isPending}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
-          >
-            {m.isPending ? t.submitPending : t.submit}
-          </button>
-        </div>
-      </form>
-
-      {m.isSuccess && !webhookSecret && (
+      {sourceType !== "csv_upload" && m.isSuccess && !webhookSecret && (
         <div
           role="status"
           className="mt-3 rounded-md border border-green-300 bg-green-50 p-3 text-sm text-green-800"
@@ -211,7 +221,7 @@ export function AddSourceForm() {
         </div>
       )}
 
-      {webhookSecret && (
+      {sourceType !== "csv_upload" && webhookSecret && (
         <div className="mt-3">
           <WebhookSetupInstructions
             webhookUrl={webhookSecret.url}
@@ -221,7 +231,7 @@ export function AddSourceForm() {
         </div>
       )}
 
-      {m.isError && <FormError error={m.error} />}
+      {sourceType !== "csv_upload" && m.isError && <FormError error={m.error} />}
     </section>
   );
 }

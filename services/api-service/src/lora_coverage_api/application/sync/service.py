@@ -43,7 +43,12 @@ from ..sources import (
     UnknownSourceTypeError,
     get_adapter,
 )
-from ._upsert import MeasurementTarget, upsert_device, upsert_gateway, upsert_measurement
+from ..trust import (
+    TrustValidator,
+    UnknownContributorError,
+    promote_pending_for_linked_source,
+)
+from ._upsert import upsert_device, upsert_gateway, upsert_measurement
 
 logger = structlog.get_logger("lora_coverage_api.sync")
 
@@ -136,10 +141,17 @@ _SELECT_ELIGIBLE_IDS = text("""
 
 
 class SyncService:
-    """Stateless modulo `cipher`. Caller (edge/deps) khởi 1 instance / process."""
+    """Stateless modulo (cipher, trust). Caller (edge/deps) khởi 1 instance / process.
 
-    def __init__(self, *, cipher: CredentialCipher) -> None:
+    `trust` (TrustValidator) inject để promote pending rows sau mỗi batch
+    measurement insert — plan community-data-contribution: sync ghi thẳng
+    quarantine với cờ submitted_for_community, sau đó trust pipeline copy
+    sang training nếu pass.
+    """
+
+    def __init__(self, *, cipher: CredentialCipher, trust: TrustValidator) -> None:
         self._cipher = cipher
+        self._trust = trust
 
     # ── single-source ────────────────────────────────────────────────────
 
@@ -222,12 +234,12 @@ class SyncService:
                 counts=(0, 0, 0, 0, 0, 0),
             )
 
-        # Plan §3.4: contribute_to_community quyết định measurement đi thẳng
-        # vào training (lên map cộng đồng) hay nằm ở quarantine. Gateway
-        # luôn vào geo.gateways — không có path quarantine cho gateway.
-        # Annotation explicit: mypy không narrow conditional expr xuống Literal,
-        # mặc định infer là `str`. MeasurementTarget = Literal["quarantine","training"].
-        m_target: MeasurementTarget = "training" if row.contribute_to_community else "quarantine"
+        # Plan community-data-contribution §3.4: measurement LUÔN ghi
+        # quarantine. Cờ `submitted_for_community` đẩy theo
+        # `linked_sources.contribute_to_community` — sau ingest, nếu cờ
+        # bật, trust pipeline (promote_pending_for_linked_source) chạy
+        # validate per-row → copy sang training nếu pass.
+        contribute = bool(row.contribute_to_community)
 
         try:
             adapter = get_adapter(source_type)
@@ -257,7 +269,7 @@ class SyncService:
                 ls_id=ls_id,
                 since=row.last_sync_at,
                 gw_uuid_by_external=gw_uuid_by_external,
-                target=m_target,
+                submitted_for_community=contribute,
             )
         except (UnknownSourceTypeError, SourceError) as exc:
             err = _sanitise_exc(exc)
@@ -271,6 +283,12 @@ class SyncService:
                 counts=(0, 0, 0, 0, 0, 0),
             )
 
+        # Promote pending → training nếu user đã opt-in cộng đồng. Best-
+        # effort: validator failure (user mất khỏi auth.users giữa lúc)
+        # log + skip, sync vẫn coi như success vì raw data đã ghi quarantine.
+        if contribute:
+            self._promote_after_sync(conn, user_id=user_id, ls_id=ls_id, log=log)
+
         return self._finalise(
             conn,
             ls_id=ls_id,
@@ -279,6 +297,31 @@ class SyncService:
             log=log,
             started=started,
             counts=(gw_inserted, gw_updated, m_inserted, m_updated, dev_inserted, dev_updated),
+        )
+
+    def _promote_after_sync(
+        self,
+        conn: Connection,
+        *,
+        user_id: UUID,
+        ls_id: UUID,
+        log: Any,
+    ) -> None:
+        """Load contributor reputation + chạy promote loop cho ls_id.
+
+        Catch UnknownContributorError defensive — user bị xoá giữa lúc sync.
+        KHÔNG raise: sync hợp lệ đã hoàn tất, promotion fail chỉ log warning.
+        """
+        try:
+            contributor = self._trust.load_contributor(conn, user_id)
+        except UnknownContributorError:
+            log.warning("trust_promotion_skipped_unknown_user")
+            return
+        promote_pending_for_linked_source(
+            conn,
+            self._trust,
+            contributor,
+            linked_source_id=ls_id,
         )
 
     def _decrypt(self, blob: bytes) -> dict[str, str]:
@@ -410,7 +453,7 @@ def _ingest_measurements(
     ls_id: UUID,
     since: datetime | None,
     gw_uuid_by_external: dict[str, UUID],
-    target: MeasurementTarget,
+    submitted_for_community: bool,
 ) -> tuple[int, int]:
     inserted = updated = 0
     for rec in adapter.fetch_measurements(handle, since=since):
@@ -427,7 +470,7 @@ def _ingest_measurements(
             uploader_id=user_id,
             contributor_user_id=user_id,
             linked_source_id=ls_id,
-            target=target,
+            submitted_for_community=submitted_for_community,
         )
         if status == "inserted":
             inserted += 1

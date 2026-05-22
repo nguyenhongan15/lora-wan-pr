@@ -31,9 +31,19 @@ import structlog
 from fastapi import APIRouter, Depends, Request, status
 
 from ...application.chirpstack_webhook_service import ChirpstackWebhookService
+from ...application.trust import (
+    TrustValidator,
+    UnknownContributorError,
+    promote_pending_for_linked_source,
+)
 from ...application.webhook_auth import WebhookAuthService
 from ...config import get_settings
-from ..deps import _engine, survey_repository, webhook_auth_service
+from ..deps import (
+    _engine,
+    survey_repository,
+    trust_validator,
+    webhook_auth_service,
+)
 from ..rate_limit import limiter
 from ..schemas import WebhookIngestResponse
 
@@ -83,11 +93,34 @@ async def chirpstack_webhook(
     payload: dict[str, Any],
     auth: WebhookAuthService = Depends(webhook_auth_service),
     service: ChirpstackWebhookService = Depends(_webhook_service),
+    trust: TrustValidator = Depends(trust_validator),
 ) -> WebhookIngestResponse:
     with _engine().begin() as conn:
         context = auth.resolve(conn, token)
 
     receipt = service.ingest_uplink(payload, context)
+
+    # Trust pipeline: nếu user đã opt-in cộng đồng + có rows insert mới,
+    # chạy validator để promote sang training. Mỗi uplink ChirpStack ~1-3
+    # records → loop ngắn, ITU compute chấp nhận được. Skip nếu insert=0
+    # (toàn dedup) để tránh dispatch validator không cần thiết.
+    if context.contribute and receipt.inserted_count > 0:
+        with _engine().begin() as conn:
+            try:
+                contributor = trust.load_contributor(conn, context.user_id)
+            except UnknownContributorError:
+                logger.warning(
+                    "webhook_promote_skipped_unknown_user",
+                    user_id=str(context.user_id),
+                    linked_source_id=str(context.linked_source_id),
+                )
+            else:
+                promote_pending_for_linked_source(
+                    conn,
+                    trust,
+                    contributor,
+                    linked_source_id=context.linked_source_id,
+                )
 
     # Log với trace_id để correlate khi debug retry/dedup. Token KHÔNG bao
     # giờ log — context.linked_source_id là handle public an toàn.

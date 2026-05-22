@@ -63,6 +63,12 @@ class FakeGatewayDirectory:
     def get_by_id(self, gateway_id: GatewayId) -> Gateway | None:
         return self._store.get(gateway_id)
 
+    def get_by_code(self, code: str) -> Gateway | None:
+        for gw in self._store.values():
+            if gw.code == code:
+                return gw
+        return None
+
     def create(self, gateway: Gateway) -> Gateway:
         self._store[gateway.id] = gateway
         return gateway
