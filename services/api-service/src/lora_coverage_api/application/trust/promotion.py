@@ -26,6 +26,7 @@ Filter cứng:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -445,7 +446,7 @@ def _run_loop(
     conn: Connection,
     validator: TrustValidator,
     contributor: ContributorContext,
-    rows: list[Any],
+    rows: Sequence[Any],
 ) -> PromotionResult:
     accepted = rejected = 0
     by_reason: dict[str, int] = {}
