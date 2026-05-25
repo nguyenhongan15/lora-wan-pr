@@ -224,6 +224,28 @@ class Settings(BaseSettings):
         description="Rate limit cho POST /auth/password-reset/confirm per IP.",
     )
 
+    # ── Email verification (community contribution gate) ──────────────────
+    # Khác password reset: TTL dài hơn (60 phút) vì user có thể delay click
+    # link. Single-use enforced ở SQL layer (migration 0019).
+    email_verification_ttl_minutes: int = Field(
+        default=60,
+        ge=5,
+        le=1440,
+        description="TTL (phút) cho email verification token.",
+    )
+    email_verification_url_template: str = Field(
+        default="http://localhost:5173/?verify_email={token}",
+        description="Template URL trong email. {token} sẽ được thay bằng plaintext token.",
+    )
+    auth_email_verify_request_rate_limit: str = Field(
+        default="5/hour",
+        description="Rate limit cho POST /auth/email-verify/request per user.",
+    )
+    auth_email_verify_confirm_rate_limit: str = Field(
+        default="10/hour",
+        description="Rate limit cho POST /auth/email-verify/confirm per IP.",
+    )
+
     # ── SMTP (password reset mailer) ─────────────────────────────────────
     # Empty host = NoOpMailer (dev: reset URL log ra console, không gửi).
     # Production: validator dưới chặn empty + warn nếu from_email default.
@@ -314,6 +336,22 @@ class Settings(BaseSettings):
                 "RATE_LIMIT_STORAGE_URI=redis://cache:6379/0"
             )
         return self
+
+    # ── Sentry error tracking (pre-deploy checklist §8) ──────────────────
+    # Rỗng = init no-op (dev / chưa cấu hình); structlog stdout vẫn ghi
+    # errors. Production set DSN để long-tail single-user crash không lọt
+    # qua Prometheus rate/latency metrics. tracesSampleRate giữ 0 — chỉ ghi
+    # exception, không trace performance (cost-aware default).
+    sentry_dsn: str = Field(
+        default="",
+        description="Sentry DSN cho api-service. Rỗng = disabled.",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Tỉ lệ sample performance trace. Mặc định 0 = chỉ ghi exception.",
+    )
 
     # ── ChirpStack per-user webhook ingest ────────────────────────────────
     # Plan ChirpStack per-user webhook ingest. Legacy env-map
@@ -413,6 +451,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PASSWORD_RESET_URL_TEMPLATE phải chứa placeholder '{token}'. "
                 "Ví dụ: https://app.example.com/?reset={token}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _email_verification_url_template_valid(self) -> Settings:
+        if "{token}" not in self.email_verification_url_template:
+            raise ValueError(
+                "EMAIL_VERIFICATION_URL_TEMPLATE phải chứa placeholder '{token}'. "
+                "Ví dụ: https://app.example.com/?verify_email={token}"
             )
         return self
 

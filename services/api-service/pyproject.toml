@@ -44,6 +44,9 @@ dependencies = [
     # chirpstack-rest-api. Adapter ChirpStack giao tiếp qua gRPC-web frame
     # (5-byte length-prefix) + protobuf message types từ package này.
     "chirpstack-api>=4.10",
+    # Error tracking — env-gated qua SENTRY_DSN. Khi DSN rỗng (dev), init no-op
+    # nên không phát sinh traffic. Pre-deploy checklist §8 (logging+monitoring).
+    "sentry-sdk[fastapi]>=2.18",
 ]
 
 [tool.uv.sources]

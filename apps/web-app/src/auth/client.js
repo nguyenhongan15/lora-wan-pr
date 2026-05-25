@@ -42,6 +42,10 @@ export const PasswordResetConfirmRequest = z.object({
   new_password: z.string().min(8).max(128),
 });
 
+export const EmailVerifyConfirmRequest = z.object({
+  token: z.string().min(32).max(128),
+});
+
 export const TokenResponse = z.object({
   access_token: z.string(),
   token_type: z.literal("bearer"),
@@ -185,25 +189,42 @@ export async function logout() {
  * App-load hook: khôi phục session từ HttpOnly cookie nếu có.
  * Gọi 1 lần ở App mount; idempotent (resolve sớm nếu đã có session).
  *
+ * Single-flight: React StrictMode double-mount effect → bootstrap chạy 2 lần
+ * gần như đồng thời. Nếu không dedupe, cả 2 đều thấy `getToken()` null trước
+ * khi POST /refresh đầu tiên trả về → 2 POST /auth/refresh song song. Refresh
+ * token là single-use rotation; call thứ 2 gửi cookie cũ (browser chưa apply
+ * Set-Cookie) → backend reuse-detector revoke cả family → reload kế tiếp
+ * 100% logged-out. Module-level promise cache khoá callers vào cùng 1 future.
+ *
  * @returns {Promise<UserT | null>}
  */
+/** @type {Promise<UserT | null> | null} */
+let _bootstrapPromise = null;
+
 export async function bootstrap() {
   if (getToken()) return null; // đã có session (HMR hoặc race), không cần
-  const token = await refresh();
-  if (!token) {
-    clear();
-    return null;
-  }
-  const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-    headers: { authorization: `Bearer ${token.access_token}` },
+  if (_bootstrapPromise) return _bootstrapPromise;
+  _bootstrapPromise = (async () => {
+    const token = await refresh();
+    if (!token) {
+      clear();
+      return null;
+    }
+    const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${token.access_token}` },
+    });
+    if (!meRes.ok) {
+      clear();
+      return null;
+    }
+    const user = User.parse(await meRes.json());
+    setSession(token.access_token, user);
+    return user;
+  })();
+  _bootstrapPromise.finally(() => {
+    _bootstrapPromise = null;
   });
-  if (!meRes.ok) {
-    clear();
-    return null;
-  }
-  const user = User.parse(await meRes.json());
-  setSession(token.access_token, user);
-  return user;
+  return _bootstrapPromise;
 }
 
 /**
@@ -247,6 +268,42 @@ export async function confirmPasswordReset(req) {
   // Mọi session hiện tại của user này đã bị revoke ở backend → clear local
   // store nếu trùng user. Đơn giản nhất là clear vô điều kiện — UX an toàn.
   clear();
+}
+
+/**
+ * POST /api/v1/auth/email-verify/request — auth required, fire-and-forget.
+ *
+ * Backend gửi email kèm link verify. Token TTL 60 phút. Rate-limited 5/hour
+ * per IP. Idempotent về UX — user xác thực rồi gọi lại = no-op (server
+ * skip mail send).
+ *
+ * @returns {Promise<void>}
+ */
+export async function requestEmailVerification() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/auth/email-verify/request`, {
+    method: "POST",
+  });
+  if (!res.ok) await _throwProblem(res);
+}
+
+/**
+ * POST /api/v1/auth/email-verify/confirm — single-use.
+ *
+ * KHÔNG gọi fetchMe ở đây: confirm page sẽ tự refresh session trong effect
+ * sau khi mutation isSuccess. Inline fetchMe trong mutation từng gây stuck
+ * "Đang xác thực…" khi authFetch race với bootstrap refresh.
+ *
+ * @param {{ token: string }} req
+ * @returns {Promise<void>}
+ */
+export async function confirmEmailVerification(req) {
+  const parsed = EmailVerifyConfirmRequest.parse(req);
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/email-verify/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(parsed),
+  });
+  if (!res.ok) await _throwProblem(res);
 }
 
 /**

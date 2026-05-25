@@ -37,9 +37,34 @@ def _configure_logging(level: str) -> None:
     )
 
 
+def _configure_sentry(dsn: str, env: str, traces_sample_rate: float) -> None:
+    # No-op khi DSN rỗng: dev không cần Sentry, structlog stdout đã đủ. Import
+    # bên trong vì sentry-sdk thêm overhead module-load không cần thiết khi off.
+    if not dsn:
+        return
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=env,
+        traces_sample_rate=traces_sample_rate,
+        # FastAPI/Starlette integrations: tự bắt unhandled exception ở request
+        # boundary + tag transaction_name = route path. Không enable Logging
+        # integration vì structlog đã JSON-render lên stdout cho aggregator.
+        integrations=[StarletteIntegration(), FastApiIntegration()],
+    )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings.log_level)
+    _configure_sentry(
+        settings.sentry_dsn,
+        settings.app_env,
+        settings.sentry_traces_sample_rate,
+    )
 
     # Pre-deploy checklist §6 (custom error screens): production KHÔNG expose
     # /docs + /openapi.json — leak schema nội bộ + giúp attacker fingerprint

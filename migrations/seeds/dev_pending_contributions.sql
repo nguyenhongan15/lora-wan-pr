@@ -1,0 +1,53 @@
+-- Dev-only: seed 6 pending_review rows để admin có data thử duyệt.
+-- Gateway 7276ff002e06029f (Đà Nẵng), contributor = nguyenthanhtriet250@gmail.com.
+-- RSSI realistic theo cự ly + SF (sẽ pass ITU L2 nếu chạy validator thật, nhưng
+-- ở đây bypass — set thẳng review_status='pending_review').
+
+INSERT INTO ts.survey_quarantine (
+    id, timestamp, location, rssi_dbm, snr_db, spreading_factor,
+    frequency_mhz, device_id, serving_gateway_id, uploader_id,
+    contributor_user_id, source_type, external_id,
+    submitted_for_community, review_status
+) VALUES
+    (gen_random_uuid(), now() - interval '2 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1545 16.0680)'),
+     -88, 8.5, 7, 923.0, 'seed_device_01',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_001', true, 'pending_review'),
+    (gen_random_uuid(), now() - interval '3 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1580 16.0710)'),
+     -95, 5.2, 9, 923.0, 'seed_device_02',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_002', true, 'pending_review'),
+    (gen_random_uuid(), now() - interval '4 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1490 16.0625)'),
+     -102, 2.1, 10, 923.0, 'seed_device_03',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_003', true, 'pending_review'),
+    (gen_random_uuid(), now() - interval '5 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1635 16.0590)'),
+     -107, -1.5, 11, 923.0, 'seed_device_04',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_004', true, 'pending_review'),
+    (gen_random_uuid(), now() - interval '6 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1410 16.0740)'),
+     -110, -4.0, 12, 923.0, 'seed_device_05',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_005', true, 'pending_review'),
+    (gen_random_uuid(), now() - interval '7 hour',
+     ST_GeogFromText('SRID=4326;POINT(108.1525 16.0660)'),
+     -82, 9.8, 8, 923.0, 'seed_device_06',
+     '553c874b-c8b5-49d9-8214-9ae43332699b',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'b8754a38-5249-41cc-a2a9-ee3fb262b40e',
+     'csv_upload', 'seed_test_pending_006', true, 'pending_review');

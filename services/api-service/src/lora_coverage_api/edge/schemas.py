@@ -238,7 +238,12 @@ class CsvUploadStats(BaseModel):
     pending: int = Field(
         ...,
         ge=0,
-        description="Row còn pending (chưa promote, chưa reject) — số sẽ chạy validator khi user click Đóng góp",
+        description="Row còn pending (chưa qua auto-validate) — số sẽ chạy validator khi user click Đóng góp",
+    )
+    pending_review: int = Field(
+        ...,
+        ge=0,
+        description="Row đã pass auto-validate, chờ admin duyệt thủ công",
     )
     promoted: int = Field(..., ge=0, description="Row đã promote sang training")
     rejected: int = Field(..., ge=0, description="Row đã reject (set reject_reason)")
@@ -263,6 +268,7 @@ class CsvUploadBatch(BaseModel):
     uploaded_at: datetime
     total: int = Field(..., ge=0)
     pending: int = Field(..., ge=0)
+    pending_review: int = Field(..., ge=0)
     promoted: int = Field(..., ge=0)
     rejected: int = Field(..., ge=0)
 
@@ -384,6 +390,7 @@ class UserResponse(BaseModel):
     id: UUID
     email: str
     is_admin: bool
+    email_verified: bool
     created_at: datetime
 
 
@@ -411,6 +418,15 @@ class PasswordResetConfirmRequest(BaseModel):
     # shape để 422 fast trên junk input thay vì tốn DB query.
     token: str = Field(..., min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_\-]+$")
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+# ── Email verification ────────────────────────────────────────────────────
+
+
+class EmailVerifyConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    token: str = Field(..., min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_\-]+$")
 
 
 # ── Linking — me/sources (plan-auth-v1 §3.3) ──────────────────────────────
@@ -610,3 +626,86 @@ class AdminStatsResponse(BaseModel):
     active_source_count: int = Field(..., ge=0)
     gateway_count: int = Field(..., ge=0)
     measurement_count: int = Field(..., ge=0)
+    pending_review_count: int = Field(..., ge=0)
+
+
+class PendingContributionResponse(BaseModel):
+    """1 row chờ admin duyệt — đã pass auto-validate, đủ field cho map preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    timestamp: datetime
+    submitted_at: datetime
+    latitude: float
+    longitude: float
+    rssi_dbm: float
+    snr_db: float
+    spreading_factor: int
+    frequency_mhz: float
+    source_type: str | None
+    contributor_user_id: UUID | None
+    contributor_email: str | None
+    serving_gateway_id: UUID | None
+    gateway_code: str | None
+    linked_source_id: UUID | None
+
+
+class PendingContributionListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PendingContributionResponse]
+    total: int = Field(..., ge=0)
+
+
+class ContributionRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ContributionReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    review_status: Literal["approved", "rejected"]
+
+
+class PendingReviewBatchResponse(BaseModel):
+    """1 batch CSV upload (= 1 file user upload) còn ≥1 row chờ duyệt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uploader_id: UUID
+    uploader_email: str | None
+    uploaded_at: datetime
+    pending_review_count: int = Field(..., ge=0)
+    total_count: int = Field(..., ge=0)
+    earliest_timestamp: datetime
+    latest_timestamp: datetime
+
+
+class PendingReviewBatchListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PendingReviewBatchResponse]
+
+
+class BatchReviewRequest(BaseModel):
+    """Identifier 1 batch CSV (uploader + uploaded_at). Admin gửi body POST
+    cho approve/reject — uploaded_at là ISO 8601 datetime."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    uploader_id: UUID
+    uploaded_at: datetime
+    note: str | None = Field(default=None, max_length=500)
+
+
+class BatchReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uploader_id: UUID
+    uploaded_at: datetime
+    approved_count: int = Field(default=0, ge=0)
+    rejected_count: int = Field(default=0, ge=0)

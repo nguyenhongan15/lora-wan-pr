@@ -177,9 +177,9 @@ _UPDATE_WEBHOOK_HASH_OWNED = text("""
 # Backfill flow (plan community-data-contribution §3.4):
 #   1. Flip submitted_for_community false→true cho mọi quarantine row của
 #      ls_id (mark_submitted_for_linked_source).
-#   2. Load contributor reputation 1 lần (stable threshold cho cả batch).
+#   2. Load contributor wrapper 1 lần (verify user tồn tại).
 #   3. Loop validate + promote (promote_pending_for_linked_source) — pass
-#      → INSERT training, fail → SET reject_reason.
+#      → mark pending_review, fail → SET reject_reason.
 #
 # Plan thay INSERT...SELECT bulk vì cần per-record TrustValidator gating;
 # loop chấp nhận cost ITU compute per row (lịch sử mỗi user giới hạn).

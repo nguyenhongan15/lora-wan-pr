@@ -13,6 +13,7 @@ Tách port khỏi impl để:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 
@@ -31,6 +32,46 @@ class Mailer(Protocol):
         *,
         reset_url: str,
         expires_in_minutes: int,
+    ) -> None: ...
+
+    def send_email_verification(
+        self,
+        to_email: str,
+        *,
+        verify_url: str,
+        expires_in_minutes: int,
+    ) -> None: ...
+
+    def send_contribution_approved(
+        self,
+        to_email: str,
+        *,
+        point_timestamp: datetime,
+        latitude: float,
+        longitude: float,
+        gateway_code: str | None,
+        rssi_dbm: float,
+    ) -> None: ...
+
+    def send_contribution_batch_approved(
+        self,
+        to_email: str,
+        *,
+        uploaded_at: datetime,
+        approved_count: int,
+        earliest_timestamp: datetime,
+        latest_timestamp: datetime,
+    ) -> None: ...
+
+    def send_contribution_batch_rejected(
+        self,
+        to_email: str,
+        *,
+        uploaded_at: datetime,
+        rejected_count: int,
+        earliest_timestamp: datetime,
+        latest_timestamp: datetime,
+        note: str | None,
     ) -> None: ...
 
 

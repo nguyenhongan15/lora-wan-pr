@@ -67,7 +67,7 @@ export function ContributeUpload() {
           <input
             ref={inputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.json,text/csv,application/json"
             onChange={onFile}
             className="mt-1 block text-sm"
           />

@@ -171,6 +171,11 @@ services:
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-noreply@lora-coverage.local}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-LoRa Coverage}
       SMTP_USE_STARTTLS: ${SMTP_USE_STARTTLS:-true}
+      # Sentry error tracking (pre-deploy checklist §8). Empty = init no-op,
+      # structlog stdout vẫn ghi errors. Production set DSN để long-tail
+      # single-user crash không lọt qua Prometheus rate/latency metrics.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro

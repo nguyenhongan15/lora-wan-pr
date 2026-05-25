@@ -5,6 +5,8 @@ import { AdminPage } from "./admin/AdminPage.jsx";
 import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
+import { EmailVerifyConfirmPage } from "./auth/EmailVerifyConfirmPage.jsx";
+import { EmailVerifyModal } from "./auth/EmailVerifyModal.jsx";
 import { ResetPassword } from "./auth/ResetPassword.jsx";
 import { getUser, subscribe } from "./auth/store.js";
 import { bootstrap, logout } from "./auth/client.js";
@@ -28,11 +30,35 @@ function _readResetTokenFromUrl() {
   return params.get("reset") ?? "";
 }
 
+/**
+ * Đọc `?verify_email=<token>` cho luồng xác thực email (mirror reset). Trả
+ * empty-string nếu param có nhưng giá trị rỗng → page render fallback.
+ */
+function _readVerifyEmailTokenFromUrl() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("verify_email")) return null;
+  return params.get("verify_email") ?? "";
+}
+
+/**
+ * SPA hiện chỉ phục vụ ở "/" — mọi pathname khác là 404. Nginx phải fallback
+ * mọi route về index.html (single bundle) nên kiểm tra ở client-side.
+ */
+function _isUnknownPath() {
+  if (typeof window === "undefined") return false;
+  return window.location.pathname !== "/" && window.location.pathname !== "";
+}
+
 export function App() {
   const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
   const [authOpen, setAuthOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
   const [resetToken, setResetToken] = useState(_readResetTokenFromUrl);
+  const [verifyEmailToken, setVerifyEmailToken] = useState(
+    _readVerifyEmailTokenFromUrl,
+  );
   // Handoff state cho luồng Bulk → Predict: BulkLookup gọi onViewOnMap với
   // danh sách điểm đã predict; App lưu vào ref-state, chuyển tab, và truyền
   // xuống CoverageMap (mode="predict"). Sau khi CoverageMap consume xong,
@@ -66,6 +92,11 @@ export function App() {
   // Skip bootstrap khi đang ở reset flow — user vào từ email, không nên có
   // session sẵn (đặt lại pass = re-login). Backend cũng sẽ revoke session
   // sau confirm; bootstrap chạy lúc đó sẽ no-op vì cookie đã invalid.
+  //
+  // Verify-email flow KHÔNG cần effect riêng: bootstrap idempotent
+  // (`if (getToken()) return null`), chạy 2 lần song song race trên
+  // /auth/refresh → refresh-family revoke. EmailVerifyConfirmPage tự refresh
+  // user payload sau khi mutation isSuccess (effect riêng trong page đó).
   useEffect(() => {
     if (resetToken !== null) return;
     bootstrap().catch(() => {
@@ -80,6 +111,7 @@ export function App() {
   useEffect(() => {
     if (!user && tab === "sources") setTab("map");
     if (!user?.is_admin && tab === "adminPanel") setTab("map");
+    if (user?.is_admin && tab === "bulk") setTab("map");
   }, [user, tab]);
 
   // Reset mode: render full-screen, không render app chính. Sau khi user xong
@@ -100,6 +132,24 @@ export function App() {
         }}
       />
     );
+  }
+
+  if (verifyEmailToken !== null) {
+    return (
+      <EmailVerifyConfirmPage
+        token={verifyEmailToken || null}
+        onDone={() => {
+          if (typeof window !== "undefined") {
+            window.history.replaceState({}, "", window.location.pathname);
+          }
+          setVerifyEmailToken(null);
+        }}
+      />
+    );
+  }
+
+  if (_isUnknownPath()) {
+    return <NotFoundPage />;
   }
 
   function onAvatarClick() {
@@ -132,9 +182,11 @@ export function App() {
               <TabButton active={tab === "predict"} onClick={() => setTab("predict")}>
                 {t.tabs.predict}
               </TabButton>
-              <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
-                {t.tabs.bulk}
-              </TabButton>
+              {!user?.is_admin && (
+                <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
+                  {t.tabs.bulk}
+                </TabButton>
+              )}
               <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
                 {t.tabs.admin}
               </TabButton>
@@ -187,6 +239,35 @@ export function App() {
                       {tHeader.adminBadge}
                     </span>
                   )}
+                  {user.email_verified ? (
+                    <div className="mt-2 inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        className="h-3.5 w-3.5"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.55a1 1 0 0 1-1.42 0L3.29 9.755a1 1 0 1 1 1.42-1.41l3.79 3.81 6.79-6.86a1 1 0 0 1 1.414-.005Z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      {tHeader.verifiedBadge}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setVerifyOpen(true);
+                      }}
+                      className="mt-2 w-full rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-800 hover:bg-sky-100"
+                    >
+                      {tHeader.verifyEmailButton}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onLogout}
@@ -214,10 +295,12 @@ export function App() {
         )}
         {/* Bulk tab luôn mount để state (csvText, kết quả mutation, sf) sống
             sót khi user "Xem trên bản đồ" → quay lại tab Tra cứu hàng loạt.
-            Display:none giữ instance React + DOM. */}
-        <div className={tab === "bulk" ? "h-full overflow-y-auto" : "hidden"}>
-          <BulkLookup onViewOnMap={handleViewBulkOnMap} />
-        </div>
+            Display:none giữ instance React + DOM. Admin không có tab này. */}
+        {!user?.is_admin && (
+          <div className={tab === "bulk" ? "h-full overflow-y-auto" : "hidden"}>
+            <BulkLookup onViewOnMap={handleViewBulkOnMap} />
+          </div>
+        )}
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />
@@ -236,6 +319,13 @@ export function App() {
       </main>
 
       <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+      {user && (
+        <EmailVerifyModal
+          isOpen={verifyOpen}
+          email={user.email}
+          onClose={() => setVerifyOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -256,6 +346,25 @@ function TabButton({ active, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function NotFoundPage() {
+  const t = strings.app.notFound;
+  return (
+    <div className="flex h-dvh flex-col items-center justify-center bg-slate-50 px-6">
+      <div className="max-w-md text-center">
+        <h1 className="text-3xl font-bold text-slate-900">404</h1>
+        <h2 className="mt-1 text-lg font-semibold text-slate-800">{t.title}</h2>
+        <p className="mt-2 text-sm text-slate-600">{t.hint}</p>
+        <a
+          href="/"
+          className="mt-4 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+        >
+          {t.backHome}
+        </a>
+      </div>
+    </div>
   );
 }
 

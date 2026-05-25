@@ -63,6 +63,56 @@ export const AdminStats = z.object({
   active_source_count: z.number().int().nonnegative(),
   gateway_count: z.number().int().nonnegative(),
   measurement_count: z.number().int().nonnegative(),
+  pending_review_count: z.number().int().nonnegative(),
+});
+
+export const PendingContribution = z.object({
+  id: z.string().uuid(),
+  timestamp: z.string(),
+  submitted_at: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  rssi_dbm: z.number(),
+  snr_db: z.number(),
+  spreading_factor: z.number().int(),
+  frequency_mhz: z.number(),
+  source_type: z.string().nullable(),
+  contributor_user_id: z.string().uuid().nullable(),
+  contributor_email: z.string().nullable(),
+  serving_gateway_id: z.string().uuid().nullable(),
+  gateway_code: z.string().nullable(),
+  linked_source_id: z.string().uuid().nullable(),
+});
+
+export const PendingContributionList = z.object({
+  items: z.array(PendingContribution),
+  total: z.number().int().nonnegative(),
+});
+
+export const ContributionReview = z.object({
+  id: z.string().uuid(),
+  review_status: z.enum(["approved", "rejected"]),
+});
+
+export const PendingReviewBatch = z.object({
+  uploader_id: z.string().uuid(),
+  uploader_email: z.string().nullable(),
+  uploaded_at: z.string(),
+  pending_review_count: z.number().int().nonnegative(),
+  total_count: z.number().int().nonnegative(),
+  earliest_timestamp: z.string(),
+  latest_timestamp: z.string(),
+});
+
+export const PendingReviewBatchList = z.object({
+  items: z.array(PendingReviewBatch),
+});
+
+export const BatchReviewResponse = z.object({
+  uploader_id: z.string().uuid(),
+  uploaded_at: z.string(),
+  approved_count: z.number().int().nonnegative().default(0),
+  rejected_count: z.number().int().nonnegative().default(0),
 });
 
 /**
@@ -71,6 +121,12 @@ export const AdminStats = z.object({
  * @typedef {z.infer<typeof UserPatchRequest>} UserPatchRequestT
  * @typedef {z.infer<typeof SyncReport>} SyncReportT
  * @typedef {z.infer<typeof AdminStats>} AdminStatsT
+ * @typedef {z.infer<typeof PendingContribution>} PendingContributionT
+ * @typedef {z.infer<typeof PendingContributionList>} PendingContributionListT
+ * @typedef {z.infer<typeof ContributionReview>} ContributionReviewT
+ * @typedef {z.infer<typeof PendingReviewBatch>} PendingReviewBatchT
+ * @typedef {z.infer<typeof PendingReviewBatchList>} PendingReviewBatchListT
+ * @typedef {z.infer<typeof BatchReviewResponse>} BatchReviewResponseT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -149,4 +205,136 @@ export async function getStats() {
   const res = await authFetch(`${API_BASE_URL}/api/v1/admin/stats`);
   if (!res.ok) await _throwProblem(res);
   return AdminStats.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/contributions/pending — list rows chờ duyệt thủ công.
+ * @param {{ limit?: number, offset?: number }} [opts]
+ * @returns {Promise<PendingContributionListT>}
+ */
+export async function listPendingContributions(opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/pending${qs}`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return PendingContributionList.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/contributions/{id}/approve — đẩy vào survey_training.
+ * @param {string} id
+ * @returns {Promise<ContributionReviewT>}
+ */
+export async function approveContribution(id) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/${id}/approve`,
+    { method: "POST" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return ContributionReview.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/contributions/{id}/reject — đóng góp giữ trong quarantine.
+ * @param {string} id
+ * @param {string|null} [note]
+ * @returns {Promise<ContributionReviewT>}
+ */
+export async function rejectContribution(id, note = null) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/${id}/reject`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note }),
+    },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return ContributionReview.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/contributions/batches — list batch (1 file CSV upload =
+ * 1 batch) còn rows ở review_status='pending_review'.
+ * @returns {Promise<PendingReviewBatchListT>}
+ */
+export async function listPendingBatches() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/batches`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return PendingReviewBatchList.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/contributions/batches/rows — list rows trong 1 batch
+ * (drill-in: admin xem chi tiết từng điểm để có thể reject lẻ trước khi
+ * approve cả batch).
+ * @param {string} uploaderId UUID
+ * @param {string} uploadedAt ISO timestamp (giá trị `uploaded_at` từ batch)
+ * @returns {Promise<PendingContributionListT>}
+ */
+export async function listBatchRows(uploaderId, uploadedAt) {
+  const params = new URLSearchParams({
+    uploader_id: uploaderId,
+    uploaded_at: uploadedAt,
+  });
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/batches/rows?${params.toString()}`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return PendingContributionList.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/contributions/batches/approve — duyệt toàn bộ rows
+ * còn `review_status='pending_review'` trong batch. Email cảm ơn gửi 1 lần
+ * (summary).
+ * @param {string} uploaderId UUID
+ * @param {string} uploadedAt ISO timestamp
+ * @returns {Promise<BatchReviewResponseT>}
+ */
+export async function approveBatch(uploaderId, uploadedAt) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/batches/approve`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        uploader_id: uploaderId,
+        uploaded_at: uploadedAt,
+      }),
+    },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return BatchReviewResponse.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/contributions/batches/reject — reject hàng loạt mọi
+ * row pending trong batch.
+ * @param {string} uploaderId
+ * @param {string} uploadedAt
+ * @param {string|null} [note]
+ * @returns {Promise<BatchReviewResponseT>}
+ */
+export async function rejectBatch(uploaderId, uploadedAt, note = null) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/contributions/batches/reject`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        uploader_id: uploaderId,
+        uploaded_at: uploadedAt,
+        note,
+      }),
+    },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return BatchReviewResponse.parse(await res.json());
 }

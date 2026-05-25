@@ -34,6 +34,7 @@ from ...config import get_settings
 from ..deps import _engine, current_user, identity_service
 from ..rate_limit import limiter
 from ..schemas import (
+    EmailVerifyConfirmRequest,
     LoginRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
@@ -57,6 +58,7 @@ def _user_to_response(u: User) -> UserResponse:
         id=u.id,
         email=u.email,
         is_admin=u.is_admin,
+        email_verified=u.email_verified,
         created_at=u.created_at,
     )
 
@@ -217,4 +219,40 @@ def password_reset_confirm(
 ) -> Response:
     with _engine().begin() as conn:
         identity.confirm_password_reset(conn, body.token, body.new_password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ── Email verification ───────────────────────────────────────────────────
+# Auth required cho /request (user phải đăng nhập mới biết email verify cho
+# tài khoản nào). /confirm public — token chính là identity. Pattern song
+# song password-reset trừ chỗ /request có auth gate.
+
+
+@router.post(
+    "/email-verify/request",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+@limiter.limit(_settings.auth_email_verify_request_rate_limit)
+def email_verify_request(
+    request: Request,
+    user: User = Depends(current_user),
+    identity: IdentityService = Depends(identity_service),
+) -> Response:
+    with _engine().begin() as conn:
+        identity.request_email_verification(conn, user.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/email-verify/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+@limiter.limit(_settings.auth_email_verify_confirm_rate_limit)
+def email_verify_confirm(
+    request: Request,
+    body: EmailVerifyConfirmRequest,
+    identity: IdentityService = Depends(identity_service),
+) -> Response:
+    with _engine().begin() as conn:
+        identity.confirm_email_verification(conn, body.token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

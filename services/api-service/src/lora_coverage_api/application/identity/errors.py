@@ -136,3 +136,36 @@ class PasswordResetTokenUsedError(IdentityError):
 
     http_status = 400
     code = "password_reset_used"
+
+
+# ── Email verification errors ──────────────────────────────────────────────
+# 400 cho cả 3 — frontend treat đồng nhất "link hỏng, request lại". Phân
+# biệt qua `code` để hiển thị message cụ thể (hết hạn vs đã dùng vs sai).
+
+
+class EmailVerificationTokenInvalidError(IdentityError):
+    """Verification token không tồn tại hoặc malformed."""
+
+    http_status = 400
+    code = "email_verification_invalid"
+
+
+class EmailVerificationTokenExpiredError(IdentityError):
+    """Verification token quá expires_at (TTL ~60 phút)."""
+
+    http_status = 400
+    code = "email_verification_expired"
+
+
+class EmailVerificationTokenUsedError(IdentityError):
+    """Verification token đã được consume — single-use enforced."""
+
+    http_status = 400
+    code = "email_verification_used"
+
+
+class EmailNotVerifiedError(IdentityError):
+    """User chưa xác thực email — endpoint yêu cầu verified để submit community data."""
+
+    http_status = 403
+    code = "email_not_verified"

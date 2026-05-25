@@ -11,6 +11,7 @@
 
 import { AdminStatsCard } from "./AdminStatsCard.jsx";
 import { AdminUsersTable } from "./AdminUsersTable.jsx";
+import { ContributionReviewPanel } from "./ContributionReviewPanel.jsx";
 import { GlobalSyncPanel } from "./GlobalSyncPanel.jsx";
 import { strings } from "../strings.js";
 
@@ -32,6 +33,13 @@ export function AdminPage({ currentUserId }) {
           {t.statsHeading}
         </h2>
         <AdminStatsCard />
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+          {t.reviewHeading}
+        </h2>
+        <ContributionReviewPanel />
       </section>
 
       <section>

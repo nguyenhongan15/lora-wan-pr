@@ -323,6 +323,75 @@ const MINSF_OUTLINE_LAYER_ID = "minsf-outline";
  * ─────────────────────────────────────────────────────────────────────── */
 
 /**
+ * Helper "label: <strong>value</strong>" — build qua textContent thay vì
+ * innerHTML để không bao giờ inject markup từ label/value (defense-in-depth).
+ * @param {string} label
+ * @param {string} value
+ * @returns {HTMLDivElement}
+ */
+function buildLabelStrongRow(label, value) {
+  const row = document.createElement("div");
+  row.appendChild(document.createTextNode(`${label}: `));
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  row.appendChild(strong);
+  return row;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Gateway marker SVG (teardrop pin + tower-cell icon). Build qua createElementNS
+ * thay vì innerHTML — pattern an toàn dù mọi giá trị hiện đều từ config tĩnh.
+ * @returns {SVGSVGElement}
+ */
+function buildGatewayMarkerSvg() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", String(GATEWAY_MARKER_STYLE.width));
+  svg.setAttribute("height", String(GATEWAY_MARKER_STYLE.height));
+  svg.setAttribute("viewBox", "0 0 24 32");
+  svg.setAttribute("aria-hidden", "true");
+
+  const pin = document.createElementNS(SVG_NS, "path");
+  pin.setAttribute(
+    "d",
+    "M12 0 C 5.4 0 0 5.4 0 12 C 0 21 12 32 12 32 C 12 32 24 21 24 12 C 24 5.4 18.6 0 12 0 Z",
+  );
+  pin.setAttribute("fill", GATEWAY_MARKER_STYLE.fill);
+  pin.setAttribute("stroke", GATEWAY_MARKER_STYLE.stroke);
+  pin.setAttribute("stroke-width", "1.5");
+  svg.appendChild(pin);
+
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("transform", "translate(6 5) scale(0.5)");
+  g.setAttribute("fill", "none");
+  g.setAttribute("stroke", GATEWAY_MARKER_STYLE.iconColor);
+  g.setAttribute("stroke-width", "2.5");
+  g.setAttribute("stroke-linecap", "round");
+  g.setAttribute("stroke-linejoin", "round");
+
+  for (const d of ["M5 8a7 7 0 0 1 14 0", "M9 8a3 3 0 0 1 6 0"]) {
+    const p = document.createElementNS(SVG_NS, "path");
+    p.setAttribute("d", d);
+    g.appendChild(p);
+  }
+  for (const [x1, y1, x2, y2] of [
+    ["12", "8", "12", "21"],
+    ["9", "21", "15", "21"],
+    ["9", "14", "15", "14"],
+  ]) {
+    const line = document.createElementNS(SVG_NS, "line");
+    line.setAttribute("x1", x1);
+    line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2);
+    line.setAttribute("y2", y2);
+    g.appendChild(line);
+  }
+  svg.appendChild(g);
+  return svg;
+}
+
+/**
  * Pill nút thắt 2 chiều cạnh status badge ở Layer 1.
  * No-op nếu BE trả response cũ (bottleneck === undefined).
  * @param {HTMLElement} parent
@@ -431,13 +500,15 @@ function appendBidirectionalSection(parent, ul, dl) {
   table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px";
 
   const thead = document.createElement("thead");
-  thead.innerHTML =
-    `<tr style="color:#64748b;text-align:left">
-       <th style="padding:2px 4px;font-weight:500"></th>
-       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colRssi}</th>
-       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colSnr}</th>
-       <th style="padding:2px 4px;font-weight:500">${t.popup.bidir.colMargin}</th>
-     </tr>`;
+  const headTr = document.createElement("tr");
+  headTr.style.cssText = "color:#64748b;text-align:left";
+  for (const label of ["", t.popup.bidir.colRssi, t.popup.bidir.colSnr, t.popup.bidir.colMargin]) {
+    const th = document.createElement("th");
+    th.style.cssText = "padding:2px 4px;font-weight:500";
+    th.textContent = label;
+    headTr.appendChild(th);
+  }
+  thead.appendChild(headTr);
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
@@ -461,11 +532,25 @@ function appendDataLinkSection(parent, sf) {
   const wrap = document.createElement("div");
   wrap.style.cssText =
     "margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;font-size:11px";
-  wrap.innerHTML =
-    `<div style="font-weight:600;color:#0f172a;margin-bottom:4px">${t.popup.dataLink.sectionTitle}</div>` +
-    `<div>${t.popup.dataLink.bitrate}: <strong>${formatBitrate(sf)}</strong></div>` +
-    `<div>${t.popup.dataLink.timeOnAir}: <strong>${formatTimeOnAir(sf)}</strong></div>` +
-    `<div>${t.popup.dataLink.maxPayload}: <strong>${t.popup.dataLink.maxPayloadValue(maxPayloadBytes(sf))}</strong></div>`;
+
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:600;color:#0f172a;margin-bottom:4px";
+  title.textContent = t.popup.dataLink.sectionTitle;
+  wrap.appendChild(title);
+
+  for (const [label, value] of [
+    [t.popup.dataLink.bitrate, formatBitrate(sf)],
+    [t.popup.dataLink.timeOnAir, formatTimeOnAir(sf)],
+    [t.popup.dataLink.maxPayload, t.popup.dataLink.maxPayloadValue(maxPayloadBytes(sf))],
+  ]) {
+    const row = document.createElement("div");
+    row.appendChild(document.createTextNode(`${label}: `));
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    row.appendChild(strong);
+    wrap.appendChild(row);
+  }
+
   parent.appendChild(wrap);
 }
 
@@ -1023,16 +1108,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       // SVG teardrop pin: viewBox 24x32, tip ở (12, 32) = giữa-đáy SVG.
       // Path: nửa trên là vòm tròn r=12, nửa dưới thót dần xuống tip.
       // Icon tower-cell đặt trong vòm trên (scale 0.5 từ 24×24 → 12×12).
-      el.innerHTML = `<svg width="${GATEWAY_MARKER_STYLE.width}" height="${GATEWAY_MARKER_STYLE.height}" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M12 0 C 5.4 0 0 5.4 0 12 C 0 21 12 32 12 32 C 12 32 24 21 24 12 C 24 5.4 18.6 0 12 0 Z" fill="${GATEWAY_MARKER_STYLE.fill}" stroke="${GATEWAY_MARKER_STYLE.stroke}" stroke-width="1.5"/>
-        <g transform="translate(6 5) scale(0.5)" fill="none" stroke="${GATEWAY_MARKER_STYLE.iconColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 8a7 7 0 0 1 14 0"/>
-          <path d="M9 8a3 3 0 0 1 6 0"/>
-          <line x1="12" y1="8" x2="12" y2="21"/>
-          <line x1="9" y1="21" x2="15" y2="21"/>
-          <line x1="9" y1="14" x2="15" y2="14"/>
-        </g>
-      </svg>`;
+      el.appendChild(buildGatewayMarkerSvg());
       // g.code + g.name từ ChirpStack do user link → có thể chứa HTML (XSS).
       // Build DOM bằng textContent, KHÔNG setHTML. Các field số (tx_power_dbm,
       // antenna_*, frequency_mhz) đã validate ở schema backend nên dùng
@@ -1200,41 +1276,46 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     // Khi user chọn "Tự động": ẩn dòng "SF dùng" và bỏ mismatch hint vì
     // không có SF input để so sánh.
     const sfMismatch = !isAuto && rec !== sfUsed;
-    const recCellHtml = sfMismatch
-      ? `<strong>${t.popup.recommendedSf.value(rec)}</strong> <span style="color:#b45309">${t.popup.sfMismatchHint}</span>`
-      : `<strong>${t.popup.recommendedSf.value(rec)}</strong>`;
-    const techRows = document.createElement("div");
-    // RSSI/SNR tổng đã hiện chi tiết per-direction trong mini-table UL/DL
-    // bên dưới — không lặp lại ở đây để tránh trùng abstraction (philosophy
-    // ch.7: "each layer provides a different abstraction").
-    const usedSfRow = isAuto
-      ? ""
-      : `<div>${t.popup.usedSf.label}: <strong>${t.popup.usedSf.value(sfUsed)}</strong></div>`;
     const envOption = t.environmentPicker.options.find(
       (o) => o.value === environmentUsed,
     );
     const envLabel = envOption?.short ?? environmentUsed;
-    const usedTxPowerRow = `<div>${t.popup.usedTxPower.label}: <strong>${t.popup.usedTxPower.value(txPowerUsed)}</strong></div>`;
-    const usedEnvRow = `<div>${t.popup.usedEnvironment.label}: <strong>${envLabel}</strong></div>`;
-    // path_loss_db = 0 khi BE chưa rebuild hoặc no_coverage — ẩn row để khỏi
-    // hiển thị "0 dB" lẫn lộn.
-    const pathLossRow =
-      prediction.path_loss_db > 0
-        ? `<div>${t.popup.pathLoss.label}: <strong>${t.popup.pathLoss.value(prediction.path_loss_db)}</strong></div>`
-        : "";
     // σ_total = √(epi + ale) — Stage 1 epi=0, ale=σ_shadow² theo env_profile.
     const sigmaDb = Math.sqrt(
       prediction.confidence.epistemic_variance_db2 +
         prediction.confidence.aleatoric_variance_db2,
     );
-    techRows.innerHTML =
-      usedSfRow +
-      `<div>${t.popup.recommendedSf.label}: ${recCellHtml}</div>` +
-      usedTxPowerRow +
-      usedEnvRow +
-      pathLossRow +
-      `<div>${t.popup.errorMargin.label}: <strong>${t.popup.errorMargin.value(sigmaDb)}</strong></div>` +
-      `<div>${t.popup.accuracy.label}: <strong>${t.popup.accuracy.value(sigmaDb)}</strong></div>`;
+    const techRows = document.createElement("div");
+    // RSSI/SNR tổng đã hiện chi tiết per-direction trong mini-table UL/DL
+    // bên dưới — không lặp lại ở đây để tránh trùng abstraction (philosophy
+    // ch.7: "each layer provides a different abstraction").
+    if (!isAuto) {
+      techRows.appendChild(buildLabelStrongRow(t.popup.usedSf.label, t.popup.usedSf.value(sfUsed)));
+    }
+    const recRow = document.createElement("div");
+    recRow.appendChild(document.createTextNode(`${t.popup.recommendedSf.label}: `));
+    const recStrong = document.createElement("strong");
+    recStrong.textContent = t.popup.recommendedSf.value(rec);
+    recRow.appendChild(recStrong);
+    if (sfMismatch) {
+      recRow.appendChild(document.createTextNode(" "));
+      const hint = document.createElement("span");
+      hint.style.color = "#b45309";
+      hint.textContent = t.popup.sfMismatchHint;
+      recRow.appendChild(hint);
+    }
+    techRows.appendChild(recRow);
+    techRows.appendChild(buildLabelStrongRow(t.popup.usedTxPower.label, t.popup.usedTxPower.value(txPowerUsed)));
+    techRows.appendChild(buildLabelStrongRow(t.popup.usedEnvironment.label, envLabel));
+    // path_loss_db = 0 khi BE chưa rebuild hoặc no_coverage — ẩn row để khỏi
+    // hiển thị "0 dB" lẫn lộn.
+    if (prediction.path_loss_db > 0) {
+      techRows.appendChild(
+        buildLabelStrongRow(t.popup.pathLoss.label, t.popup.pathLoss.value(prediction.path_loss_db)),
+      );
+    }
+    techRows.appendChild(buildLabelStrongRow(t.popup.errorMargin.label, t.popup.errorMargin.value(sigmaDb)));
+    techRows.appendChild(buildLabelStrongRow(t.popup.accuracy.label, t.popup.accuracy.value(sigmaDb)));
     layer2.appendChild(techRows);
 
     // Data-link metrics (bitrate, ToA, max payload) — pure function của SF,

@@ -20,7 +20,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from ...application.identity import User
+from ...application.identity import EmailNotVerifiedError, User
 from ...application.linking import LinkedSource, LinkingError, LinkingService, LinkResult
 from ...application.repositories import DeviceQuery
 from ...application.sync import SyncResult, SyncService
@@ -149,6 +149,9 @@ def patch_source(
 ) -> LinkedSourceResponse:
     if body.contribute_to_community is None and body.status is None:
         raise LinkingError("PATCH body cần ít nhất 1 trong contribute_to_community hoặc status")
+
+    if body.contribute_to_community is True and not user.email_verified:
+        raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
 
     # Apply mỗi toggle riêng — 1 transaction để 2 update atomic. Method gọi
     # cuối trả LinkedSource sau cả 2 update.

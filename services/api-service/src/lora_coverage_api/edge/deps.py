@@ -212,7 +212,14 @@ def _identity_service() -> IdentityService:
         mailer=_mailer(),
         password_reset_ttl_minutes=s.password_reset_ttl_minutes,
         password_reset_url_template=s.password_reset_url_template,
+        email_verification_ttl_minutes=s.email_verification_ttl_minutes,
+        email_verification_url_template=s.email_verification_url_template,
     )
+
+
+def mailer_dep() -> Mailer:
+    """FastAPI dep cho admin router để gửi thanks email khi approve."""
+    return _mailer()
 
 
 def identity_service() -> IdentityService:

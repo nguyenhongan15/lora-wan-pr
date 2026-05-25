@@ -20,9 +20,11 @@
 // move historical rows lên training) + sync (data mới vào training nếu cờ
 // đang on). Map dùng key ["surveys"] → invalidation kích re-fetch.
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
+import { EmailVerifyModal } from "../auth/EmailVerifyModal.jsx";
+import { getUser, subscribe } from "../auth/store.js";
 import {
   patchSource,
   rotateWebhook,
@@ -41,6 +43,7 @@ const tErr = strings.sources.errors;
  */
 export function LinkedSourceCard({ source }) {
   const qc = useQueryClient();
+  const user = useSyncExternalStore(subscribe, getUser);
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ["sources"] });
   const invalidateSurveys = () =>
@@ -49,6 +52,7 @@ export function LinkedSourceCard({ source }) {
     qc.invalidateQueries({ queryKey: ["devices", source.id] });
 
   const [showDevices, setShowDevices] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
   // Plaintext webhook token sau rotate — show-once. State scope = card,
   // dismiss → biến mất, không persist.
   const [rotatedSecret, setRotatedSecret] = useState(
@@ -158,7 +162,15 @@ export function LinkedSourceCard({ source }) {
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => contributeM.mutate(!source.contribute_to_community)}
+          onClick={() => {
+            // Gate verify chỉ khi BẬT contribute (off→on). Tắt thì free.
+            const wantEnable = !source.contribute_to_community;
+            if (wantEnable && user && !user.email_verified) {
+              setVerifyOpen(true);
+              return;
+            }
+            contributeM.mutate(wantEnable);
+          }}
           disabled={anyPending}
           className={
             "rounded-md px-3 py-1.5 text-xs font-medium shadow-sm disabled:opacity-50 " +
@@ -248,7 +260,22 @@ export function LinkedSourceCard({ source }) {
           deleteM.error ||
           rotateM.error
         }
+        onVerifyClick={
+          contributeM.error instanceof ApiError &&
+          contributeM.error.problem.code === "email_not_verified"
+            ? () => setVerifyOpen(true)
+            : undefined
+        }
       />
+
+      {user && (
+        <EmailVerifyModal
+          isOpen={verifyOpen}
+          email={user.email}
+          onClose={() => setVerifyOpen(false)}
+          notice={strings.auth.errors.byCode("email_not_verified")}
+        />
+      )}
     </article>
   );
 }
@@ -303,12 +330,13 @@ function SyncMeta({ lastSyncAt, lastSyncError }) {
   );
 }
 
-/** @param {{ error: unknown }} props */
-function CardError({ error }) {
+/** @param {{ error: unknown, onVerifyClick?: () => void }} props */
+function CardError({ error, onVerifyClick }) {
   if (!error) return null;
   if (error instanceof ApiError) {
     const code = error.problem.code ?? "";
-    const localized = tErr.byCode(code);
+    const localized =
+      tErr.byCode(code) || strings.auth.errors.byCode(code);
     const msg = localized || error.problem.detail || error.problem.title;
     return (
       <div
@@ -317,6 +345,15 @@ function CardError({ error }) {
       >
         {msg}
         {code && <span className="ml-2 text-red-600">({code})</span>}
+        {onVerifyClick && (
+          <button
+            type="button"
+            onClick={onVerifyClick}
+            className="ml-3 rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-100"
+          >
+            {strings.auth.header.verifyEmailButton}
+          </button>
+        )}
       </div>
     );
   }

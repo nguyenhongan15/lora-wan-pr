@@ -20,6 +20,16 @@ export const strings = {
       sources: "Nguồn dữ liệu",
       adminPanel: "Quản trị",
     },
+    errorBoundary: {
+      title: "Ứng dụng gặp lỗi không mong muốn",
+      hint: "Tải lại trang để tiếp tục. Lỗi đã được ghi nhận.",
+      reload: "Tải lại trang",
+    },
+    notFound: {
+      title: "Không tìm thấy trang",
+      hint: "Tab này không tồn tại hoặc bạn không có quyền truy cập.",
+      backHome: "Về Bản đồ điểm đo",
+    },
   },
 
   // Nhãn trạng thái coverage — dùng chung ở CoverageMap popup + PredictionView badge.
@@ -543,12 +553,49 @@ export const strings = {
       hello: (email) => `Xin chào, ${email}`,
       logout: "Đăng xuất",
       adminBadge: "Admin",
+      verifyEmailButton: "Xác thực email",
+      verifiedBadge: "Đã xác thực email",
       avatarLoggedIn: "Tài khoản",
       avatarLoggedOut: "Đăng nhập / đăng ký",
       modalClose: "Đóng",
     },
+    verifyEmail: {
+      modalTitle: "Xác thực email",
+      modalSubtitle:
+        "Bạn cần xác thực email để đóng góp dữ liệu cho cộng đồng. Link xác thực sẽ được gửi đến địa chỉ email bên dưới.",
+      emailLabel: "Email",
+      submit: "Gửi link xác thực",
+      submitPending: "Đang gửi…",
+      successHint:
+        "Đã gửi link xác thực — kiểm tra hộp thư (và spam). Link hết hạn sau 60 phút.",
+      // Confirm page (sau khi user click link trong email)
+      confirmTitle: "Xác thực email",
+      confirmPending: "Đang xác thực…",
+      confirmSuccess:
+        "Đã xác thực email thành công! Bạn có thể quay về trang chủ và đóng góp cho cộng đồng.",
+      confirmGoHome: "Về trang chủ",
+      missingTokenTitle: "Link không hợp lệ",
+      missingTokenDetail:
+        "URL không có token xác thực. Yêu cầu lại link xác thực từ Tài khoản → Xác thực email.",
+      requestNewLink: "Gửi link xác thực mới",
+    },
     errors: {
       errorCodeLabel: "Mã lỗi",
+      /** @param {string} code */
+      byCode: (code) => {
+        switch (code) {
+          case "email_not_verified":
+            return "Bạn cần xác thực email trước khi đóng góp cho cộng đồng. Mở Tài khoản → Xác thực email.";
+          case "email_verification_invalid":
+            return "Link xác thực không hợp lệ. Yêu cầu link mới.";
+          case "email_verification_expired":
+            return "Link xác thực đã hết hạn. Yêu cầu link mới.";
+          case "email_verification_used":
+            return "Link xác thực đã được sử dụng.";
+          default:
+            return "";
+        }
+      },
     },
   },
 
@@ -559,6 +606,7 @@ export const strings = {
         "Quản lý người dùng, theo dõi thống kê tổng hợp, và chạy đồng bộ toàn hệ thống.",
       statsHeading: "Thống kê",
       usersHeading: "Người dùng",
+      reviewHeading: "Duyệt đóng góp cộng đồng",
       syncHeading: "Đồng bộ toàn cục",
     },
     stats: {
@@ -569,6 +617,87 @@ export const strings = {
       activeSourceCount: "Đang đóng góp",
       gatewayCount: "Gateway",
       measurementCount: "Điểm đo (training)",
+      pendingReviewCount: "Chờ duyệt",
+    },
+    review: {
+      loading: "Đang tải hàng chờ duyệt…",
+      empty: "Không có đóng góp nào đang chờ duyệt.",
+      errorLoad: "Không tải được danh sách chờ duyệt.",
+      headers: [
+        "Thời điểm",
+        "Người gửi",
+        "Vị trí",
+        "SF",
+        "RSSI",
+        "SNR",
+        "Gateway",
+        "Nguồn",
+        "",
+      ],
+      previewTitle: "Xem trước trên bản đồ",
+      previewHint:
+        "Điểm này sẽ xuất hiện trên bản đồ cộng đồng tại vị trí dưới đây nếu được duyệt.",
+      closePreview: "Đóng",
+      btnPreview: "Xem",
+      btnApprove: "Duyệt",
+      btnReject: "Từ chối",
+      btnPending: "Đang xử lý…",
+      noteLabel: "Lý do từ chối (tuỳ chọn)",
+      notePlaceholder: "vd. Toạ độ không khớp gateway, RSSI bất thường…",
+      confirm: {
+        title: "Xác nhận thao tác",
+        approve: "Duyệt đóng góp này lên bản đồ cộng đồng?",
+        reject: "Từ chối đóng góp này? Sẽ không hiển thị trên bản đồ cộng đồng.",
+        cancel: "Huỷ",
+      },
+      /** @param {number} total */
+      total: (total) => `${total.toLocaleString("vi-VN")} đóng góp đang chờ duyệt`,
+      sourceCsv: "CSV upload",
+      sourceWebhook: "Webhook",
+      sourceUnknown: "Khác",
+      batch: {
+        heading: "Các file CSV chờ duyệt",
+        empty: "Không có file CSV nào đang chờ duyệt.",
+        errorLoad: "Không tải được danh sách file chờ duyệt.",
+        headers: [
+          "Người gửi",
+          "Upload lúc",
+          "Số điểm chờ",
+          "Khoảng thời gian đo",
+          "",
+        ],
+        /** @param {number} pending @param {number} total */
+        countLabel: (pending, total) =>
+          `${pending}/${total} điểm chờ duyệt`,
+        btnViewRows: "Xem chi tiết",
+        btnApproveBatch: "Duyệt cả file",
+        btnRejectBatch: "Từ chối cả file",
+        btnBack: "← Quay lại danh sách file",
+        /** @param {number} n */
+        mapHeading: (n) =>
+          `Bản đồ ${n} điểm đang chờ duyệt trong file này`,
+        mapHint:
+          "Click vào marker để xem chi tiết 1 điểm. Màu sắc theo RSSI (xanh = mạnh, đỏ = rất yếu).",
+        mapLegend: {
+          strong: "≥ −100 dBm",
+          medium: "−100 đến −115",
+          weak: "−115 đến −120",
+          veryWeak: "< −120",
+        },
+        mapNoPoints: "Batch này không còn điểm nào chờ duyệt.",
+        confirm: {
+          /** @param {number} n */
+          approve: (n) =>
+            `Duyệt cả file CSV này lên bản đồ cộng đồng (${n} điểm)? Người đóng góp sẽ nhận email cảm ơn.`,
+          /** @param {number} n */
+          reject: (n) =>
+            `Từ chối toàn bộ file CSV này (${n} điểm)? Các điểm sẽ giữ trong quarantine, không lên bản đồ.`,
+        },
+        /** @param {number} n */
+        approvedToast: (n) => `Đã duyệt ${n} điểm trong file.`,
+        /** @param {number} n */
+        rejectedToast: (n) => `Đã từ chối ${n} điểm trong file.`,
+      },
     },
     users: {
       loading: "Đang tải danh sách người dùng…",
@@ -616,6 +745,8 @@ export const strings = {
     errors: {
       errorCodeLabel: "Mã lỗi",
       statsLoad: "Không tải được thống kê.",
+      reviewActionFailed: "Thao tác duyệt thất bại.",
+      reviewGone: "Đóng góp này đã được xử lý hoặc không tồn tại.",
       /** @param {string} code */
       byCode: (code) => {
         switch (code) {
@@ -754,9 +885,9 @@ export const strings = {
     tabLabel: "Đóng góp dữ liệu",
     title: "Tải lên dữ liệu phép đo",
     description:
-      "Tải file CSV chứa các phép đo LoRa của bạn. Mặc định chỉ bạn xem được. Nếu tick \"Đóng góp cho cộng đồng\", dữ liệu sẽ qua kiểm định độ tin cậy trước khi gia nhập bộ dữ liệu chung.",
+      "Tải file CSV hoặc JSON chứa các phép đo LoRa của bạn. Mặc định chỉ bạn xem được. Nếu tick \"Đóng góp cho cộng đồng\", dữ liệu sẽ qua kiểm định độ tin cậy trước khi gia nhập bộ dữ liệu chung.",
     fields: {
-      file: "File CSV",
+      file: "File CSV hoặc JSON",
       community: "Đóng góp cho cộng đồng",
       communityHint:
         "Mỗi điểm sẽ được kiểm tra: nằm trong Việt Nam, gateway tồn tại, RSSI khớp dự đoán ITU. Điểm không đạt sẽ ở lại quarantine riêng cho bạn.",
@@ -774,7 +905,7 @@ export const strings = {
     submitPending: "Đang xử lý…",
     reset: "Chọn lại file",
     csvHint:
-      "Cột bắt buộc: timestamp, latitude, longitude, rssi_dbm, snr_db, spreading_factor, gateway_code. Cột tuỳ chọn: frequency_mhz, device_id. Tối đa 1000 dòng.",
+      "CSV: cột bắt buộc timestamp, latitude, longitude, rssi_dbm, snr_db, spreading_factor, gateway_code (tuỳ chọn: frequency_mhz, device_id). JSON: hỗ trợ (A) mảng object cùng schema CSV, hoặc (C) webhook TTN v3 / ChirpStack v4 — 1 event tự động bung thành N row theo số gateway. Tối đa 1000 dòng/row.",
     fileSelected: (/** @type {string} */ name, /** @type {number} */ size) =>
       `Đã chọn: ${name} (${(size / 1024).toFixed(1)} KB)`,
     noFileSelected: "Chưa chọn file.",
@@ -801,7 +932,7 @@ export const strings = {
     },
     errors: {
       title: "Lỗi tải lên",
-      fileEmpty: "Vui lòng chọn 1 file CSV.",
+      fileEmpty: "Vui lòng chọn 1 file CSV hoặc JSON.",
       fileTooLarge: "File vượt 1 MB. Hãy chia nhỏ.",
     },
     samplePrompt: "Cần file mẫu? Xem cấu trúc cột ở phần \"CSV hint\" bên trên.",
@@ -810,23 +941,24 @@ export const strings = {
   csvContributeCard: {
     title: "Dữ liệu CSV của tôi",
     subtitle:
-      "File CSV bạn đã tải lên được lưu riêng tư. Bấm Đóng góp để chạy kiểm định độ tin cậy và gửi các điểm hợp lệ vào bộ dữ liệu cộng đồng.",
+      "File CSV bạn đã tải lên được lưu riêng tư. Trong bảng dưới, bấm \"Đóng góp\" trên từng file để gửi các điểm hợp lệ của file đó vào bộ dữ liệu cộng đồng.",
     loading: "Đang tải tổng quan…",
     stats: {
       total: (/** @type {number} */ n) => `${n} điểm đã tải lên`,
       pending: (/** @type {number} */ n) => `${n} điểm sẵn sàng đóng góp`,
-      promoted: (/** @type {number} */ n) => `${n} điểm đã vào bộ cộng đồng`,
+      pendingReview: (/** @type {number} */ n) =>
+        `${n} điểm đang chờ admin duyệt`,
+      promoted: (/** @type {number} */ n) =>
+        `${n} điểm đã được admin duyệt vào bộ cộng đồng`,
       rejected: (/** @type {number} */ n) => `${n} điểm bị kiểm định loại`,
     },
     emptyHint: "Bạn chưa có file CSV nào. Tải lên ở mục \"Loại nguồn → Tải lên file CSV\" phía trên.",
-    nothingToPromote: "Tất cả điểm CSV đã được kiểm định. Tải thêm file mới để tiếp tục đóng góp.",
-    btnPromote: "Đóng góp cộng đồng",
-    btnPromotePending: "Đang kiểm định…",
     successTitle: "Đã chạy kiểm định",
     successLine: (
       /** @type {number} */ accepted,
       /** @type {number} */ rejected,
-    ) => `${accepted} điểm được duyệt, ${rejected} điểm bị loại.`,
+    ) =>
+      `${accepted} điểm đã chuyển sang chờ admin duyệt, ${rejected} điểm bị loại.`,
     errorTitle: "Không chạy được kiểm định",
     rejectBreakdownTitle: "Phân loại lý do bị loại:",
     batches: {
@@ -837,10 +969,16 @@ export const strings = {
         uploadedAt: "Thời điểm",
         total: "Tổng",
         pending: "Pending",
+        pendingReview: "Chờ duyệt",
         promoted: "Đã đóng góp",
         rejected: "Bị loại",
         actions: "",
       },
+      btnPromote: "Đóng góp",
+      btnPromotePending: "Đang kiểm định…",
+      btnPromotePendingReview: "Đang chờ duyệt",
+      btnPromoteApproved: "Đã duyệt đóng góp",
+      btnPromoteRejected: "Bị từ chối",
       btnDelete: "Xoá",
       btnDeletePending: "Đang xoá…",
       confirmDelete: (/** @type {number} */ n) =>

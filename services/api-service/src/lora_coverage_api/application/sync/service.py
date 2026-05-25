@@ -307,7 +307,7 @@ class SyncService:
         ls_id: UUID,
         log: Any,
     ) -> None:
-        """Load contributor reputation + chạy promote loop cho ls_id.
+        """Load contributor + chạy promote loop cho ls_id.
 
         Catch UnknownContributorError defensive — user bị xoá giữa lúc sync.
         KHÔNG raise: sync hợp lệ đã hoàn tất, promotion fail chỉ log warning.

@@ -77,7 +77,7 @@ plugins = ["pydantic.mypy"]
 # chirpstack_api + google.protobuf: stubs (types-protobuf) cover phần protobuf
 # nhưng chirpstack_api generated protobuf không có py.typed — coverage cục bộ,
 # bỏ qua cho đỡ noise.
-module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*", "chirpstack_api", "chirpstack_api.*", "google.protobuf", "google.protobuf.*"]
+module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*", "chirpstack_api", "chirpstack_api.*", "google.protobuf", "google.protobuf.*", "sentry_sdk", "sentry_sdk.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

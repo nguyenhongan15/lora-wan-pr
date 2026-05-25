@@ -1,17 +1,26 @@
-"""CSV survey upload — personal-only hoặc community contribution.
+"""CSV/JSON survey upload — personal-only hoặc community contribution.
 
-Plan community-data-contribution §4. User upload file CSV mỗi dòng = 1 reading
-(lat/lng/timestamp/rssi/snr/sf/gateway_code). Endpoint nhận multipart, parse
-ở backend (KHÔNG trust FE đã validate), ghi quarantine với provenance
+Plan community-data-contribution §4. User upload file mỗi dòng/object = 1
+reading (lat/lng/timestamp/rssi/snr/sf/gateway_code). Endpoint nhận multipart,
+parse ở backend (KHÔNG trust FE đã validate), ghi quarantine với provenance
 `source_type='csv_upload'` + `contributor_user_id=current_user.id`.
+
+Hai định dạng được hỗ trợ:
+  * CSV — header chuẩn (timestamp, latitude, longitude, rssi_dbm, snr_db,
+    spreading_factor, gateway_code; tuỳ chọn frequency_mhz, device_id).
+  * JSON — auto-detect 2 dạng:
+      - Format A: array các object cùng schema với CSV (1 object = 1 row).
+      - Format C: webhook payload từ TTN v3 (`uplink_message`) hoặc
+        ChirpStack v4 (`rxInfo`). 1 event → N rows tương ứng N gateway thấy
+        uplink trong `rx_metadata`/`rxInfo`.
 
 `submit_to_community` checkbox quyết định promotion:
   * false → record dừng ở quarantine, scope theo user — chỉ chính user xem
     được qua /me/measurements (mode='self'). KHÔNG bao giờ promote.
   * true → set `submitted_for_community=true`, chạy TrustValidator pipeline
-    (L1 bbox + gateway + L2 ITU physics + L3 reputation threshold). Pass →
-    promote sang ts.survey_training (public dataset). Fail → ghi
-    `reject_reason`, vẫn ở quarantine.
+    (L1 bbox + gateway + L2 ITU physics, threshold 15 dB cố định). Pass →
+    set `review_status='pending_review'` chờ admin duyệt thủ công (migration
+    0018). Fail → ghi `reject_reason`, vẫn ở quarantine.
 
 Idempotency: external_id = sha256(user_id + ts_iso + lat + lng + gateway_code
 + sf)[:32]. Cùng row CSV reupload → cùng external_id → UNIQUE PARTIAL
@@ -27,14 +36,15 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
-from ...application.identity import User
+from ...application.identity import EmailNotVerifiedError, User
 from ...application.repositories import GatewayDirectory, SurveyIngest
 from ...application.trust import (
     TrustValidator,
@@ -42,7 +52,7 @@ from ...application.trust import (
     delete_csv_batch_for_uploader,
     fetch_csv_stats_for_uploader,
     list_csv_batches_for_uploader,
-    mark_and_promote_csv_for_uploader,
+    mark_and_promote_csv_batch_for_uploader,
     promote_pending_for_uploader,
 )
 from ...config import get_settings
@@ -110,7 +120,7 @@ async def upload_survey_csv(
     repo: Annotated[SurveyIngest, Depends(survey_repository)],
     directory: Annotated[GatewayDirectory, Depends(gateway_directory)],
     trust: Annotated[TrustValidator, Depends(trust_validator)],
-    file: Annotated[UploadFile, File(description="CSV file (UTF-8)")],
+    file: Annotated[UploadFile, File(description="CSV hoặc JSON (UTF-8)")],
     submit_to_community: Annotated[
         bool, Form(description="True = qua TrustValidator → ts.survey_training nếu pass")
     ] = False,
@@ -125,11 +135,20 @@ async def upload_survey_csv(
         )
 
     try:
-        text_io = io.StringIO(raw.decode("utf-8-sig"))
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File không phải UTF-8") from None
 
-    parsed, parse_rejected_reasons = _parse_csv(text_io, user_id=user.id, directory=directory)
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    is_json = filename.endswith(".json") or content_type.startswith("application/json")
+
+    if is_json:
+        parsed, parse_rejected_reasons = _parse_json(text, user_id=user.id, directory=directory)
+    else:
+        parsed, parse_rejected_reasons = _parse_csv(
+            io.StringIO(text), user_id=user.id, directory=directory
+        )
     parsed_count = len(parsed)
     parse_rejected_count = len(parse_rejected_reasons)
 
@@ -225,43 +244,66 @@ async def csv_stats(
     return CsvUploadStats(
         total=stats.total,
         pending=stats.pending,
+        pending_review=stats.pending_review,
         promoted=stats.promoted,
         rejected=stats.rejected,
     )
 
 
 @router.post(
-    "/csv/promote",
+    "/csv/batches/promote",
     response_model=CsvPromoteResponse,
     status_code=status.HTTP_200_OK,
-    summary="Đóng góp toàn bộ CSV pending cho cộng đồng — chạy TrustValidator",
+    summary="Đóng góp 1 file CSV cụ thể cho cộng đồng — chạy TrustValidator",
     responses={
+        400: {"description": "uploaded_at không phải ISO 8601"},
         401: {"description": "Chưa đăng nhập"},
+        403: {"description": "Chưa xác thực email"},
         429: {"description": "Rate limit exceeded"},
     },
 )
 @limiter.limit(_settings.me_csv_upload_rate_limit)
-async def promote_csv_uploads(
+async def promote_csv_batch(
     request: Request,
     user: Annotated[User, Depends(current_user)],
     trust: Annotated[TrustValidator, Depends(trust_validator)],
+    uploaded_at: str,
 ) -> CsvPromoteResponse:
-    """One-shot: mark + validator-loop tất cả csv_upload row pending của user.
+    """Mark + validator-loop CHỈ rows của 1 batch (1 lần upload = 1 file).
 
-    UI gọi từ card "Tải lên CSV của tôi" trên trang Nguồn dữ liệu. Tương tự
-    flow lpwanmapper toggle contribute_to_community=true: backfill chạy 1 lần,
-    rows đã promote ở training, rows reject lưu reject_reason.
+    Query param `uploaded_at` (ISO 8601) lấy nguyên từ GET /csv/batches để
+    match microsecond chính xác. UI gọi từ row trong bảng "Các file đã upload"
+    trên card CsvContributeCard.
     """
+    if not user.email_verified:
+        raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
+    try:
+        parsed_ts = datetime.fromisoformat(uploaded_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"uploaded_at không phải ISO 8601: {uploaded_at}",
+        ) from exc
+    if parsed_ts.tzinfo is None:
+        parsed_ts = parsed_ts.replace(tzinfo=UTC)
+
     with _engine().begin() as conn:
         try:
             contributor = trust.load_contributor(conn, user.id)
         except UnknownContributorError as exc:
             raise HTTPException(status_code=401, detail="Tài khoản không tồn tại") from exc
-        result = mark_and_promote_csv_for_uploader(conn, trust, contributor, uploader_id=user.id)
+        result = mark_and_promote_csv_batch_for_uploader(
+            conn,
+            trust,
+            contributor,
+            uploader_id=user.id,
+            uploaded_at=parsed_ts,
+        )
 
     logger.info(
-        "csv_promote_invoked",
+        "csv_batch_promote_invoked",
         user_id=str(user.id),
+        uploaded_at=uploaded_at,
         promoted=result.accepted,
         promote_rejected=result.rejected,
         trace_id=getattr(request.state, "trace_id", None),
@@ -290,6 +332,7 @@ async def list_csv_batches(
                 uploaded_at=b.uploaded_at,
                 total=b.total,
                 pending=b.pending,
+                pending_review=b.pending_review,
                 promoted=b.promoted,
                 rejected=b.rejected,
             )
@@ -490,6 +533,261 @@ def _parse_int(raw: str | None, field: str) -> int:
         return int(raw_s)
     except ValueError as exc:
         raise _RowError(f"{field} không phải số nguyên: {raw_s}") from exc
+
+
+def _parse_json(
+    raw_text: str,
+    *,
+    user_id: UUID,
+    directory: GatewayDirectory,
+) -> tuple[list[_ParsedRow], list[str]]:
+    """Parse JSON body → (parsed rows, rejected reasons).
+
+    Auto-detect:
+      * Array với element đầu có key 'timestamp' → Format A (flat CSV-shape).
+      * Array/dict không có 'timestamp' → Format C (webhook payload).
+    """
+    try:
+        body = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"JSON không hợp lệ: {exc.msg} (vị trí {exc.pos})"
+        ) from exc
+
+    if isinstance(body, list):
+        if not body:
+            return [], []
+        first = body[0]
+        if isinstance(first, dict) and "timestamp" in first:
+            return _parse_json_format_a(body, user_id=user_id, directory=directory)
+        return _parse_json_format_c(body, user_id=user_id, directory=directory)
+    if isinstance(body, dict):
+        if "timestamp" in body and "latitude" in body:
+            return _parse_json_format_a([body], user_id=user_id, directory=directory)
+        return _parse_json_format_c([body], user_id=user_id, directory=directory)
+    raise HTTPException(
+        status_code=400,
+        detail="JSON gốc phải là object (1 event) hoặc array (nhiều row/event)",
+    )
+
+
+def _parse_json_format_a(
+    items: list[Any],
+    *,
+    user_id: UUID,
+    directory: GatewayDirectory,
+) -> tuple[list[_ParsedRow], list[str]]:
+    gw_cache: dict[str, Gateway | None] = {}
+    parsed: list[_ParsedRow] = []
+    rejected: list[str] = []
+    for i, item in enumerate(items, start=1):
+        if len(parsed) >= _MAX_ROWS:
+            rejected.append(f"item {i}: vượt giới hạn {_MAX_ROWS} item/file")
+            break
+        if not isinstance(item, dict):
+            rejected.append(f"item {i}: không phải object JSON")
+            continue
+        row = _stringify_row(item)
+        try:
+            record, external_id = _build_record(
+                row, user_id=user_id, directory_cache=gw_cache, directory=directory
+            )
+        except _RowError as exc:
+            rejected.append(f"item {i}: {exc}")
+            continue
+        parsed.append(_ParsedRow(record, external_id))
+    return parsed, rejected
+
+
+def _parse_json_format_c(
+    events: list[Any],
+    *,
+    user_id: UUID,
+    directory: GatewayDirectory,
+) -> tuple[list[_ParsedRow], list[str]]:
+    gw_cache: dict[str, Gateway | None] = {}
+    parsed: list[_ParsedRow] = []
+    rejected: list[str] = []
+    for i, event in enumerate(events, start=1):
+        if not isinstance(event, dict):
+            rejected.append(f"event {i}: không phải object JSON")
+            continue
+        if "uplink_message" in event:
+            extracted = _extract_from_ttn(event)
+        elif "rxInfo" in event:
+            extracted = _extract_from_chirpstack(event)
+        else:
+            rejected.append(
+                f"event {i}: không nhận dạng được webhook "
+                "(cần 'uplink_message' cho TTN hoặc 'rxInfo' cho ChirpStack)"
+            )
+            continue
+        for j, candidate in enumerate(extracted, start=1):
+            if isinstance(candidate, str):
+                rejected.append(f"event {i} gw {j}: {candidate}")
+                continue
+            if len(parsed) >= _MAX_ROWS:
+                rejected.append(f"event {i} gw {j}: vượt giới hạn {_MAX_ROWS} row/file")
+                return parsed, rejected
+            try:
+                row = _stringify_row(candidate)
+                record, external_id = _build_record(
+                    row, user_id=user_id, directory_cache=gw_cache, directory=directory
+                )
+            except _RowError as exc:
+                rejected.append(f"event {i} gw {j}: {exc}")
+                continue
+            parsed.append(_ParsedRow(record, external_id))
+    return parsed, rejected
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Coerce một JSON field về dict; nếu sai type/None thì trả {} để chain .get() an toàn."""
+    return value if isinstance(value, dict) else {}
+
+
+def _extract_from_ttn(event: dict[str, Any]) -> list[dict[str, Any] | str]:
+    """TTN v3 uplink event → row dicts (1 per gateway in rx_metadata).
+
+    Returns list of dict (good) hoặc str (error message cho 1 gw cụ thể).
+    Trả về 1 element str duy nhất nếu event-level bị lỗi (vd thiếu locations).
+    """
+    msg = event.get("uplink_message")
+    if not isinstance(msg, dict):
+        return ["thiếu hoặc sai 'uplink_message'"]
+
+    received_at = event.get("received_at") or msg.get("received_at")
+    if not received_at:
+        return ["thiếu 'received_at'"]
+
+    settings = _as_dict(msg.get("settings"))
+    dr = _as_dict(settings.get("data_rate"))
+    lora_dr = _as_dict(dr.get("lora"))
+    sf = lora_dr.get("spreading_factor")
+
+    freq_raw = settings.get("frequency")
+    freq_mhz: float | None
+    try:
+        freq_mhz = float(freq_raw) / 1_000_000 if freq_raw else None
+    except (TypeError, ValueError):
+        freq_mhz = None
+
+    loc = _pick_ttn_location(msg.get("locations"))
+    if loc is None:
+        return ["thiếu uplink_message.locations.<source>.{latitude,longitude}"]
+
+    end_device = _as_dict(event.get("end_device_ids"))
+    device_id = end_device.get("device_id") or end_device.get("dev_eui")
+
+    rx_list = msg.get("rx_metadata")
+    if not isinstance(rx_list, list) or not rx_list:
+        return ["thiếu uplink_message.rx_metadata"]
+
+    rows: list[dict[str, Any] | str] = []
+    for rx in rx_list:
+        if not isinstance(rx, dict):
+            rows.append("rx_metadata item không phải object")
+            continue
+        gw_ids = _as_dict(rx.get("gateway_ids"))
+        gw_code = gw_ids.get("gateway_id") or gw_ids.get("eui")
+        rows.append(
+            {
+                "timestamp": received_at,
+                "latitude": loc.get("latitude"),
+                "longitude": loc.get("longitude"),
+                "rssi_dbm": rx.get("rssi"),
+                "snr_db": rx.get("snr"),
+                "spreading_factor": sf,
+                "frequency_mhz": freq_mhz,
+                "gateway_code": gw_code,
+                "device_id": device_id,
+            }
+        )
+    return rows
+
+
+def _pick_ttn_location(locations: Any) -> dict[str, Any] | None:
+    """TTN v3 locations object thường có 1 trong các source: user, device, gateway.
+
+    Ưu tiên 'user' (ground-truth user-reported) > 'device' (GPS device) >
+    'gateway' (= vị trí gateway, KHÔNG phải vị trí phép đo — fallback cuối).
+    """
+    if not isinstance(locations, dict) or not locations:
+        return None
+    for key in ("user", "device"):
+        candidate = locations.get(key)
+        if isinstance(candidate, dict) and candidate.get("latitude") is not None:
+            return candidate
+    for value in locations.values():
+        if isinstance(value, dict) and value.get("latitude") is not None:
+            return value
+    return None
+
+
+def _extract_from_chirpstack(event: dict[str, Any]) -> list[dict[str, Any] | str]:
+    """ChirpStack v4 uplink event → row dicts (1 per rxInfo entry)."""
+    received_at = event.get("time")
+    if not received_at:
+        return ["thiếu 'time'"]
+
+    tx = _as_dict(event.get("txInfo"))
+    modulation = _as_dict(tx.get("modulation"))
+    lora_mod = _as_dict(modulation.get("lora"))
+    sf = lora_mod.get("spreadingFactor")
+
+    freq_raw = tx.get("frequency")
+    freq_mhz: float | None
+    try:
+        freq_mhz = float(freq_raw) / 1_000_000 if freq_raw else None
+    except (TypeError, ValueError):
+        freq_mhz = None
+
+    obj = _as_dict(event.get("object"))
+    lat = obj.get("latitude")
+    lng = obj.get("longitude")
+    if lat is None or lng is None:
+        return ["thiếu object.latitude/longitude (device payload phải decode lat/lng)"]
+
+    device_info = _as_dict(event.get("deviceInfo"))
+    device_id = device_info.get("devEui") or device_info.get("deviceName")
+
+    rx_list = event.get("rxInfo")
+    if not isinstance(rx_list, list) or not rx_list:
+        return ["thiếu 'rxInfo'"]
+
+    rows: list[dict[str, Any] | str] = []
+    for rx in rx_list:
+        if not isinstance(rx, dict):
+            rows.append("rxInfo item không phải object")
+            continue
+        gw_code = rx.get("gatewayId") or rx.get("gatewayID")
+        rows.append(
+            {
+                "timestamp": received_at,
+                "latitude": lat,
+                "longitude": lng,
+                "rssi_dbm": rx.get("rssi"),
+                "snr_db": rx.get("snr"),
+                "spreading_factor": sf,
+                "frequency_mhz": freq_mhz,
+                "gateway_code": gw_code,
+                "device_id": device_id,
+            }
+        )
+    return rows
+
+
+def _stringify_row(item: dict[str, Any]) -> dict[str, str]:
+    """Coerce JSON value types → str để reuse _build_record (vốn parse từ CSV)."""
+    out: dict[str, str] = {}
+    for k, v in item.items():
+        if v is None:
+            out[k] = ""
+        elif isinstance(v, bool):
+            out[k] = "1" if v else "0"
+        else:
+            out[k] = str(v)
+    return out
 
 
 def _deterministic_external_id(

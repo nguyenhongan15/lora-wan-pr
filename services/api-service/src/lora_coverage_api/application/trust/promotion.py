@@ -1,10 +1,13 @@
-"""Promotion helpers — quarantine → training với TrustValidator gating.
+"""Promotion helpers — quarantine → pending-review queue với TrustValidator gating.
 
-Plan community-data-contribution §3.4: thay vì INSERT...SELECT bulk copy,
-mỗi quarantine row chạy qua `TrustValidator.validate()` per-record. Pass →
-INSERT training; fail → set `reject_reason` ngay tại quarantine để admin/
-debug trace lý do. Stats accepted/rejected accumulate vào
-auth.users.contribution_stats theo từng record.
+Pipeline 2-stage (admin manual gate, migration 0018):
+  1. Auto-validate L1/L2/L3: Pass → set review_status='pending_review' chờ
+     admin duyệt. Fail → set reject_reason (rác hiển nhiên, không vào queue).
+  2. Admin xem queue → approve (INSERT training + stats.accepted++) hoặc
+     reject (review_note + stats.rejected++).
+
+Bump stats.rejected NGAY khi auto-reject (rác hiển nhiên là tín hiệu reputation
+thật); stats.accepted CHỈ bump khi admin approve (auto-pass chưa phải accept).
 
 Hai entry points:
   * `promote_pending_for_linked_source(ls_id)` — backfill khi user PATCH
@@ -19,6 +22,8 @@ Filter cứng:
   * `submitted_for_community = true` (đã opt-in cộng đồng — personal-only
     không bao giờ promote).
   * `reject_reason IS NULL` (đã reject lần trước không retry).
+  * `review_status IS NULL` (chưa auto-validate; rows pending_review/approved/
+    rejected không re-process).
   * `external_id IS NOT NULL` (cần key idempotent; CSV upload đã gen
     deterministic hash → mọi community-eligible row đều có).
   * `NOT EXISTS` ở training (đã promote rồi không re-insert).
@@ -76,6 +81,7 @@ _SELECT_BASE = """
     FROM ts.survey_quarantine q
     WHERE q.submitted_for_community = true
       AND q.reject_reason IS NULL
+      AND q.review_status IS NULL
       AND q.external_id IS NOT NULL
       AND NOT EXISTS (
           SELECT 1 FROM ts.survey_training t
@@ -96,23 +102,24 @@ _SELECT_PENDING_FOR_UPLOADER = text(
     + " AND q.uploader_id = :uploader_id AND q.uploaded_at >= :since ORDER BY q.timestamp ASC"
 )
 
-# Variant không lọc theo time window: dùng cho "đóng góp tất cả CSV đã upload"
-# (POST /me/uploads/csv/promote). Filter `source_type='csv_upload'` để không
-# nhầm với row webhook của cùng user (đã có cơ chế promote qua linked_source).
-_SELECT_PENDING_CSV_FOR_UPLOADER = text(
+# Variant per-batch: chỉ rows trong 1 lần upload (uploader_id + uploaded_at).
+# Dùng cho "đóng góp từng file riêng" (POST /me/uploads/csv/batches/promote).
+_SELECT_PENDING_CSV_FOR_BATCH = text(
     _SELECT_BASE
     + " AND q.uploader_id = :uploader_id AND q.source_type = 'csv_upload'"
+    + " AND q.uploaded_at = :uploaded_at"
     + " ORDER BY q.timestamp ASC"
 )
 
-# Mark all csv_upload rows của 1 uploader đang submitted_for_community=false →
-# true (chỉ rows chưa reject để promote pipeline xét lại). Idempotent.
-_MARK_SUBMITTED_FOR_CSV_UPLOADER = text(
+# Flip submitted_for_community false→true cho rows của 1 batch cụ thể (file).
+# Filter cứng theo uploaded_at để không động vào file khác cùng user.
+_MARK_SUBMITTED_FOR_CSV_BATCH = text(
     """
     UPDATE ts.survey_quarantine
     SET submitted_for_community = true
     WHERE uploader_id = :uploader_id
       AND source_type = 'csv_upload'
+      AND uploaded_at = :uploaded_at
       AND submitted_for_community = false
       AND reject_reason IS NULL
     """
@@ -126,8 +133,22 @@ _LIST_CSV_BATCHES = text(
     SELECT
         q.uploaded_at,
         COUNT(*)::int AS total,
-        SUM(CASE WHEN q.reject_reason IS NOT NULL THEN 1 ELSE 0 END)::int
-            AS rejected,
+        SUM(
+            CASE WHEN q.reject_reason IS NOT NULL
+                OR q.review_status = 'rejected'
+            THEN 1 ELSE 0 END
+        )::int AS rejected,
+        SUM(
+            CASE WHEN q.review_status = 'pending_review'
+                AND q.reject_reason IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM ts.survey_training t
+                    WHERE t.timestamp = q.timestamp
+                      AND t.source_type = q.source_type
+                      AND t.external_id = q.external_id
+                )
+            THEN 1 ELSE 0 END
+        )::int AS pending_review,
         SUM(
             CASE WHEN EXISTS (
                 SELECT 1 FROM ts.survey_training t
@@ -170,15 +191,28 @@ _DELETE_CSV_BATCH_QUARANTINE = text(
     """
 )
 
-# Stats cho card "Tải lên CSV của tôi": tổng / promoted / rejected. Pending
-# derive ở caller = total - promoted - rejected (rows trong quarantine còn lại
-# = candidate cho promote).
+# Stats cho card "Tải lên CSV của tôi": tổng / promoted / rejected / pending_review.
+# `pending` (limbo) derive ở caller = total - promoted - rejected - pending_review.
 _CSV_STATS_FOR_UPLOADER = text(
     """
     SELECT
         COUNT(*)::int AS total,
-        SUM(CASE WHEN q.reject_reason IS NOT NULL THEN 1 ELSE 0 END)::int
-            AS rejected,
+        SUM(
+            CASE WHEN q.reject_reason IS NOT NULL
+                OR q.review_status = 'rejected'
+            THEN 1 ELSE 0 END
+        )::int AS rejected,
+        SUM(
+            CASE WHEN q.review_status = 'pending_review'
+                AND q.reject_reason IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM ts.survey_training t
+                    WHERE t.timestamp = q.timestamp
+                      AND t.source_type = q.source_type
+                      AND t.external_id = q.external_id
+                )
+            THEN 1 ELSE 0 END
+        )::int AS pending_review,
         SUM(
             CASE WHEN EXISTS (
                 SELECT 1 FROM ts.survey_training t
@@ -209,6 +243,16 @@ _MARK_REJECT = text(
     """
     UPDATE ts.survey_quarantine
     SET reject_reason = :reason
+    WHERE timestamp = :ts AND id = :qid
+    """
+)
+
+# Sau khi pass auto-validate L1/L2/L3: row chờ admin duyệt thủ công. Không
+# INSERT training nữa — admin approve mới INSERT.
+_MARK_PENDING_REVIEW = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'pending_review'
     WHERE timestamp = :ts AND id = :qid
     """
 )
@@ -293,11 +337,15 @@ class CsvUploaderStats:
     total: int
     promoted: int
     rejected: int
+    pending_review: int
 
     @property
     def pending(self) -> int:
-        """Rows còn lại trong quarantine (chưa promote, chưa reject)."""
-        return max(0, self.total - self.promoted - self.rejected)
+        """Rows trong quarantine chưa qua auto-validate (chưa promote, chưa
+        reject, chưa pending_review). Distinct với pending_review = rows đã
+        pass auto nhưng chờ admin duyệt thủ công.
+        """
+        return max(0, self.total - self.promoted - self.rejected - self.pending_review)
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,10 +356,11 @@ class CsvBatchSummary:
     total: int
     promoted: int
     rejected: int
+    pending_review: int
 
     @property
     def pending(self) -> int:
-        return max(0, self.total - self.promoted - self.rejected)
+        return max(0, self.total - self.promoted - self.rejected - self.pending_review)
 
 
 def list_csv_batches_for_uploader(
@@ -326,6 +375,7 @@ def list_csv_batches_for_uploader(
             total=int(row.total or 0),
             promoted=int(row.promoted or 0),
             rejected=int(row.rejected or 0),
+            pending_review=int(row.pending_review or 0),
         )
         for row in rows
     ]
@@ -360,35 +410,372 @@ def fetch_csv_stats_for_uploader(conn: Connection, uploader_id: UUID) -> CsvUplo
         total=int(row.total or 0),
         promoted=int(row.promoted or 0),
         rejected=int(row.rejected or 0),
+        pending_review=int(row.pending_review or 0),
     )
 
 
-def mark_and_promote_csv_for_uploader(
+def mark_and_promote_csv_batch_for_uploader(
     conn: Connection,
     validator: TrustValidator,
     contributor: ContributorContext,
     *,
     uploader_id: UUID,
+    uploaded_at: datetime,
 ) -> PromotionResult:
-    """One-shot "đóng góp tất cả CSV đã upload" cho 1 user.
+    """Đóng góp 1 file CSV cụ thể (1 batch = 1 lần upload).
 
     Flow:
       1. UPDATE quarantine SET submitted_for_community=true cho mọi
-         csv_upload row của user còn ở false + chưa reject.
-      2. SELECT mọi csv_upload pending row của user (kể cả rows từ batch
-         upload trước — không lọc theo `since`).
-      3. Run validator loop → INSERT training hoặc set reject_reason.
+         csv_upload row của user CÙNG uploaded_at, còn ở false + chưa reject.
+      2. SELECT pending row của batch (filter uploaded_at).
+      3. Run validator loop → mark pending_review hoặc set reject_reason.
 
-    Idempotent: rerun chỉ chạy validator cho rows mới insert sau lần promote
-    trước (rows đã pass nằm ở training, NOT EXISTS lọc; rows đã reject có
-    reject_reason → filter loại).
+    Idempotent: rerun chỉ chạy validator cho rows mới chưa xét — rows pass
+    đã ở review_status='pending_review' (filter loại qua _SELECT_BASE),
+    rows reject có reject_reason (cũng filter loại).
     """
-    conn.execute(_MARK_SUBMITTED_FOR_CSV_UPLOADER, {"uploader_id": uploader_id})
+    conn.execute(
+        _MARK_SUBMITTED_FOR_CSV_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    )
     rows = conn.execute(
-        _SELECT_PENDING_CSV_FOR_UPLOADER,
-        {"uploader_id": uploader_id},
+        _SELECT_PENDING_CSV_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
     ).all()
     return _run_loop(conn, validator, contributor, rows)
+
+
+# ── admin manual review ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class PendingContribution:
+    """1 row đang chờ admin duyệt. Đủ field cho preview map + table."""
+
+    id: UUID
+    timestamp: datetime
+    latitude: float
+    longitude: float
+    rssi_dbm: float
+    snr_db: float
+    spreading_factor: int
+    frequency_mhz: float
+    source_type: str | None
+    contributor_user_id: UUID | None
+    contributor_email: str | None
+    serving_gateway_id: UUID | None
+    gateway_code: str | None
+    linked_source_id: UUID | None
+    submitted_at: datetime
+
+
+_LIST_PENDING_REVIEW = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        g.code AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.review_status = 'pending_review'
+    ORDER BY q.timestamp DESC
+    LIMIT :limit OFFSET :offset
+    """
+)
+
+_COUNT_PENDING_REVIEW = text(
+    "SELECT COUNT(*)::int AS total FROM ts.survey_quarantine WHERE review_status = 'pending_review'"
+)
+
+# Fetch 1 row pending để admin xem detail + so sánh với predicted RSSI.
+_GET_PENDING_BY_ID = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        g.code AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.id = :qid AND q.review_status = 'pending_review'
+    """
+)
+
+_APPROVE_PENDING = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'approved',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now()
+    WHERE id = :qid AND review_status = 'pending_review'
+    RETURNING timestamp, contributor_user_id
+    """
+)
+
+_REJECT_PENDING = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'rejected',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now(),
+        review_note = :note
+    WHERE id = :qid AND review_status = 'pending_review'
+    RETURNING timestamp, contributor_user_id
+    """
+)
+
+
+# ── batch (file) review ──────────────────────────────────────────────────
+# Group quarantine rows by (uploader_id, uploaded_at) — đây là key tự nhiên
+# cho 1 lần upload CSV. Chỉ list batch có ít nhất 1 row pending_review (admin
+# không cần thấy file đã duyệt xong hoặc chưa promote).
+_LIST_PENDING_REVIEW_BATCHES = text(
+    """
+    SELECT
+        q.uploader_id,
+        u.email AS uploader_email,
+        q.uploaded_at,
+        COUNT(*) FILTER (
+            WHERE q.review_status = 'pending_review'
+        )::int AS pending_review_count,
+        COUNT(*)::int AS total_count,
+        MIN(q.timestamp) AS earliest_ts,
+        MAX(q.timestamp) AS latest_ts
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.uploader_id
+    WHERE q.source_type = 'csv_upload'
+      AND q.uploader_id IS NOT NULL
+    GROUP BY q.uploader_id, u.email, q.uploaded_at
+    HAVING COUNT(*) FILTER (WHERE q.review_status = 'pending_review') > 0
+    ORDER BY q.uploaded_at DESC
+    """
+)
+
+_SELECT_PENDING_REVIEW_FOR_BATCH = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        g.code AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.review_status = 'pending_review'
+      AND q.uploader_id = :uploader_id
+      AND q.uploaded_at = :uploaded_at
+      AND q.source_type = 'csv_upload'
+    ORDER BY q.timestamp ASC
+    """
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingReviewBatch:
+    """1 batch CSV (uploader + uploaded_at) có ≥1 row đang chờ duyệt."""
+
+    uploader_id: UUID
+    uploader_email: str | None
+    uploaded_at: datetime
+    pending_review_count: int
+    total_count: int
+    earliest_timestamp: datetime
+    latest_timestamp: datetime
+
+
+def _row_to_pending(row: Any) -> PendingContribution:
+    """Convert SQL row (alias `lat`/`lon` + LEFT JOIN) → PendingContribution."""
+    return PendingContribution(
+        id=row.id,
+        timestamp=row.timestamp,
+        latitude=float(row.lat),
+        longitude=float(row.lon),
+        rssi_dbm=float(row.rssi_dbm),
+        snr_db=float(row.snr_db),
+        spreading_factor=int(row.spreading_factor),
+        frequency_mhz=float(row.frequency_mhz),
+        source_type=row.source_type,
+        contributor_user_id=row.contributor_user_id,
+        contributor_email=row.contributor_email,
+        serving_gateway_id=row.serving_gateway_id,
+        gateway_code=row.gateway_code,
+        linked_source_id=row.linked_source_id,
+        submitted_at=row.uploaded_at,
+    )
+
+
+def list_pending_review(
+    conn: Connection, *, limit: int = 50, offset: int = 0
+) -> tuple[list[PendingContribution], int]:
+    """Admin queue: rows đã pass auto-validate, chờ duyệt thủ công."""
+    total = conn.execute(_COUNT_PENDING_REVIEW).scalar_one()
+    rows = conn.execute(_LIST_PENDING_REVIEW, {"limit": limit, "offset": offset}).all()
+    return [_row_to_pending(r) for r in rows], int(total or 0)
+
+
+def get_pending_review(conn: Connection, qid: UUID) -> PendingContribution | None:
+    """Lấy 1 row pending để admin xem detail."""
+    row = conn.execute(_GET_PENDING_BY_ID, {"qid": qid}).first()
+    if row is None:
+        return None
+    return _row_to_pending(row)
+
+
+def list_pending_review_batches(conn: Connection) -> list[PendingReviewBatch]:
+    """List các file (uploader + uploaded_at) còn ≥1 row pending_review."""
+    rows = conn.execute(_LIST_PENDING_REVIEW_BATCHES).all()
+    return [
+        PendingReviewBatch(
+            uploader_id=row.uploader_id,
+            uploader_email=row.uploader_email,
+            uploaded_at=row.uploaded_at,
+            pending_review_count=int(row.pending_review_count or 0),
+            total_count=int(row.total_count or 0),
+            earliest_timestamp=row.earliest_ts,
+            latest_timestamp=row.latest_ts,
+        )
+        for row in rows
+    ]
+
+
+def list_pending_review_for_batch(
+    conn: Connection, *, uploader_id: UUID, uploaded_at: datetime
+) -> list[PendingContribution]:
+    """Detail rows pending_review của 1 batch — admin drill-in xem trước duyệt."""
+    rows = conn.execute(
+        _SELECT_PENDING_REVIEW_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    return [_row_to_pending(r) for r in rows]
+
+
+def approve_pending_review_batch(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+) -> list[PendingContribution]:
+    """Approve mọi pending_review row của 1 batch trong cùng txn.
+
+    Trả về list rows đã approve thành công (caller dùng để gửi email summary).
+    Row đã bị reject hoặc đã approve trước = không count.
+    """
+    rows = conn.execute(
+        _SELECT_PENDING_REVIEW_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    approved: list[PendingContribution] = []
+    for row in rows:
+        ok = approve_pending_contribution(conn, validator, qid=row.id, reviewer_id=reviewer_id)
+        if ok:
+            approved.append(_row_to_pending(row))
+    return approved
+
+
+def reject_pending_review_batch(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+    note: str | None,
+) -> list[PendingContribution]:
+    """Reject mọi pending_review row của 1 batch trong cùng txn.
+
+    Trả về list rows đã reject thành công (caller dùng để gửi email summary
+    cho user — 1 email/batch chứa lý do từ admin, không spam per-row).
+    """
+    rows = conn.execute(
+        _SELECT_PENDING_REVIEW_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    rejected: list[PendingContribution] = []
+    for row in rows:
+        ok = reject_pending_contribution(
+            conn, validator, qid=row.id, reviewer_id=reviewer_id, note=note
+        )
+        if ok:
+            rejected.append(_row_to_pending(row))
+    return rejected
+
+
+def approve_pending_contribution(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    qid: UUID,
+    reviewer_id: UUID,
+) -> bool:
+    """Admin approve: INSERT training + mark approved + bump stats.accepted.
+
+    Trả False nếu row không tồn tại / không phải pending_review (race với
+    reject hoặc đã xử lý). Idempotent: gọi lần 2 = no-op return False.
+    """
+    updated = conn.execute(_APPROVE_PENDING, {"qid": qid, "reviewer_id": reviewer_id}).first()
+    if updated is None:
+        return False
+    conn.execute(
+        _INSERT_TRAINING_FROM_QUARANTINE,
+        {"ts": updated.timestamp, "qid": qid},
+    )
+    if updated.contributor_user_id is not None:
+        validator.update_stats(conn, updated.contributor_user_id, passed=True)
+    logger.info(
+        "admin_contribution_approved",
+        qid=str(qid),
+        reviewer_id=str(reviewer_id),
+        contributor_user_id=(
+            str(updated.contributor_user_id) if updated.contributor_user_id else None
+        ),
+    )
+    return True
+
+
+def reject_pending_contribution(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    qid: UUID,
+    reviewer_id: UUID,
+    note: str | None,
+) -> bool:
+    """Admin reject: mark rejected + review_note + bump stats.rejected."""
+    updated = conn.execute(
+        _REJECT_PENDING,
+        {"qid": qid, "reviewer_id": reviewer_id, "note": note},
+    ).first()
+    if updated is None:
+        return False
+    if updated.contributor_user_id is not None:
+        validator.update_stats(conn, updated.contributor_user_id, passed=False)
+    logger.info(
+        "admin_contribution_rejected",
+        qid=str(qid),
+        reviewer_id=str(reviewer_id),
+        contributor_user_id=(
+            str(updated.contributor_user_id) if updated.contributor_user_id else None
+        ),
+        has_note=bool(note),
+    )
+    return True
 
 
 # ── private helpers ─────────────────────────────────────────────────────
@@ -418,15 +805,17 @@ def _promote_one(
     contributor: ContributorContext,
     row: Any,
 ) -> ValidationResult:
-    """Validate 1 row → insert training (pass) hoặc set reject_reason (fail).
-    Cập nhật stats atomic cuối cùng (transaction wrap caller — rollback toàn
-    batch khi raise).
+    """Validate 1 row → đẩy vào pending-review (pass) hoặc set reject_reason (fail).
+
+    Migration 0018: pass KHÔNG INSERT training nữa — chờ admin approve. Stats
+    chỉ bump khi rejected (auto-reject = rác thật). Accepted bump ở
+    approve_pending_contribution (admin gate) chứ không phải lúc này.
     """
     record = _row_to_record(row)
     result = validator.validate(record, contributor)
     if result.passed:
         conn.execute(
-            _INSERT_TRAINING_FROM_QUARANTINE,
+            _MARK_PENDING_REVIEW,
             {"ts": row.timestamp, "qid": row.id},
         )
     else:
@@ -438,7 +827,7 @@ def _promote_one(
                 "reason": result.reject_reason,
             },
         )
-    validator.update_stats(conn, contributor.user_id, passed=result.passed)
+        validator.update_stats(conn, contributor.user_id, passed=False)
     return result
 
 
@@ -472,12 +861,17 @@ def _run_loop(
 __all__ = [
     "CsvBatchSummary",
     "CsvUploaderStats",
+    "PendingContribution",
     "PromotionResult",
+    "approve_pending_contribution",
     "delete_csv_batch_for_uploader",
     "fetch_csv_stats_for_uploader",
+    "get_pending_review",
     "list_csv_batches_for_uploader",
-    "mark_and_promote_csv_for_uploader",
+    "list_pending_review",
+    "mark_and_promote_csv_batch_for_uploader",
     "mark_submitted_for_linked_source",
     "promote_pending_for_linked_source",
     "promote_pending_for_uploader",
+    "reject_pending_contribution",
 ]

@@ -21,7 +21,7 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine, text
 
-from . import _passwords, _refresh, _reset, _tokens
+from . import _passwords, _refresh, _reset, _tokens, _verify
 from ._mailer import Mailer
 from .errors import (
     AccountLockedError,
@@ -37,6 +37,7 @@ class User:
     email: str
     is_admin: bool
     disabled: bool
+    email_verified: bool
     created_at: datetime
 
 
@@ -66,19 +67,25 @@ class AuthSession:
 _INSERT_USER = text("""
     INSERT INTO auth.users (email, password_hash)
     VALUES (:email, :password_hash)
-    RETURNING id, email, is_admin, disabled, created_at
+    RETURNING id, email, is_admin, disabled, email_verified, created_at
 """)
 
 _SELECT_USER_BY_EMAIL = text("""
-    SELECT id, email, password_hash, is_admin, disabled, created_at,
+    SELECT id, email, password_hash, is_admin, disabled, email_verified, created_at,
            failed_login_count, locked_until
     FROM auth.users
     WHERE email = :email
 """)
 
 _SELECT_USER_BY_ID = text("""
-    SELECT id, email, is_admin, disabled, created_at
+    SELECT id, email, is_admin, disabled, email_verified, created_at
     FROM auth.users
+    WHERE id = :user_id
+""")
+
+_MARK_EMAIL_VERIFIED = text("""
+    UPDATE auth.users
+    SET email_verified = true
     WHERE id = :user_id
 """)
 
@@ -140,6 +147,8 @@ class IdentityService:
         mailer: Mailer,
         password_reset_ttl_minutes: int,
         password_reset_url_template: str,
+        email_verification_ttl_minutes: int,
+        email_verification_url_template: str,
     ) -> None:
         # `engine` cần thiết cho inner write transactions của login-failure
         # counter (plan-auth-v2). Route mở outer `engine.begin()` rồi raise
@@ -156,6 +165,8 @@ class IdentityService:
         # Template format: "{frontend_base_url}/?reset={token}". Format string
         # đơn giản — caller chỉ chèn token. Validate khi construct settings.
         self._password_reset_url_template = password_reset_url_template
+        self._email_verification_ttl_minutes = email_verification_ttl_minutes
+        self._email_verification_url_template = email_verification_url_template
 
     # ── public interface ──────────────────────────────────────────────────
 
@@ -183,6 +194,7 @@ class IdentityService:
             email=row.email,
             is_admin=row.is_admin,
             disabled=row.disabled,
+            email_verified=row.email_verified,
             created_at=row.created_at,
         )
 
@@ -374,6 +386,50 @@ class IdentityService:
         )
         conn.execute(_REVOKE_ALL_USER_REFRESH, {"user_id": user_id})
 
+    def request_email_verification(self, conn: Connection, user_id: UUID) -> None:
+        """Issue verification token + gửi link đến email của user.
+
+        Caller (auth router) đã verify user logged-in (gate qua Depends current_user).
+        No-op nếu user đã verified — chống spam re-request không cần thiết.
+        Idempotent invalidate-then-issue: nếu link cũ chưa consume → mất hiệu lực.
+
+        Mailer raise MailerError → propagate; route trả 503. Token đã ghi DB
+        trong cùng outer txn — nếu mail fail, route rollback xoá token, request
+        lại sẽ issue token mới.
+        """
+        row = conn.execute(_SELECT_USER_BY_ID, {"user_id": user_id}).one_or_none()
+        if row is None or row.email_verified:
+            return
+
+        issued = _verify.issue(
+            conn,
+            user_id,
+            ttl_minutes=self._email_verification_ttl_minutes,
+        )
+        verify_url = self._email_verification_url_template.format(token=issued.token)
+        self._mailer.send_email_verification(
+            row.email,
+            verify_url=verify_url,
+            expires_in_minutes=self._email_verification_ttl_minutes,
+        )
+
+    def confirm_email_verification(self, conn: Connection, presented_token: str) -> None:
+        """Validate token + set email_verified=true.
+
+        Raises:
+            EmailVerificationTokenInvalidError / ExpiredError / UsedError
+            UserDisabledError: user bị disable giữa lúc request + confirm.
+            InvalidCredentialsError: user đã bị xoá khỏi DB.
+        """
+        user_id = _verify.consume(conn, presented_token)
+        user_row = conn.execute(_SELECT_USER_BY_ID, {"user_id": user_id}).one_or_none()
+        if user_row is None:
+            raise InvalidCredentialsError("User không tồn tại")
+        if user_row.disabled:
+            raise UserDisabledError("Tài khoản đã bị vô hiệu hoá")
+
+        conn.execute(_MARK_EMAIL_VERIFIED, {"user_id": user_id})
+
     def _issue_session(
         self,
         conn: Connection,
@@ -419,6 +475,7 @@ class IdentityService:
             email=row.email,
             is_admin=row.is_admin,
             disabled=row.disabled,
+            email_verified=row.email_verified,
             created_at=row.created_at,
         )
 

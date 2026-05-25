@@ -594,6 +594,7 @@ export async function uploadMeasurementsCsv(file, submitToCommunity) {
 export const CsvUploadStats = z.object({
   total: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
+  pending_review: z.number().int().nonnegative(),
   promoted: z.number().int().nonnegative(),
   rejected: z.number().int().nonnegative(),
 });
@@ -622,6 +623,7 @@ export const CsvUploadBatch = z.object({
   uploaded_at: z.string(),
   total: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
+  pending_review: z.number().int().nonnegative(),
   promoted: z.number().int().nonnegative(),
   rejected: z.number().int().nonnegative(),
 });
@@ -682,15 +684,16 @@ export const CsvPromoteResponse = z.object({
 /** @typedef {z.infer<typeof CsvPromoteResponse>} CsvPromoteResponseT */
 
 /**
- * POST /api/v1/me/uploads/csv/promote — chạy TrustValidator over toàn bộ
- * csv_upload pending của user (mark submitted_for_community + validator loop).
+ * POST /api/v1/me/uploads/csv/batches/promote?uploaded_at=... — chạy
+ * TrustValidator chỉ trên rows của 1 batch (1 file = 1 lần upload).
  *
+ * @param {string} uploadedAt ISO 8601 (truyền nguyên từ list endpoint).
  * @returns {Promise<CsvPromoteResponseT>}
  */
-export async function promoteCsvUploads() {
-  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv/promote`, {
-    method: "POST",
-  });
+export async function promoteCsvBatch(uploadedAt) {
+  const url = new URL(`${API_BASE_URL}/api/v1/me/uploads/csv/batches/promote`);
+  url.searchParams.set("uploaded_at", uploadedAt);
+  const res = await authFetch(url.toString(), { method: "POST" });
   if (!res.ok) {
     const ct = res.headers.get("content-type") ?? "";
     if (ct.includes("application/problem+json") || ct.includes("application/json")) {
@@ -698,7 +701,7 @@ export async function promoteCsvUploads() {
     }
     throw new ApiError({
       type: "about:blank",
-      title: "Failed to promote CSV uploads",
+      title: "Failed to promote CSV batch",
       status: res.status,
     });
   }
