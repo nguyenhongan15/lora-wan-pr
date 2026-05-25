@@ -166,6 +166,19 @@ async def lifespan(app: FastAPI):
     # Nettoyage
     app.state.model = None
 
+# --- OOD Logic ---
+
+def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
+    if not (settings.min_lat <= lat <= settings.max_lat):
+        return True
+    if not (settings.min_lon <= lon <= settings.max_lon):
+        return True
+    if not (settings.min_sf <= sf <= settings.max_sf):
+        return True
+    if not (settings.min_freq_mhz <= freq <= settings.max_freq_mhz):
+        return True
+    return False
+
 # --- App ---
 
 app = FastAPI(title="LoRa ML Prediction Service", lifespan=lifespan)
