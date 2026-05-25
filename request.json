@@ -1,0 +1,4 @@
+{
+  "target": {"latitude": 16.07, "longitude": 108.15, "spreading_factor": 7, "frequency_mhz": 923.2},
+  "serving_gateway": {"id": "test-uuid", "code": "DNIIT", "latitude": 16.0, "longitude": 108.0, "altitude_m": 10.0, "antenna_height_m": 5.0, "antenna_gain_dbi": 2.0, "tx_power_dbm": 14.0, "frequency_mhz": 923.2}
+}

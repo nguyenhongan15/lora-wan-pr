@@ -25,9 +25,9 @@ dev = [
 members = [
     "services/api-service",
     "services/worker-service",
+    "services/ml-service",
     "packages/sdk-python",
 ]
-# services/ml-service đang trống — chờ dev ML mới setup pyproject.toml + source.
 # Legacy LightGBM (cá nhân tự build trước handoff) → archive/stage2-lightgbm/
 # (KHÔNG là workspace member; pyproject chỉ giữ làm reference, không runnable).
 
