@@ -31,17 +31,30 @@ import multiprocessing as mp
 import os
 import sys
 import time
+import asyncio
+import uuid # Added for generating UUIDs in BatchPredictionRequest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import httpx
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 API_SRC = REPO_ROOT / "services" / "api-service" / "src"
-for _p in (str(API_SRC),):
+# Add ml-service src to path for its pydantic models
+ML_SERVICE_SRC = REPO_ROOT / "services" / "ml-service" / "src"
+for _p in (str(API_SRC), str(ML_SERVICE_SRC)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+from lora_coverage_api.config import get_settings
+from lora_ml_predict.app import ( # type: ignore[import-not-found, attr-defined]
+    BatchPredictionRequest,
+    BatchResidualItem,
+    GatewaySchema,
+    TargetSchema,
+)
 
 log = logging.getLogger("precompute_minsf")
 
@@ -58,6 +71,14 @@ SF_LEVELS = (7, 8, 9, 10, 11, 12)
 _FRIIS_CLUTTER_MARGIN_DB = 30.0
 _MAX_RADIUS_KM = 50.0
 _MIN_RADIUS_KM = 5.0
+
+def _get_stage2_auth_token() -> str:
+    # Use api-service settings to get the token, as it's a shared secret.
+    return get_settings().stage2_auth_token
+
+def _run_async_compute_one(job: GatewayJob) -> dict[str, Any]:
+    """Helper to run the async _compute_one in a multiprocessing pool."""
+    return asyncio.run(_compute_one(job))
 
 
 def _auto_radius_km(tx_power_dbm: float, antenna_gain_dbi: float, freq_mhz: float) -> float:
@@ -107,6 +128,10 @@ class GatewayJob:
     dem_dir: str
     surface_dem_dir: str
     output_path: str
+    with_stage2: bool
+    stage2_base_url: str | None
+    stage2_auth_token: str | None
+    stage2_model_version: str | None # Output from ML service
 
 
 def _compute_pl_grid(
@@ -294,7 +319,7 @@ def _build_features(
     return features
 
 
-def _compute_one(job: GatewayJob) -> dict[str, Any]:
+async def _compute_one(job: GatewayJob) -> dict[str, Any]:
     """Worker: tính toàn bộ pipeline cho 1 gateway, dump GeoJSON."""
     logging.basicConfig(
         level=logging.INFO,
@@ -303,7 +328,7 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
     t0 = time.time()
 
     dlon, dlat = meters_to_degrees(job.lat, job.radius_km * 1000.0, job.radius_km * 1000.0)
-    lon_min, lon_max = job.lon - dlon, job.lon + dlon
+    lon_min, lon_max = job.lon - dlon, job.lon + dlat
     lat_min, lat_max = job.lat - dlat, job.lat + dlat
     step_dlon, step_dlat = meters_to_degrees(job.lat, job.grid_m, job.grid_m)
     nx = math.ceil((lon_max - lon_min) / step_dlon) + 1
@@ -312,6 +337,80 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
     log.info("[%s] start grid %d×%d (%d cells)", job.code, nx, ny, nx * ny)
 
     pl_grid = _compute_pl_grid(job, nx, ny, lat_min, lon_min, step_dlat, step_dlon)
+
+    stage2_model_version: str | None = None
+    if job.with_stage2 and job.stage2_base_url and job.stage2_auth_token:
+        client = httpx.AsyncClient(
+            base_url=job.stage2_base_url,
+            headers={"Authorization": f"Bearer {job.stage2_auth_token}"},
+            timeout=30.0, # Increased timeout for batch processing
+        )
+        try:
+            all_targets: list[TargetSchema] = []
+            grid_coords = []
+            for iy in range(ny):
+                for ix in range(nx):
+                    lat = lat_min + iy * step_dlat
+                    lon = lon_min + ix * step_dlon
+                    if math.isfinite(pl_grid[iy, ix]):
+                        all_targets.append(TargetSchema(
+                            latitude=lat,
+                            longitude=lon,
+                            spreading_factor=SF_LEVELS[0], # SF doesn't affect residual for now
+                            frequency_mhz=job.frequency_mhz
+                        ))
+                        grid_coords.append((iy, ix))
+            
+            batch_size = 1000 # Configurable batch size
+            residuals_ml = np.full(pl_grid.shape, np.nan, dtype=np.float32)
+            overall_ood = np.full(pl_grid.shape, False, dtype=bool)
+
+            for i in range(0, len(all_targets), batch_size):
+                batch_targets = all_targets[i : i + batch_size]
+                batch_coords = grid_coords[i : i + batch_size]
+                
+                batch_request = BatchPredictionRequest(
+                    gateway=GatewaySchema(
+                        id=str(uuid.uuid4()), # Placeholder UUID, not used by ml-service for now
+                        code=job.code,
+                        name=job.name,
+                        latitude=job.lat,
+                        longitude=job.lon,
+                        altitude_m=job.altitude_m,
+                        antenna_height_m=job.antenna_height_m,
+                        antenna_gain_dbi=job.antenna_gain_dbi,
+                        tx_power_dbm=job.tx_power_dbm,
+                        frequency_mhz=job.frequency_mhz,
+                    ),
+                    targets=[cast(TargetSchema, t) for t in batch_targets]
+                )
+                
+                log.info("[%s] Calling Stage 2 /residuals/batch with %d targets (%d/%d)", job.code, len(batch_targets), i, len(all_targets))
+                resp = await client.post("/residuals/batch", json=batch_request.model_dump())
+                resp.raise_for_status() # Raise an exception for 4xx or 5xx responses
+                batch_response = resp.json()
+                
+                if "model_version" in batch_response:
+                    stage2_model_version = batch_response["model_version"]
+                
+                for j, item in enumerate(batch_response["residuals"]):
+                    iy, ix = batch_coords[j]
+                    if item["residual_db"] is not None and math.isfinite(pl_grid[iy, ix]):
+                        residuals_ml[iy, ix] = item["residual_db"]
+                        pl_grid[iy, ix] += residuals_ml[iy, ix]
+                    overall_ood[iy, ix] = item["ood"]
+            log.info("[%s] Stage 2 residual correction applied. Model version: %s", job.code, stage2_model_version)
+        except httpx.HTTPStatusError as e:
+            log.error("[%s] Stage 2 HTTP error: %s (response: %s)", job.code, e, e.response.text[:200])
+            if e.response.status_code == 503:
+                log.warning("[%s] Stage 2 service unavailable (503) — falling back to Stage 1 only.", job.code)
+            stage2_model_version = None
+        except httpx.RequestError as e:
+            log.error("[%s] Stage 2 request error: %s", job.code, e)
+            stage2_model_version = None
+        finally:
+            await client.aclose()
+
     min_sf = _derive_min_sf(pl_grid, job)
     features = _build_features(min_sf, lon_min, lat_min, step_dlon, step_dlat)
 
@@ -324,7 +423,8 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
             "gateway_lon": job.lon,
             "grid_m": job.grid_m,
             "radius_km": job.radius_km,
-            "model": "ITU-R P.1812 + P.2108",
+            "model": "ITU-R P.1812 + P.2108" + (" + Stage 2 ML" if stage2_model_version else ""),
+            "stage2_model_version": stage2_model_version,
             "bands": "min-SF (SF7..SF12), nested cumulative",
         },
         "features": features,
@@ -335,7 +435,7 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
     out.write_text(json.dumps(fc), encoding="utf-8")
     elapsed = time.time() - t0
     log.info("[%s] done %.0fs → %s", job.code, elapsed, out)
-    return {
+    result = {
         "code": job.code,
         "name": job.name,
         "lat": job.lat,
@@ -343,8 +443,9 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
         "elapsed_s": round(elapsed, 1),
         "cells": int(nx * ny),
         "covered_cells": int((min_sf > 0).sum()),
+        "stage2_model_version": stage2_model_version,
     }
-
+    return result
 
 def _load_gateways(db_url: str, only_code: str | None) -> list[dict[str, Any]]:
     import psycopg
@@ -434,6 +535,17 @@ def main() -> int:
         default=str(OUTPUT_DIR),
         help=f"Default: {OUTPUT_DIR}",
     )
+    parser.add_argument("--with-stage2", action="store_true", help="Enable Stage 2 ML residual correction")
+    parser.add_argument(
+        "--stage2-base-url", 
+        default=os.environ.get("STAGE2_PREDICT_BASE_URL"), 
+        help="Base URL for Stage 2 ML service (e.g., http://ml-service:8001)"
+    )
+    parser.add_argument(
+        "--stage2-auth-token", 
+        default=_get_stage2_auth_token(), 
+        help="Auth token for Stage 2 ML service"
+    )
     args = parser.parse_args()
 
     dem_dir = os.environ.get("LORA_DEM_DIRECTORY")
@@ -519,15 +631,16 @@ def main() -> int:
     )
     t_start = time.time()
     if args.workers <= 1 or len(jobs) <= 1:
-        results = [_compute_one(j) for j in jobs]
+        # Run synchronously for a single worker or single job
+        results = [asyncio.run(_compute_one(j)) for j in jobs]
     else:
         with mp.Pool(processes=args.workers) as pool:
-            results = pool.map(_compute_one, jobs)
+            results = pool.map(_run_async_compute_one, jobs)
 
     total = time.time() - t_start
     log.info("Hoàn tất: %d job, %.0fs (%.1f phút)", len(jobs), total, total / 60)
 
-    # Merge với manifest cũ (nếu có) để không mất gateway từ lần chạy trước.
+    # Merge avec manifest cũ (nếu có) để không mất gateway từ lần chạy trước.
     manifest_path = out_dir / "manifest.json"
     existing: dict[str, dict[str, Any]] = {}
     if manifest_path.exists():
@@ -543,13 +656,14 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
         "radius_km": args.radius_km if args.radius_km is not None else "auto",
-        "model": "ITU-R P.1812 + P.2108",
+        "model": "ITU-R P.1812 + P.2108" + (" + Stage 2 ML" if any(r.get("stage2_model_version") for r in results) else ""),
+        "stage2_model_version": next((r["stage2_model_version"] for r in results if r.get("stage2_model_version")), None),
+        "bands": "min-SF (SF7..SF12), nested cumulative",
         "gateways": sorted(existing.values(), key=lambda g: g["code"]),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     log.info("Ghi manifest: %s (%d gateway)", manifest_path, len(manifest["gateways"]))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

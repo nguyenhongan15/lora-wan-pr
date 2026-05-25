@@ -12,6 +12,7 @@ COPY pyproject.toml uv.lock /build/
 COPY services/ml-service/pyproject.toml /build/services/ml-service/pyproject.toml
 COPY services/ml-service/README.md /build/services/ml-service/
 COPY services/ml-service/src /build/services/ml-service/src
+COPY services/ml-service/reference_wireless /build/services/ml-service/reference_wireless
 # Add other workspace members if needed for dependency resolution
 COPY services/api-service/pyproject.toml /build/services/api-service/pyproject.toml
 COPY services/worker-service/pyproject.toml /build/services/worker-service/pyproject.toml

@@ -13,12 +13,25 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     auth_token: str = Field(alias="LORA_STAGE2_AUTH_TOKEN")
+    db_url: str = Field(alias="LORA_DB_URL")
+    dem_directory: str = Field(alias="LORA_DEM_DIRECTORY", default="/data/dem")
+    surface_dem_directory: str = Field(alias="LORA_SURFACE_DEM_DIRECTORY", default="/data/dem-surface")
     port: int = 8001
     host: str = "0.0.0.0"
     model_version: str = "stage2-stub-v0.1.0"
     # Set to False to simulate "no active model" (503)
     is_model_active: bool = True
     model_path: str | None = Field(default=None, alias="LORA_ML_MODEL_PATH")
+    
+    # OOD Constraints (Vietnam, AS923-2)
+    min_lat: float = 8.4
+    max_lat: float = 23.4
+    min_lon: float = 102.1
+    max_lon: float = 109.5
+    min_sf: int = 7
+    max_sf: int = 12
+    min_freq_mhz: float = 921.4
+    max_freq_mhz: float = 924.8
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -55,6 +68,19 @@ async def lifespan(app: FastAPI):
     # Nettoyage
     app.state.model = None
 
+# --- OOD Logic ---
+
+def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
+    if not (settings.min_lat <= lat <= settings.max_lat):
+        return True
+    if not (settings.min_lon <= lon <= settings.max_lon):
+        return True
+    if not (settings.min_sf <= sf <= settings.max_sf):
+        return True
+    if not (settings.min_freq_mhz <= freq <= settings.max_freq_mhz):
+        return True
+    return False
+
 # --- App ---
 
 app = FastAPI(title="LoRa ML Prediction Service", lifespan=lifespan)
@@ -86,7 +112,7 @@ class PredictionRequest(BaseModel):
     serving_gateway: GatewaySchema
 
 class PredictionResponse(BaseModel):
-    residual_db: float
+    residual_db: float | None
     model_version: str
     ood: bool = False
 
@@ -134,6 +160,20 @@ async def predict_residual(
     # Accessing the model via the application status
     model = request.app.state.model
     
+    ood = is_ood(
+        payload.target.latitude,
+        payload.target.longitude,
+        payload.target.spreading_factor,
+        payload.target.frequency_mhz
+    )
+    
+    if ood:
+        return PredictionResponse(
+            residual_db=None,
+            model_version=settings.model_version,
+            ood=True
+        )
+
     # Placeholder: Here you will use your 'model' object for inference
     return PredictionResponse(
         residual_db=0.0,
@@ -158,11 +198,14 @@ async def predict_residuals_batch(
     if len(payload.targets) > 5000:
         logger.warning("Batch size too large: %d", len(payload.targets))
 
-    # Placeholder logic
-    residuals = [
-        BatchResidualItem(residual_db=0.0, ood=False)
-        for _ in payload.targets
-    ]
+    residuals = []
+    for t in payload.targets:
+        ood = is_ood(t.latitude, t.longitude, t.spreading_factor, t.frequency_mhz)
+        if ood:
+            residuals.append(BatchResidualItem(residual_db=None, ood=True))
+        else:
+            # Placeholder logic
+            residuals.append(BatchResidualItem(residual_db=0.0, ood=False))
     
     return BatchPredictionResponse(
         model_version=settings.model_version,

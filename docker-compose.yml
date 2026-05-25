@@ -110,6 +110,7 @@ services:
     restart: unless-stopped
     environment:
       LORA_STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
+      LORA_DB_URL: ${LORA_DB_URL:?LORA_DB_URL required in .env}
     #volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) for Stage 1 ITU-R P.1812. Read-only.
     #  - ${LORA_DATA_DIR:-./lora-data}:/data:ro
