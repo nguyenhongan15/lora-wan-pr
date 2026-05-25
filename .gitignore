@@ -19,6 +19,7 @@ env/
 .coverage
 coverage.xml
 htmlcov/
+lora-data/
 
 # ── Node ───────────────────────────────────────
 node_modules/
