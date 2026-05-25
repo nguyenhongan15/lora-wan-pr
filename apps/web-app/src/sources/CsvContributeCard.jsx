@@ -308,7 +308,7 @@ export function CsvContributeCard() {
  *   3. Có row đã được admin duyệt vào training → emerald nhạt disabled.
  *   4. Còn lại = mọi row đã bị loại (auto-reject hoặc admin reject) → rose.
  *
- * @param {{ pending: number, pending_review: number, promoted: number, rejected: number }} batch
+ * @param {import("../api/client.js").CsvUploadBatchT} batch
  * @returns {{ kind: "active" | "pending_review" | "approved" | "rejected", label: string, className: string }}
  */
 function _batchPromoteState(batch) {
