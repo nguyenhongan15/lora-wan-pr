@@ -54,11 +54,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# ── Dữ liệu lớn (không commit) ─────────────────
-# Evaluation report PNG output cho archive/stage2-lightgbm — sinh từ
-# `python -m evaluation.generate_report`, có thể tái tạo bất kỳ lúc nào.
-# (Artifact LightGBM 3.3 MB được commit kèm code, xem archive/stage2-lightgbm/README.md.)
-archive/stage2-lightgbm/evaluation/reports/
+# ── Archive (không index trên remote) ─────────
+archive/
 
 # Tile cache (worker output)
 services/tile-server/cache/
