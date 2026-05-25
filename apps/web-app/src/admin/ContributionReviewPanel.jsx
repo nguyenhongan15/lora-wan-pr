@@ -10,7 +10,7 @@
 //
 // Approve cả batch → backend gửi 1 email summary đến uploader.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import { ApiError } from "../auth/client.js";
@@ -25,15 +25,6 @@ import { strings } from "../strings.js";
 const t = strings.admin.review;
 const tErr = strings.admin.errors;
 const tb = t.batch;
-
-/**
- * @param {string|null} sourceType
- */
-function _sourceLabel(sourceType) {
-  if (sourceType === "csv_upload") return t.sourceCsv;
-  if (sourceType && sourceType !== "unknown") return t.sourceWebhook;
-  return t.sourceUnknown;
-}
 
 /**
  * @param {string} iso
@@ -324,7 +315,9 @@ function BatchMapModal({
     /** @type {import("./client.js").PendingContributionT | null} */ (null),
   );
 
-  const items = q.data?.items ?? [];
+  // useMemo: q.data?.items ?? [] tạo array mới mỗi render → useEffect deps
+  // luôn trigger lại, recreate map source/listeners không cần thiết.
+  const items = useMemo(() => q.data?.items ?? [], [q.data]);
 
   // Init map CHỈ khi container đã visible và có data → tránh tạo map khi
   // div còn display:none (size 0×0) làm canvas mãi mãi sai.
@@ -375,17 +368,6 @@ function BatchMapModal({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || items.length === 0) return;
-
-    const features = items.map((it) => ({
-      type: /** @type {"Feature"} */ ("Feature"),
-      geometry: {
-        type: /** @type {"Point"} */ ("Point"),
-        coordinates: [it.longitude, it.latitude],
-      },
-      properties: { id: it.id },
-    }));
-    /** @type {GeoJSON.FeatureCollection} */
-    const fc = { type: "FeatureCollection", features };
 
     const apply = () => {
       // rssi expression: lookup theo properties.id thì phức tạp; thay vào
