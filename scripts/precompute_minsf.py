@@ -134,6 +134,10 @@ class GatewayJob:
     dem_dir: str
     surface_dem_dir: str
     output_path: str
+    with_stage2: bool
+    stage2_base_url: str | None = "http://127.0.0.1:8001"
+    stage2_auth_token: str | None
+    stage2_model_version: str | None # Output from ML service
     # Confidence level cho P.1812 + P.2108: 50% = median, 95% = conservative
     # ("95% locations có PL ≤ giá trị này"). Mặc định 95 → coverage map siết
     # band biên → engineer triển khai có buffer thay vì lạc quan median.
@@ -474,6 +478,7 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
             "gateway_lon": job.lon,
             "grid_m": job.grid_m,
             "radius_km": job.radius_km,
+            "stage2_model_version": stage2_model_version,
             "model": " + ".join(model_parts),
             "location_percent": job.location_percent,
             "environment": job.environment,
@@ -495,6 +500,7 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
         "elapsed_s": round(elapsed, 1),
         "cells": int(nx * ny),
         "covered_cells": int((min_sf > 0).sum()),
+        "stage2_model_version": stage2_model_version,
         "location_percent": job.location_percent,
         "environment": job.environment,
     }
@@ -588,6 +594,20 @@ def main() -> int:
         default=str(OUTPUT_DIR),
         help=f"Default: {OUTPUT_DIR}",
     )
+    # --- Arguments pour le Stage 2 (Machine Learning) ---
+    parser.add_argument("--with-stage2", action="store_true", help="Enable Stage 2 ML residual correction")
+    parser.add_argument(
+        "--stage2-base-url", 
+        default=os.environ.get("STAGE2_PREDICT_BASE_URL"), 
+        help="Base URL for Stage 2 ML service (e.g., http://ml-service:8001)"
+    )
+    parser.add_argument(
+        "--stage2-auth-token", 
+        default=_get_stage2_auth_token(), 
+        help="Auth token for Stage 2 ML service"
+    )
+
+    # --- Arguments pour le Stage 1 (Modèles Physiques ITU) ---
     parser.add_argument(
         "--location-percent",
         type=float,
@@ -730,7 +750,10 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
         "radius_km": args.radius_km if args.radius_km is not None else "auto",
+        # --- Dictionnaire de sortie de la simulation fusionné ---
         "model": model_str,
+        "stage2_model_version": next((r["stage2_model_version"] for r in results if r.get("stage2_model_version")), None),
+        "bands": "min-SF (SF7..SF12), nested cumulative",
         "location_percent": float(args.location_percent),
         "environment": str(args.environment),
         "gateways": sorted(existing.values(), key=lambda g: g["code"]),
