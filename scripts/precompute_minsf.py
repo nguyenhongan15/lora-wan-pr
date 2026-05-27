@@ -1,15 +1,11 @@
-"""Precompute min-SF coverage maps per gateway (ITU-R P.1812 + P.2108 + P.2109).
+"""Precompute min-SF coverage maps per gateway (ITU-R P.1812 + P.2108).
 
 Vẽ giống Figure 11 của paper "A Study on LoRa Signal Propagation Models in
 Urban Environments" (ITU-R model with clutter losses). Cho mỗi gateway: sample
 50 m grid trong square (2·r)×(2·r) km tâm gw với r = auto-radius từ link
 budget (DL Friis - 30 dB clutter margin, cap [5, 50] km), tính path loss
-P.1812 + clutter P.2108, optionally cộng BEL P.2109 (indoor), derive min-SF
-(SF nhỏ nhất vẫn link 2 chiều OK), polygonize 6 band SF7..SF12, output
-GeoJSON.
-
-Mặc định location percentage = 95% (conservative: band biên siết, 95%
-locations có PL ≤ giá trị tính được). Đổi xuống 50 nếu cần median lạc quan.
+P.1812 + clutter P.2108, derive min-SF (SF nhỏ nhất vẫn link 2 chiều OK),
+polygonize 6 band SF7..SF12, output GeoJSON.
 
 Một lần chạy là forever-cached: FE fetch trực tiếp file tĩnh, không qua API.
 
@@ -17,8 +13,6 @@ Usage:
     uv run --project services/api-service python scripts/precompute_minsf.py
     uv run --project services/api-service python scripts/precompute_minsf.py --gateway-code XYZ
     uv run --project services/api-service python scripts/precompute_minsf.py --workers 4 --grid-m 100
-    uv run --project services/api-service python scripts/precompute_minsf.py --environment indoor
-    uv run --project services/api-service python scripts/precompute_minsf.py --location-percent 50
     uv run --project services/api-service python scripts/precompute_minsf.py --force  # overwrite existing
 
 Env:
@@ -37,30 +31,17 @@ import multiprocessing as mp
 import os
 import sys
 import time
-import asyncio
-import uuid # Added for generating UUIDs in BatchPredictionRequest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import httpx
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 API_SRC = REPO_ROOT / "services" / "api-service" / "src"
-# Add ml-service src to path for its pydantic models
-ML_SERVICE_SRC = REPO_ROOT / "services" / "ml-service" / "src"
-for _p in (str(API_SRC), str(ML_SERVICE_SRC)):
+for _p in (str(API_SRC),):
     if _p not in sys.path:
         sys.path.insert(0, _p)
-
-from lora_coverage_api.config import get_settings
-from lora_ml_predict.app import ( # type: ignore[import-not-found, attr-defined]
-    BatchPredictionRequest,
-    BatchResidualItem,
-    GatewaySchema,
-    TargetSchema,
-)
 
 log = logging.getLogger("precompute_minsf")
 
@@ -77,14 +58,6 @@ SF_LEVELS = (7, 8, 9, 10, 11, 12)
 _FRIIS_CLUTTER_MARGIN_DB = 30.0
 _MAX_RADIUS_KM = 50.0
 _MIN_RADIUS_KM = 5.0
-
-def _get_stage2_auth_token() -> str:
-    # Use api-service settings to get the token, as it's a shared secret.
-    return get_settings().stage2_auth_token
-
-def _run_async_compute_one(job: GatewayJob) -> dict[str, Any]:
-    """Helper to run the async _compute_one in a multiprocessing pool."""
-    return asyncio.run(_compute_one(job))
 
 
 def _auto_radius_km(tx_power_dbm: float, antenna_gain_dbi: float, freq_mhz: float) -> float:
@@ -134,18 +107,6 @@ class GatewayJob:
     dem_dir: str
     surface_dem_dir: str
     output_path: str
-    with_stage2: bool
-    stage2_base_url: str | None = "http://127.0.0.1:8001"
-    stage2_auth_token: str | None
-    stage2_model_version: str | None # Output from ML service
-    # Confidence level cho P.1812 + P.2108: 50% = median, 95% = conservative
-    # ("95% locations có PL ≤ giá trị này"). Mặc định 95 → coverage map siết
-    # band biên → engineer triển khai có buffer thay vì lạc quan median.
-    location_percent: float = 95.0
-    # P.2109 BEL probability — 0 = outdoor (skip BEL), 50 = indoor, 90 =
-    # indoor_deep. Khớp _ENV_PROBABILITY_PERCENT của Stage1ItuModel.
-    environment_prob_pct: float = 0.0
-    environment: str = "outdoor"
 
 
 def _compute_pl_grid(
@@ -162,18 +123,12 @@ def _compute_pl_grid(
     Per-cell rebuild Simulation: tốn ~4 ms/cell nhưng crc-covlib API
     GenerateReceptionAreaResults yêu cầu corners rectangular trong projected
     coordinates, không nhất quán với grid lat/lon trải đều ở vĩ độ cố định.
-    Loop point-by-point đơn giản hơn và đủ nhanh khi parallelize 8 core.
+    Loop point-by-point đơn giản her và đủ nhanh khi parallelize 8 core.
     """
     from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
     from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
 
     pl_grid = np.full((ny, nx), np.nan, dtype=np.float32)
-
-    # PATH_LOSS_DB intrinsic không phụ thuộc TX power, nhưng set giá trị thật
-    # để code self-document — dòng "SetTransmitterPower(0.025…)" cũ gây hiểu lầm
-    # là device-side EIRP. Convert dBm → Watts: EIRP_W = 10^((dBm - 30) / 10).
-    eirp_dbm = job.tx_power_dbm + job.antenna_gain_dbi
-    eirp_w = 10.0 ** ((eirp_dbm - 30.0) / 10.0)
 
     t0 = time.time()
     n_done = 0
@@ -187,11 +142,11 @@ def _compute_pl_grid(
             sim.SetTransmitterLocation(job.lat, job.lon)
             sim.SetTransmitterHeight(job.antenna_height_m)
             sim.SetTransmitterFrequency(job.frequency_mhz)
-            sim.SetTransmitterPower(eirp_w, covlib.PowerType.EIRP)
+            sim.SetTransmitterPower(0.025, covlib.PowerType.EIRP)
             sim.SetReceiverHeightAboveGround(1.5)
             sim.SetPropagationModel(covlib.PropagationModel.ITU_R_P_1812)
             sim.SetITURP1812TimePercentage(50.0)
-            sim.SetITURP1812LocationPercentage(job.location_percent)
+            sim.SetITURP1812LocationPercentage(50.0)
             sim.SetITURP1812SurfaceProfileMethod(
                 covlib.P1812SurfaceProfileMethod.P1812_USE_SURFACE_ELEV_DATA
             )
@@ -214,7 +169,7 @@ def _compute_pl_grid(
                 d_km = _haversine_km(job.lat, job.lon, lat, lon)
                 if d_km >= 0.25:
                     clutter = itur_p2108.TerrestrialPathClutterLoss(
-                        job.frequency_mhz / 1000.0, d_km, job.location_percent
+                        job.frequency_mhz / 1000.0, d_km, 50.0
                     )
                     pl = pl + clutter
                 pl_grid[iy, ix] = pl
@@ -235,38 +190,6 @@ def _compute_pl_grid(
                 100.0 * n_done / n_total,
                 rate,
                 eta,
-            )
-
-    # ITU-R P.2109 Building Entry Loss — constant offset per-frequency, không
-    # phụ thuộc khoảng cách → tính 1 lần, cộng vectorized vào cell finite.
-    # Outdoor (prob_pct == 0) → skip; khớp Stage1ItuModel.predict():96-99.
-    if job.environment_prob_pct > 0.0:
-        from crc_covlib.helper import itur_p2109  # type: ignore[import-untyped]
-
-        bel_db = float(
-            itur_p2109.BuildingEntryLoss(
-                job.frequency_mhz / 1000.0,
-                job.environment_prob_pct,
-                itur_p2109.BuildingType.TRADITIONAL,
-                0.0,
-            )
-        )
-        if math.isfinite(bel_db):
-            finite_mask = np.isfinite(pl_grid)
-            pl_grid[finite_mask] += np.float32(bel_db)
-            log.info(
-                "[%s] P.2109 BEL +%.1f dB (env=%s, prob=%.0f%%)",
-                job.code,
-                bel_db,
-                job.environment,
-                job.environment_prob_pct,
-            )
-        else:
-            log.warning(
-                "[%s] P.2109 BEL non-finite cho freq=%.1f MHz, prob=%.0f%% — skip",
-                job.code,
-                job.frequency_mhz,
-                job.environment_prob_pct,
             )
 
     return pl_grid
@@ -333,7 +256,7 @@ def _build_features(
     Cho mỗi SF s: polygon "SF≤s" = vùng tất cả cell có min_sf ∈ [1, s].
     Bands nested (SF12 ⊃ SF11 ⊃ ... ⊃ SF7). Thứ tự feature: SF12 trước, SF7
     sau cùng → MapLibre render SF12 ở dưới, SF7 trên cùng (hiệu ứng phân
-    tầng giống Figure 11). FE cũng có fill-sort-key dự phòng nếu loader tự
+    tầng giống Figure 11). FE cũng có fill-sort-key dự phòng nểu loader tự
     đảo thứ tự.
     """
     from skimage import measure  # type: ignore[import-untyped]
@@ -371,7 +294,7 @@ def _build_features(
     return features
 
 
-async def _compute_one(job: GatewayJob) -> dict[str, Any]:
+def _compute_one(job: GatewayJob) -> dict[str, Any]:
     """Worker: tính toàn bộ pipeline cho 1 gateway, dump GeoJSON."""
     logging.basicConfig(
         level=logging.INFO,
@@ -380,7 +303,7 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
     t0 = time.time()
 
     dlon, dlat = meters_to_degrees(job.lat, job.radius_km * 1000.0, job.radius_km * 1000.0)
-    lon_min, lon_max = job.lon - dlon, job.lon + dlat
+    lon_min, lon_max = job.lon - dlon, job.lon + dlon
     lat_min, lat_max = job.lat - dlat, job.lat + dlat
     step_dlon, step_dlat = meters_to_degrees(job.lat, job.grid_m, job.grid_m)
     nx = math.ceil((lon_max - lon_min) / step_dlon) + 1
@@ -389,86 +312,9 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
     log.info("[%s] start grid %d×%d (%d cells)", job.code, nx, ny, nx * ny)
 
     pl_grid = _compute_pl_grid(job, nx, ny, lat_min, lon_min, step_dlat, step_dlon)
-
-    stage2_model_version: str | None = None
-    if job.with_stage2 and job.stage2_base_url and job.stage2_auth_token:
-        client = httpx.AsyncClient(
-            base_url=job.stage2_base_url,
-            headers={"Authorization": f"Bearer {job.stage2_auth_token}"},
-            timeout=30.0, # Increased timeout for batch processing
-        )
-        try:
-            all_targets: list[TargetSchema] = []
-            grid_coords = []
-            for iy in range(ny):
-                for ix in range(nx):
-                    lat = lat_min + iy * step_dlat
-                    lon = lon_min + ix * step_dlon
-                    if math.isfinite(pl_grid[iy, ix]):
-                        all_targets.append(TargetSchema(
-                            latitude=lat,
-                            longitude=lon,
-                            spreading_factor=SF_LEVELS[0], # SF doesn't affect residual for now
-                            frequency_mhz=job.frequency_mhz
-                        ))
-                        grid_coords.append((iy, ix))
-            
-            batch_size = 1000 # Configurable batch size
-            residuals_ml = np.full(pl_grid.shape, np.nan, dtype=np.float32)
-            overall_ood = np.full(pl_grid.shape, False, dtype=bool)
-
-            for i in range(0, len(all_targets), batch_size):
-                batch_targets = all_targets[i : i + batch_size]
-                batch_coords = grid_coords[i : i + batch_size]
-                
-                batch_request = BatchPredictionRequest(
-                    gateway=GatewaySchema(
-                        id=str(uuid.uuid4()), # Placeholder UUID, not used by ml-service for now
-                        code=job.code,
-                        name=job.name,
-                        latitude=job.lat,
-                        longitude=job.lon,
-                        altitude_m=job.altitude_m,
-                        antenna_height_m=job.antenna_height_m,
-                        antenna_gain_dbi=job.antenna_gain_dbi,
-                        tx_power_dbm=job.tx_power_dbm,
-                        frequency_mhz=job.frequency_mhz,
-                    ),
-                    targets=[cast(TargetSchema, t) for t in batch_targets]
-                )
-                
-                log.info("[%s] Calling Stage 2 /residuals/batch with %d targets (%d/%d)", job.code, len(batch_targets), i, len(all_targets))
-                resp = await client.post("/residuals/batch", json=batch_request.model_dump())
-                resp.raise_for_status() # Raise an exception for 4xx or 5xx responses
-                batch_response = resp.json()
-                
-                if "model_version" in batch_response:
-                    stage2_model_version = batch_response["model_version"]
-                
-                for j, item in enumerate(batch_response["residuals"]):
-                    iy, ix = batch_coords[j]
-                    if item["residual_db"] is not None and math.isfinite(pl_grid[iy, ix]):
-                        residuals_ml[iy, ix] = item["residual_db"]
-                        pl_grid[iy, ix] += residuals_ml[iy, ix]
-                    overall_ood[iy, ix] = item["ood"]
-            log.info("[%s] Stage 2 residual correction applied. Model version: %s", job.code, stage2_model_version)
-        except httpx.HTTPStatusError as e:
-            log.error("[%s] Stage 2 HTTP error: %s (response: %s)", job.code, e, e.response.text[:200])
-            if e.response.status_code == 503:
-                log.warning("[%s] Stage 2 service unavailable (503) — falling back to Stage 1 only.", job.code)
-            stage2_model_version = None
-        except httpx.RequestError as e:
-            log.error("[%s] Stage 2 request error: %s", job.code, e)
-            stage2_model_version = None
-        finally:
-            await client.aclose()
-
     min_sf = _derive_min_sf(pl_grid, job)
     features = _build_features(min_sf, lon_min, lat_min, step_dlon, step_dlat)
 
-    model_parts = ["ITU-R P.1812", "P.2108"]
-    if job.environment_prob_pct > 0.0:
-        model_parts.append("P.2109")
     fc = {
         "type": "FeatureCollection",
         "properties": {
@@ -478,10 +324,7 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
             "gateway_lon": job.lon,
             "grid_m": job.grid_m,
             "radius_km": job.radius_km,
-            "stage2_model_version": stage2_model_version,
-            "model": " + ".join(model_parts),
-            "location_percent": job.location_percent,
-            "environment": job.environment,
+            "model": "ITU-R P.1812 + P.2108",
             "bands": "min-SF (SF7..SF12), nested cumulative",
         },
         "features": features,
@@ -492,7 +335,7 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
     out.write_text(json.dumps(fc), encoding="utf-8")
     elapsed = time.time() - t0
     log.info("[%s] done %.0fs → %s", job.code, elapsed, out)
-    result = {
+    return {
         "code": job.code,
         "name": job.name,
         "lat": job.lat,
@@ -500,11 +343,8 @@ async def _compute_one(job: GatewayJob) -> dict[str, Any]:
         "elapsed_s": round(elapsed, 1),
         "cells": int(nx * ny),
         "covered_cells": int((min_sf > 0).sum()),
-        "stage2_model_version": stage2_model_version,
-        "location_percent": job.location_percent,
-        "environment": job.environment,
     }
-    return result
+
 
 def _load_gateways(db_url: str, only_code: str | None) -> list[dict[str, Any]]:
     import psycopg
@@ -594,47 +434,7 @@ def main() -> int:
         default=str(OUTPUT_DIR),
         help=f"Default: {OUTPUT_DIR}",
     )
-    # --- Arguments pour le Stage 2 (Machine Learning) ---
-    parser.add_argument("--with-stage2", action="store_true", help="Enable Stage 2 ML residual correction")
-    parser.add_argument(
-        "--stage2-base-url", 
-        default=os.environ.get("STAGE2_PREDICT_BASE_URL"), 
-        help="Base URL for Stage 2 ML service (e.g., http://ml-service:8001)"
-    )
-    parser.add_argument(
-        "--stage2-auth-token", 
-        default=_get_stage2_auth_token(), 
-        help="Auth token for Stage 2 ML service"
-    )
-
-    # --- Arguments pour le Stage 1 (Modèles Physiques ITU) ---
-    parser.add_argument(
-        "--location-percent",
-        type=float,
-        default=95.0,
-        help=(
-            "P.1812 + P.2108 location percentage. 50 = median (lạc quan), "
-            "95 = conservative (band biên siết, 95%% locations có PL ≤ giá "
-            "trị này). Mặc định 95."
-        ),
-    )
-    parser.add_argument(
-        "--environment",
-        choices=("outdoor", "indoor", "indoor_deep"),
-        default="outdoor",
-        help=(
-            "Receiver environment cho P.2109 BEL. outdoor → skip (default). "
-            "indoor = 50%% probability (sàn 1, có cửa sổ). indoor_deep = 90%% "
-            "(tầng trong, tường gạch dày)."
-        ),
-    )
     args = parser.parse_args()
-
-    env_prob_pct_map = {"outdoor": 0.0, "indoor": 50.0, "indoor_deep": 90.0}
-    env_prob_pct = env_prob_pct_map[args.environment]
-    if not 0.0 <= args.location_percent <= 100.0:
-        log.error("--location-percent ngoài [0, 100]: %.2f", args.location_percent)
-        return 2
 
     dem_dir = os.environ.get("LORA_DEM_DIRECTORY")
     if not dem_dir or not Path(dem_dir).is_dir():
@@ -698,9 +498,6 @@ def main() -> int:
                 dem_dir=dem_dir,
                 surface_dem_dir=surface_dem_dir,
                 output_path=str(out_path),
-                location_percent=float(args.location_percent),
-                environment_prob_pct=env_prob_pct,
-                environment=str(args.environment),
             )
         )
 
@@ -722,16 +519,15 @@ def main() -> int:
     )
     t_start = time.time()
     if args.workers <= 1 or len(jobs) <= 1:
-        # Run synchronously for a single worker or single job
-        results = [asyncio.run(_compute_one(j)) for j in jobs]
+        results = [_compute_one(j) for j in jobs]
     else:
         with mp.Pool(processes=args.workers) as pool:
-            results = pool.map(_run_async_compute_one, jobs)
+            results = pool.map(_compute_one, jobs)
 
     total = time.time() - t_start
     log.info("Hoàn tất: %d job, %.0fs (%.1f phút)", len(jobs), total, total / 60)
 
-    # Merge avec manifest cũ (nếu có) để không mất gateway từ lần chạy trước.
+    # Merge với manifest cũ (nếu có) để không mất gateway từ lần chạy trước.
     manifest_path = out_dir / "manifest.json"
     existing: dict[str, dict[str, Any]] = {}
     if manifest_path.exists():
@@ -743,24 +539,17 @@ def main() -> int:
             pass
     for r in results:
         existing[r["code"]] = r
-    model_str = "ITU-R P.1812 + P.2108"
-    if env_prob_pct > 0.0:
-        model_str += " + P.2109"
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
         "radius_km": args.radius_km if args.radius_km is not None else "auto",
-        # --- Dictionnaire de sortie de la simulation fusionné ---
-        "model": model_str,
-        "stage2_model_version": next((r["stage2_model_version"] for r in results if r.get("stage2_model_version")), None),
-        "bands": "min-SF (SF7..SF12), nested cumulative",
-        "location_percent": float(args.location_percent),
-        "environment": str(args.environment),
+        "model": "ITU-R P.1812 + P.2108",
         "gateways": sorted(existing.values(), key=lambda g: g["code"]),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     log.info("Ghi manifest: %s (%d gateway)", manifest_path, len(manifest["gateways"]))
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
