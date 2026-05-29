@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-05-21T09:04:29Z",
+  "generated_at": "2026-05-29T18:45:14Z",
   "grid_m": 50.0,
   "radius_km": "auto",
   "model": "ITU-R P.1812 + P.2108",
-  "location_percent": 95.0,
+  "location_percent": 50.0,
   "environment": "outdoor",
   "gateways": [
     {
@@ -33,10 +33,10 @@
       "name": "DNIIT GW 0507da",
       "lat": 16.0740935,
       "lon": 108.1524913,
-      "elapsed_s": 31605.9,
+      "elapsed_s": 535.1,
       "cells": 2137444,
-      "covered_cells": 18325,
-      "location_percent": 95.0,
+      "covered_cells": 53805,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -143,10 +143,10 @@
       "name": "DNIIT GW 0fd629",
       "lat": 16.06815,
       "lon": 108.15448,
-      "elapsed_s": 26114.9,
+      "elapsed_s": 525.1,
       "cells": 2137444,
-      "covered_cells": 31755,
-      "location_percent": 95.0,
+      "covered_cells": 53869,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -154,10 +154,10 @@
       "name": "DNIIT GW 0fd63b",
       "lat": 15.98571,
       "lon": 108.23986,
-      "elapsed_s": 26071.9,
+      "elapsed_s": 620.4,
       "cells": 2137444,
-      "covered_cells": 37816,
-      "location_percent": 95.0,
+      "covered_cells": 86737,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {

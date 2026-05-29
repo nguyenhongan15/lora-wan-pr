@@ -16,6 +16,11 @@ GatewayId = NewType("GatewayId", UUID)
 # AS923-2/VN: device EIRP cap (LoRaWAN regional params).
 AS923_DEVICE_TX_POWER_CAP_DBM = 14.0
 
+# Device antenna defaults (whip TX, PCB integrated RX). Shared giữa Target
+# dataclass và precompute script — sửa 1 chỗ duy nhất khi đổi BOM.
+DEVICE_DEFAULT_TX_GAIN_DBI = 2.0
+DEVICE_DEFAULT_RX_GAIN_DBI = 0.0
+
 # Bottleneck direction trong bidirectional link budget.
 LinkBottleneck = Literal["uplink", "downlink", "both_ok"]
 
@@ -82,9 +87,9 @@ class Target:
     longitude: float
     spreading_factor: int  # 7..12
     frequency_mhz: float = 923.0
-    rx_antenna_gain_dbi: float = 0.0
+    rx_antenna_gain_dbi: float = DEVICE_DEFAULT_RX_GAIN_DBI
     tx_power_dbm: float = AS923_DEVICE_TX_POWER_CAP_DBM
-    tx_antenna_gain_dbi: float = 2.0
+    tx_antenna_gain_dbi: float = DEVICE_DEFAULT_TX_GAIN_DBI
     rx_sensitivity_dbm: float | None = None
     environment: TerminalEnvironment = "outdoor"
 

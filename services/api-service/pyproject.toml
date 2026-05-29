@@ -39,6 +39,11 @@ dependencies = [
     # offline (CLI precompute), không touch runtime API. Đặt ở api-service vì
     # script reuse Stage1ItuModel + CrcCovlibBackend.
     "scikit-image>=0.24",
+    # shapely cho `_build_features` polygon hole detection. skimage
+    # find_contours không phân biệt outer ring với inner hole (vd terrain
+    # shadow tạo "đảo" SF cao giữa band SF thấp); shapely.contains test
+    # nesting để build Polygon(outer, holes=[...]) đúng theo GeoJSON spec.
+    "shapely>=2.0",
     # ChirpStack v4 không có REST API built-in. Public deployments thường
     # chỉ expose gRPC-web (qua nginx, port 443) — không có sidecar
     # chirpstack-rest-api. Adapter ChirpStack giao tiếp qua gRPC-web frame

@@ -59,7 +59,10 @@ export const STATUS_COLOR_FALLBACK = "#7c3aed";
 export const MARGIN_BAR_RANGE = { min: -10, max: 20 };
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Basemap raster tiles (CARTO Voyager — free for OSM-attributed use)
+ * Basemap raster tiles.
+ *  - BASEMAP_STYLE (CARTO Voyager): tab "Bản đồ điểm đo" + "Dự đoán điểm".
+ *  - SATELLITE_BASEMAP_STYLE (ESRI World Imagery): tab "Bản đồ phủ sóng" —
+ *    người dùng cần đối chiếu band min-SF với toà nhà/đường thực tế.
  * ─────────────────────────────────────────────────────────────────────── */
 
 export const BASEMAP_STYLE = {
@@ -75,6 +78,23 @@ export const BASEMAP_STYLE = {
       tileSize: 256,
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxzoom: 19,
+    },
+  },
+  layers: [{ id: "basemap", type: "raster", source: "basemap" }],
+};
+
+export const SATELLITE_BASEMAP_STYLE = {
+  version: 8,
+  sources: {
+    basemap: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      attribution:
+        'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
       maxzoom: 19,
     },
   },

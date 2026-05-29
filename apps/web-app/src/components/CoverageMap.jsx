@@ -22,6 +22,7 @@ import { MinSFPanel } from "./MinSFPanel.jsx";
 import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
 import {
   BASEMAP_STYLE,
+  SATELLITE_BASEMAP_STYLE,
   DEFAULT_FREQ_MHZ,
   DEFAULT_SF,
   DEFAULT_SORT_BY,
@@ -810,7 +811,9 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     try {
       map = new maplibregl.Map({
         container,
-        style: /** @type {any} */ (BASEMAP_STYLE),
+        style: /** @type {any} */ (
+          mode === "heatmap" ? SATELLITE_BASEMAP_STYLE : BASEMAP_STYLE
+        ),
         center: INITIAL_CENTER,
         zoom: INITIAL_ZOOM,
       });
