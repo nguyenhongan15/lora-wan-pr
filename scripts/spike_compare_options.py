@@ -34,9 +34,7 @@ FREQ_MHZ = 923.2
 RX_HEIGHT_M = 1.5
 
 DEM_DIR = os.environ.get("LORA_DEM_DIRECTORY", "E:/DATN/lora-data/dem")
-SURFACE_DEM_DIR = os.environ.get(
-    "LORA_SURFACE_DEM_DIRECTORY", "E:/DATN/lora-data/dem-surface"
-)
+SURFACE_DEM_DIR = os.environ.get("LORA_SURFACE_DEM_DIRECTORY", "E:/DATN/lora-data/dem-surface")
 
 CLIP_EXCESS_M = 10.0
 TMP_DIR = REPO_ROOT / "tmp" / "dsm_clip10"
@@ -69,9 +67,11 @@ def build_clipped_dsm() -> Path:
     n_clipped = int(np.sum(excess > CLIP_EXCESS_M))
     pct = 100.0 * n_clipped / excess.size
     p99 = float(np.percentile(excess, 99))
-    print(f"[B] DSM clipped: {n_clipped:,}/{excess.size:,} pixel ({pct:.2f}%) "
-          f"capped, original p99={p99:.1f}m -> {CLIP_EXCESS_M:.0f}m. "
-          f"Tile -> {out_path}")
+    print(
+        f"[B] DSM clipped: {n_clipped:,}/{excess.size:,} pixel ({pct:.2f}%) "
+        f"capped, original p99={p99:.1f}m -> {CLIP_EXCESS_M:.0f}m. "
+        f"Tile -> {out_path}"
+    )
     return TMP_DIR
 
 
@@ -89,8 +89,11 @@ def build_built_up_only_dsm() -> Path:
     TMP_H_DIR.mkdir(parents=True, exist_ok=True)
     out_path = TMP_H_DIR / "copernicus_glo30_danang.tif"
 
-    with rasterio.open(src_dsm) as dsm_ds, rasterio.open(src_dtm) as dtm_ds, \
-            rasterio.open(LANDCOVER_TILE) as lc_ds:
+    with (
+        rasterio.open(src_dsm) as dsm_ds,
+        rasterio.open(src_dtm) as dtm_ds,
+        rasterio.open(LANDCOVER_TILE) as lc_ds,
+    ):
         dsm = dsm_ds.read(1).astype(np.float32)
         dtm = dtm_ds.read(1).astype(np.float32)
 
@@ -114,8 +117,10 @@ def build_built_up_only_dsm() -> Path:
 
     n_built = int(built_up_mask.sum())
     pct = 100.0 * n_built / built_up_mask.size
-    print(f"[H] Built-up pixel: {n_built:,}/{built_up_mask.size:,} ({pct:.2f}%) "
-          f"keep DSM, else set DSM=DTM. Tile -> {out_path}")
+    print(
+        f"[H] Built-up pixel: {n_built:,}/{built_up_mask.size:,} ({pct:.2f}%) "
+        f"keep DSM, else set DSM=DTM. Tile -> {out_path}"
+    )
     return TMP_H_DIR
 
 
@@ -136,9 +141,7 @@ def make_sim(variant: str, clipped_dsm_dir: Path, built_up_dsm_dir: Path) -> cov
     sim.SetITURP1812TimePercentage(50.0)
     sim.SetITURP1812LocationPercentage(50.0)
     sim.SetPrimaryTerrainElevDataSource(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF)
-    sim.SetTerrainElevDataSourceDirectory(
-        covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, DEM_DIR
-    )
+    sim.SetTerrainElevDataSourceDirectory(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, DEM_DIR)
     sim.SetResultType(covlib.ResultType.PATH_LOSS_DB)
 
     if variant == "baseline":
@@ -190,13 +193,13 @@ def main() -> int:
     built_up_dir = build_built_up_only_dsm()
 
     test_points = [
-        ("gw_itself",        GW_LAT, GW_LON),
-        ("0.5km_N",          *_offset(GW_LAT, GW_LON, 0.5, 0.0)),
-        ("1km_W_built_up",   *_offset(GW_LAT, GW_LON, 1.0, 270.0)),
-        ("3km_W",            *_offset(GW_LAT, GW_LON, 3.0, 270.0)),
-        ("5km_S",            *_offset(GW_LAT, GW_LON, 5.0, 180.0)),
-        ("7km_SW",           *_offset(GW_LAT, GW_LON, 7.0, 225.0)),
-        ("10km_W",           *_offset(GW_LAT, GW_LON, 10.0, 270.0)),
+        ("gw_itself", GW_LAT, GW_LON),
+        ("0.5km_N", *_offset(GW_LAT, GW_LON, 0.5, 0.0)),
+        ("1km_W_built_up", *_offset(GW_LAT, GW_LON, 1.0, 270.0)),
+        ("3km_W", *_offset(GW_LAT, GW_LON, 3.0, 270.0)),
+        ("5km_S", *_offset(GW_LAT, GW_LON, 5.0, 180.0)),
+        ("7km_SW", *_offset(GW_LAT, GW_LON, 7.0, 225.0)),
+        ("10km_W", *_offset(GW_LAT, GW_LON, 10.0, 270.0)),
     ]
 
     variants = ["baseline", "A_no_dsm", "B_clip10", "C_sample100", "H_built_up"]
@@ -213,12 +216,18 @@ def main() -> int:
         sim.Release()
 
     print()
-    print(f"{'cell':<18} {'d_km':>5} " + " ".join(f"{v:>11}" for v in variants)
-          + "    " + " ".join(f"d_{v[:6]:>9}" for v in variants if v != "baseline"))
+    print(
+        f"{'cell':<18} {'d_km':>5} "
+        + " ".join(f"{v:>11}" for v in variants)
+        + "    "
+        + " ".join(f"d_{v[:6]:>9}" for v in variants if v != "baseline")
+    )
     print("-" * 130)
     for name, lat, lon in test_points:
-        d_km = math.sqrt(((lat - GW_LAT) * 111.32) ** 2
-                         + ((lon - GW_LON) * 111.32 * math.cos(math.radians(GW_LAT))) ** 2)
+        d_km = math.sqrt(
+            ((lat - GW_LAT) * 111.32) ** 2
+            + ((lon - GW_LON) * 111.32 * math.cos(math.radians(GW_LAT))) ** 2
+        )
         row = f"{name:<18} {d_km:>5.2f} "
         row += " ".join(f"{pl[v][name]:>11.2f}" for v in variants)
         base = pl["baseline"][name]

@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # --- Config ---
 
+
 class Settings(BaseSettings):
     auth_token: str = Field(alias="LORA_STAGE2_AUTH_TOKEN")
     db_url: str = Field(alias="LORA_DB_URL")
@@ -32,14 +33,16 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+
 settings = Settings()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = None
-    app.state.is_model_active = False # État stocké de manière thread-safe dans l'app
+    app.state.is_model_active = False  # État stocké de manière thread-safe dans l'app
 
     if Path(settings.model_path).exists():
         try:
@@ -56,10 +59,12 @@ async def lifespan(app: FastAPI):
     app.state.model = None
     app.state.is_model_active = False
 
+
 # --- App Schemas ---
 
 app = FastAPI(title="LoRa ML Prediction Service", lifespan=lifespan)
 security = HTTPBearer(auto_error=False)
+
 
 class TargetSchema(BaseModel):
     latitude: float
@@ -67,8 +72,10 @@ class TargetSchema(BaseModel):
     spreading_factor: int
     frequency_mhz: float
 
+
 class BatchTargetSchema(TargetSchema):
     stage1_pl_db: float | None = None
+
 
 class GatewaySchema(BaseModel):
     id: str
@@ -82,30 +89,39 @@ class GatewaySchema(BaseModel):
     tx_power_dbm: float
     frequency_mhz: float
 
+
 class PredictionRequest(BaseModel):
     target: TargetSchema
     serving_gateway: GatewaySchema
+
 
 class PredictionResponse(BaseModel):
     residual_db: float | None
     model_version: str
     ood: bool = False
 
+
 class BatchPredictionRequest(BaseModel):
     gateway: GatewaySchema
     targets: list[BatchTargetSchema]
+
 
 class BatchResidualItem(BaseModel):
     residual_db: float | None
     ood: bool
 
+
 class BatchPredictionResponse(BaseModel):
     model_version: str
     residuals: list[BatchResidualItem]
 
+
 # --- Helpers & Dependencies ---
 
-async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)]):
+
+async def verify_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+):
     if credentials is None or credentials.credentials != settings.auth_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,16 +129,21 @@ async def verify_token(credentials: Annotated[HTTPAuthorizationCredentials | Non
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+
 def check_model_active(request: Request):
     # Lecture dynamique de l'état réel de l'application
     if not getattr(request.app.state, "is_model_active", False):
         raise HTTPException(status_code=503, detail="no active model")
 
+
 def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
-    return not (settings.min_lat <= lat <= settings.max_lat and
-                settings.min_lon <= lon <= settings.max_lon and
-                settings.min_sf <= sf <= settings.max_sf and
-                settings.min_freq_mhz <= freq <= settings.max_freq_mhz)
+    return not (
+        settings.min_lat <= lat <= settings.max_lat
+        and settings.min_lon <= lon <= settings.max_lon
+        and settings.min_sf <= sf <= settings.max_sf
+        and settings.min_freq_mhz <= freq <= settings.max_freq_mhz
+    )
+
 
 def extract_features_dict(t: TargetSchema, gw: GatewaySchema) -> dict:
     return {
@@ -135,21 +156,24 @@ def extract_features_dict(t: TargetSchema, gw: GatewaySchema) -> dict:
         "gw_alt": gw.altitude_m,
         "gw_ant_h": gw.antenna_height_m,
         "gw_gain": gw.antenna_gain_dbi,
-        "gw_tx_p": gw.tx_power_dbm
+        "gw_tx_p": gw.tx_power_dbm,
     }
 
+
 # --- API Endpoints ---
+
 
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
 
 @app.post("/residual", response_model=PredictionResponse)
 async def predict_residual(
     request: Request,
     payload: PredictionRequest,
     _auth: Annotated[None, Depends(verify_token)],
-    _active: Annotated[None, Depends(check_model_active)]
+    _active: Annotated[None, Depends(check_model_active)],
 ):
     t = payload.target
     if is_ood(t.latitude, t.longitude, t.spreading_factor, t.frequency_mhz):
@@ -159,17 +183,20 @@ async def predict_residual(
 
     try:
         residual = float(request.app.state.model.predict(features)[0])
-        return PredictionResponse(residual_db=residual, model_version=settings.model_version, ood=False)
+        return PredictionResponse(
+            residual_db=residual, model_version=settings.model_version, ood=False
+        )
     except Exception as e:
         logger.error(f"Inference error: {e}")
         raise HTTPException(status_code=500, detail="Internal inference error") from e
+
 
 @app.post("/residuals/batch", response_model=BatchPredictionResponse)
 async def predict_residuals_batch(
     request: Request,
     payload: BatchPredictionRequest,
     _auth: Annotated[None, Depends(verify_token)],
-    _active: Annotated[None, Depends(check_model_active)]
+    _active: Annotated[None, Depends(check_model_active)],
 ):
     gw = payload.gateway
     targets = payload.targets
@@ -199,7 +226,4 @@ async def predict_residuals_batch(
             logger.error(f"Batch inference error: {e}")
             raise HTTPException(status_code=500, detail="Internal batch inference error") from e
 
-    return BatchPredictionResponse(
-        model_version=settings.model_version,
-        residuals=results
-    )
+    return BatchPredictionResponse(model_version=settings.model_version, residuals=results)

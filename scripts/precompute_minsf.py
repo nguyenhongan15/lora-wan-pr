@@ -239,7 +239,11 @@ def _compute_pl_grid(
                 if n_errors < 3:
                     log.warning(
                         "[%s] cell (%.5f, %.5f) %s: %s",
-                        job.code, lat, lon, type(exc).__name__, exc,
+                        job.code,
+                        lat,
+                        lon,
+                        type(exc).__name__,
+                        exc,
                     )
                 n_errors += 1
 
@@ -912,9 +916,7 @@ def main() -> int:
         if args.radius_km is not None:
             radius_km = float(args.radius_km)
         else:
-            radius_km, capped = _auto_radius_km(
-                tx_power, gain, freq, args.auto_radius_margin_db
-            )
+            radius_km, capped = _auto_radius_km(tx_power, gain, freq, args.auto_radius_margin_db)
             if capped:
                 log.warning(
                     "[%s] auto-radius cap %.1f km (Friis tính lớn hơn %.0f km). "
@@ -1007,7 +1009,8 @@ def main() -> int:
             log.warning(
                 "Manifest cũ %s không đọc được (%s) — bắt đầu từ trống, "
                 "entry gateway lần chạy trước sẽ mất.",
-                manifest_path, exc,
+                manifest_path,
+                exc,
             )
     for r in results:
         existing[r["code"]] = r

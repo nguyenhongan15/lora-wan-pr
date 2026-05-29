@@ -28,7 +28,7 @@ ESA WorldCover classes (https://esa-worldcover.org/en/data-access):
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
 
 # Giá trị integer khớp `crc_covlib.simulation.P1812ClutterCategory` enum —
 # import lazy ở caller để file này không phụ thuộc crc-covlib lúc test.
@@ -57,7 +57,7 @@ ESA_WORLDCOVER_TO_P1812: Final[dict[int, int]] = {
 ESA_WORLDCOVER_DEFAULT_P1812: Final[int] = _P1812_OPEN_RURAL
 
 
-def apply_esa_worldcover_mapping(sim, landcover_directory: str) -> None:
+def apply_esa_worldcover_mapping(sim: Any, landcover_directory: str) -> None:
     """Wire ESA WorldCover GeoTIFF vào Simulation với P.1812 mapping.
 
     Caller phải đã `import crc_covlib.simulation as covlib`; nhận `sim` là

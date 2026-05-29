@@ -89,9 +89,7 @@ class DistanceBinnedBias:
                     for b in raw.get("bins", [])
                 )
             except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-                log.warning(
-                    "Bias file %s parse failed (%s) — treating as no-bias.", path, e
-                )
+                log.warning("Bias file %s parse failed (%s) — treating as no-bias.", path, e)
                 bins = ()
             self._cache[gw_code] = bins if bins else None
             return self._cache[gw_code]

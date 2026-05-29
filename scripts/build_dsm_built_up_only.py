@@ -29,9 +29,11 @@ ESA_BUILT_UP_CLASS = 50
 def build(dsm_path: Path, dtm_path: Path, lc_path: Path, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with rasterio.open(dsm_path) as dsm_ds, \
-            rasterio.open(dtm_path) as dtm_ds, \
-            rasterio.open(lc_path) as lc_ds:
+    with (
+        rasterio.open(dsm_path) as dsm_ds,
+        rasterio.open(dtm_path) as dtm_ds,
+        rasterio.open(lc_path) as lc_ds,
+    ):
         dsm = dsm_ds.read(1).astype(np.float32)
         dtm = dtm_ds.read(1).astype(np.float32)
 

@@ -49,8 +49,16 @@ _BBOX_PRESETS: dict[str, tuple[float, float, float, float]] = {
 # DataFrame với column names này. Thứ tự không quan trọng (xgboost tự align),
 # nhưng giữ explicit để dễ debug.
 FEATURE_COLS = [
-    "lat", "lon", "sf", "frequency_mhz",
-    "gw_lat", "gw_lon", "gw_alt", "gw_ant_h", "gw_gain", "gw_tx_p",
+    "lat",
+    "lon",
+    "sf",
+    "frequency_mhz",
+    "gw_lat",
+    "gw_lon",
+    "gw_alt",
+    "gw_ant_h",
+    "gw_gain",
+    "gw_tx_p",
 ]
 
 
@@ -125,12 +133,20 @@ def _build_dataset(rows, stage1, label: str) -> tuple[np.ndarray, np.ndarray]:
             )
             pred = stage1.predict(target, gw)
             residual = float(r[3]) - pred.uplink_rssi_dbm
-            feats.append([
-                target.latitude, target.longitude,
-                float(target.spreading_factor), target.frequency_mhz,
-                gw.latitude, gw.longitude, gw.altitude_m,
-                gw.antenna_height_m, gw.antenna_gain_dbi, gw.tx_power_dbm,
-            ])
+            feats.append(
+                [
+                    target.latitude,
+                    target.longitude,
+                    float(target.spreading_factor),
+                    target.frequency_mhz,
+                    gw.latitude,
+                    gw.longitude,
+                    gw.altitude_m,
+                    gw.antenna_height_m,
+                    gw.antenna_gain_dbi,
+                    gw.tx_power_dbm,
+                ]
+            )
             residuals.append(residual)
         except Exception as e:
             n_errors += 1
@@ -180,7 +196,7 @@ def _stats(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     return {
         "n": int(err.size),
         "bias_db": float(np.mean(err)),
-        "rmse_db": float(np.sqrt(np.mean(err ** 2))),
+        "rmse_db": float(np.sqrt(np.mean(err**2))),
         "mae_db": float(np.mean(np.abs(err))),
     }
 
@@ -199,8 +215,12 @@ def _train(args, env: dict) -> int:
         X_train, y_train = cache["X_train"], cache["y_train"]  # noqa: N806
         X_test, y_test = cache["X_test"], cache["y_test"]  # noqa: N806
     else:
-        train_rows = _fetch_rows(env["LORA_DB_URL"], bbox, args.train_start, args.train_end, args.max_link_km)
-        test_rows = _fetch_rows(env["LORA_DB_URL"], bbox, args.test_start, args.test_end, args.max_link_km)
+        train_rows = _fetch_rows(
+            env["LORA_DB_URL"], bbox, args.train_start, args.train_end, args.max_link_km
+        )
+        test_rows = _fetch_rows(
+            env["LORA_DB_URL"], bbox, args.test_start, args.test_end, args.max_link_km
+        )
         if not train_rows or not test_rows:
             log.error("Empty train or test window — adjust dates")
             return 1
@@ -216,8 +236,12 @@ def _train(args, env: dict) -> int:
             np.savez(cache_path, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test)
             log.info("Cached Stage 1 outputs → %s", cache_path)
 
-    log.info("Train residual stats: mean=%.2f std=%.2f n=%d",
-             y_train.mean(), y_train.std(ddof=1), len(y_train))
+    log.info(
+        "Train residual stats: mean=%.2f std=%.2f n=%d",
+        y_train.mean(),
+        y_train.std(ddof=1),
+        len(y_train),
+    )
 
     from sklearn.model_selection import train_test_split
 
@@ -255,7 +279,8 @@ def _train(args, env: dict) -> int:
         random_state=42,
     )
     model.fit(
-        df_train, y_train_inner,
+        df_train,
+        y_train_inner,
         eval_set=[(df_val, y_val)],
         verbose=False,
     )
@@ -268,12 +293,26 @@ def _train(args, env: dict) -> int:
     null_test = _stats(y_test, np.zeros_like(y_test))
     null_train = _stats(y_train, np.zeros_like(y_train))
 
-    log.info("Train fit:     RMSE=%.2f MAE=%.2f bias=%.2f (n=%d)",
-             train_stats["rmse_db"], train_stats["mae_db"], train_stats["bias_db"], train_stats["n"])
-    log.info("Hold-out test: RMSE=%.2f MAE=%.2f bias=%.2f (n=%d)",
-             test_stats["rmse_db"], test_stats["mae_db"], test_stats["bias_db"], test_stats["n"])
-    log.info("Null baseline:  train RMSE=%.2f | test RMSE=%.2f MAE=%.2f",
-             null_train["rmse_db"], null_test["rmse_db"], null_test["mae_db"])
+    log.info(
+        "Train fit:     RMSE=%.2f MAE=%.2f bias=%.2f (n=%d)",
+        train_stats["rmse_db"],
+        train_stats["mae_db"],
+        train_stats["bias_db"],
+        train_stats["n"],
+    )
+    log.info(
+        "Hold-out test: RMSE=%.2f MAE=%.2f bias=%.2f (n=%d)",
+        test_stats["rmse_db"],
+        test_stats["mae_db"],
+        test_stats["bias_db"],
+        test_stats["n"],
+    )
+    log.info(
+        "Null baseline:  train RMSE=%.2f | test RMSE=%.2f MAE=%.2f",
+        null_train["rmse_db"],
+        null_test["rmse_db"],
+        null_test["mae_db"],
+    )
 
     output = Path(args.output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -297,8 +336,12 @@ def main() -> int:
     p.add_argument("--train-end", default="2025-12-31")
     p.add_argument("--test-start", default="2026-01-01")
     p.add_argument("--test-end", default="2026-02-28")
-    p.add_argument("--max-link-km", type=float, default=50.0,
-                   help="Filter d<X km (survey ETL corruption guard).")
+    p.add_argument(
+        "--max-link-km",
+        type=float,
+        default=50.0,
+        help="Filter d<X km (survey ETL corruption guard).",
+    )
     p.add_argument("--n-estimators", type=int, default=2000)
     p.add_argument("--learning-rate", type=float, default=0.05)
     p.add_argument("--max-depth", type=int, default=4)
@@ -308,10 +351,16 @@ def main() -> int:
     p.add_argument("--reg-alpha", type=float, default=1.0)
     p.add_argument("--reg-lambda", type=float, default=2.0)
     p.add_argument("--early-stopping-rounds", type=int, default=50)
-    p.add_argument("--output-path", default="/app-shared/ml/stage2_xgb.joblib",
-                   help="Output joblib path (container view).")
-    p.add_argument("--cache-path", default=None,
-                   help="Cache Stage 1 outputs để re-run nhanh (npz). Skip stage1 nếu tồn tại.")
+    p.add_argument(
+        "--output-path",
+        default="/app-shared/ml/stage2_xgb.joblib",
+        help="Output joblib path (container view).",
+    )
+    p.add_argument(
+        "--cache-path",
+        default=None,
+        help="Cache Stage 1 outputs để re-run nhanh (npz). Skip stage1 nếu tồn tại.",
+    )
     args = p.parse_args()
     return _train(args, dict(os.environ))
 

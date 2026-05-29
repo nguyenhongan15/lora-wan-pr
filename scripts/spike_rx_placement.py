@@ -35,12 +35,12 @@ FREQ_MHZ = 923.2
 RX_HEIGHT_M = 1.5
 
 DEM_DIR = os.environ.get("LORA_DEM_DIRECTORY", "E:/DATN/lora-data/dem")
-SURFACE_DEM_DIR = os.environ.get(
-    "LORA_SURFACE_DEM_DIRECTORY", "E:/DATN/lora-data/dem-surface"
-)
+SURFACE_DEM_DIR = os.environ.get("LORA_SURFACE_DEM_DIRECTORY", "E:/DATN/lora-data/dem-surface")
 
 
-def _offset_latlon(lat: float, lon: float, dist_km: float, bearing_deg: float) -> tuple[float, float]:
+def _offset_latlon(
+    lat: float, lon: float, dist_km: float, bearing_deg: float
+) -> tuple[float, float]:
     """Great-circle offset (simple flat-earth — ok cho test scale <15 km)."""
     dlat = dist_km / 111.32 * math.cos(math.radians(bearing_deg))
     dlon = dist_km / (111.32 * math.cos(math.radians(lat))) * math.sin(math.radians(bearing_deg))
@@ -61,9 +61,7 @@ def main() -> int:
         covlib.P1812SurfaceProfileMethod.P1812_USE_SURFACE_ELEV_DATA
     )
     sim.SetPrimaryTerrainElevDataSource(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF)
-    sim.SetTerrainElevDataSourceDirectory(
-        covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, DEM_DIR
-    )
+    sim.SetTerrainElevDataSourceDirectory(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, DEM_DIR)
     sim.SetPrimarySurfaceElevDataSource(covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF)
     sim.SetSurfaceElevDataSourceDirectory(
         covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF, SURFACE_DEM_DIR
@@ -83,8 +81,10 @@ def main() -> int:
         ("10km_W", *_offset_latlon(GW_LAT, GW_LON, 10.0, 270.0)),
     ]
 
-    print(f"{'name':<20} {'lat':>10} {'lon':>10} {'DTM':>7} {'DSM':>7} {'gap':>5} "
-          f"{'Rx_amsl':>9} {'d_DTM':>6} {'d_DSM':>6} {'verdict':<8} {'PL_dB':>7}")
+    print(
+        f"{'name':<20} {'lat':>10} {'lon':>10} {'DTM':>7} {'DSM':>7} {'gap':>5} "
+        f"{'Rx_amsl':>9} {'d_DTM':>6} {'d_DSM':>6} {'verdict':<8} {'PL_dB':>7}"
+    )
     print("-" * 120)
 
     for name, lat, lon in test_points:
@@ -103,9 +103,11 @@ def main() -> int:
                 verdict = "DSM"
             else:
                 verdict = "?"
-            print(f"{name:<20} {lat:>10.5f} {lon:>10.5f} "
-                  f"{dtm:>7.2f} {dsm:>7.2f} {gap:>5.1f} "
-                  f"{rx_amsl:>9.2f} {d_dtm:>6.2f} {d_dsm:>6.2f} {verdict:<8} {pl:>7.2f}")
+            print(
+                f"{name:<20} {lat:>10.5f} {lon:>10.5f} "
+                f"{dtm:>7.2f} {dsm:>7.2f} {gap:>5.1f} "
+                f"{rx_amsl:>9.2f} {d_dtm:>6.2f} {d_dsm:>6.2f} {verdict:<8} {pl:>7.2f}"
+            )
         except Exception as exc:
             print(f"{name:<20} ERROR: {type(exc).__name__}: {exc}")
 
