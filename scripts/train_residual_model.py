@@ -201,6 +201,147 @@ def _stats(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     }
 
 
+_DIST_BINS = [(0.0, 2.0), (2.0, 5.0), (5.0, 10.0), (10.0, 50.0)]
+_DIST_LABELS = ["<2km", "2-5km", "5-10km", "10-50km"]
+
+
+def _plot_eval(
+    model,
+    df_train_full,
+    df_test,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    train_pred: np.ndarray,
+    test_pred: np.ndarray,
+    plot_dir: Path,
+) -> None:
+    """Vẽ 5 biểu đồ đánh giá vào plot_dir (PNG, dpi=120)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Learning curve: val RMSE theo boosting round
+    evals = getattr(model, "evals_result_", None) or {}
+    val_key = next(iter(evals), None)
+    if val_key and "rmse" in evals[val_key]:
+        rmse_curve = evals[val_key]["rmse"]
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(rmse_curve, label="val RMSE")
+        ax.axvline(
+            model.best_iteration,
+            color="red",
+            linestyle="--",
+            label=f"best iter={model.best_iteration}",
+        )
+        ax.set_xlabel("Boosting round")
+        ax.set_ylabel("RMSE (dB)")
+        ax.set_title("Learning curve (early-stopping val fold)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "01_learning_curve.png", dpi=120)
+        plt.close(fig)
+
+    # 2. Predicted vs measured residual (test)
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(y_test, test_pred, alpha=0.4, s=10)
+    lim = float(max(np.abs(y_test).max(), np.abs(test_pred).max(), 1.0))
+    ax.plot([-lim, lim], [-lim, lim], "k--", alpha=0.5, label="y=x")
+    ax.set_xlabel("Measured residual (dB)")
+    ax.set_ylabel("Predicted residual (dB)")
+    ax.set_title(f"Predicted vs measured (test, n={len(y_test)})")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "02_pred_vs_meas.png", dpi=120)
+    plt.close(fig)
+
+    # 3. Error vs distance (test)
+    err = y_test - test_pred
+    dist = df_test["distance_km"].to_numpy()
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.scatter(dist, err, alpha=0.4, s=10)
+    ax.axhline(0, color="red", linestyle="--", alpha=0.6)
+    ax.set_xlabel("Distance (km)")
+    ax.set_ylabel("Error = measured - predicted (dB)")
+    ax.set_title("Residual error vs distance (test)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "03_error_vs_distance.png", dpi=120)
+    plt.close(fig)
+
+    # 4. Per distance-bin RMSE + bias
+    rmse_per, bias_per, n_per = [], [], []
+    for lo, hi in _DIST_BINS:
+        mask = (dist >= lo) & (dist < hi)
+        if mask.sum() == 0:
+            rmse_per.append(0.0)
+            bias_per.append(0.0)
+            n_per.append(0)
+            continue
+        e = err[mask]
+        rmse_per.append(float(np.sqrt(np.mean(e**2))))
+        bias_per.append(float(np.mean(e)))
+        n_per.append(int(mask.sum()))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    x = np.arange(len(_DIST_LABELS))
+    ax1.bar(x, rmse_per)
+    for i, n in enumerate(n_per):
+        ax1.text(i, rmse_per[i] + 0.3, f"n={n}", ha="center", fontsize=9)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(_DIST_LABELS)
+    ax1.set_ylabel("RMSE (dB)")
+    ax1.set_title("RMSE per distance bin (test)")
+    ax1.grid(True, alpha=0.3, axis="y")
+
+    bar_colors = ["green" if abs(b) < 5 else ("orange" if abs(b) < 10 else "red") for b in bias_per]
+    ax2.bar(x, bias_per, color=bar_colors)
+    ax2.axhline(0, color="black", linewidth=0.8)
+    for i, b in enumerate(bias_per):
+        offset = 0.5 if b >= 0 else -1.0
+        ax2.text(i, b + offset, f"{b:+.2f}", ha="center", fontsize=9)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(_DIST_LABELS)
+    ax2.set_ylabel("Bias = mean(measured - predicted) (dB)")
+    ax2.set_title("Bias per distance bin (test)")
+    ax2.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    fig.savefig(plot_dir / "04_per_bin.png", dpi=120)
+    plt.close(fig)
+
+    # 5. Feature importance (gain)
+    importance = model.feature_importances_
+    cols = list(df_train_full.columns)
+    order = np.argsort(importance)[::-1]
+    fig, ax = plt.subplots(figsize=(8, 6))
+    y_pos = np.arange(len(cols))
+    ax.barh(y_pos, importance[order])
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([cols[i] for i in order])
+    ax.invert_yaxis()
+    ax.set_xlabel("Gain importance (normalized)")
+    ax.set_title("Feature importance")
+    ax.grid(True, alpha=0.3, axis="x")
+    fig.tight_layout()
+    fig.savefig(plot_dir / "05_feature_importance.png", dpi=120)
+    plt.close(fig)
+
+    # Đè train RMSE để hiển thị mức overfit khi so với hold-out
+    train_rmse = float(np.sqrt(np.mean((y_train - train_pred) ** 2)))
+    test_rmse = float(np.sqrt(np.mean((y_test - test_pred) ** 2)))
+    log.info(
+        "Saved 5 plots → %s | train RMSE=%.2f vs test RMSE=%.2f (gap=%.2f dB)",
+        plot_dir,
+        train_rmse,
+        test_rmse,
+        test_rmse - train_rmse,
+    )
+
+
 def _train(args, env: dict) -> int:
     import joblib
     import pandas as pd
@@ -243,7 +384,7 @@ def _train(args, env: dict) -> int:
         len(y_train),
     )
 
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import StratifiedKFold
 
     def _add_derived(X: np.ndarray) -> pd.DataFrame:  # noqa: N803
         df = pd.DataFrame(X, columns=FEATURE_COLS)
@@ -259,10 +400,17 @@ def _train(args, env: dict) -> int:
     df_train_full = _add_derived(X_train)
     df_test = _add_derived(X_test)
 
-    df_train, df_val, y_train_inner, y_val = train_test_split(
-        df_train_full, y_train, test_size=0.2, random_state=42
-    )
-    log.info("Inner split: train=%d val=%d (early-stopping)", len(df_train), len(df_val))
+    # v0.4: phân tầng theo SF để mỗi nếp gấp có đủ tỷ lệ SF7-SF12; lấy nếp gấp
+    # đầu tiên làm train/val cho early-stopping. SF hiếm (vd SF8) không bị bỏ
+    # rơi vào val mà mô hình không học.
+    sf_labels = df_train_full["sf"].astype(int).to_numpy()
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    train_idx, val_idx = next(skf.split(df_train_full, sf_labels))
+    df_train = df_train_full.iloc[train_idx].reset_index(drop=True)
+    df_val = df_train_full.iloc[val_idx].reset_index(drop=True)
+    y_train_inner = y_train[train_idx]
+    y_val = y_train[val_idx]
+    log.info("Inner split (stratified by SF): train=%d val=%d", len(df_train), len(df_val))
 
     model = xgb.XGBRegressor(
         tree_method="hist",
@@ -318,6 +466,18 @@ def _train(args, env: dict) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, output, compress=3)
     log.info("Saved model → %s (%.1f KB)", output, output.stat().st_size / 1024.0)
+
+    if args.plot_dir:
+        _plot_eval(
+            model,
+            df_train_full,
+            df_test,
+            y_train,
+            y_test,
+            train_pred,
+            test_pred,
+            Path(args.plot_dir),
+        )
     return 0
 
 
@@ -345,11 +505,14 @@ def main() -> int:
     p.add_argument("--n-estimators", type=int, default=2000)
     p.add_argument("--learning-rate", type=float, default=0.05)
     p.add_argument("--max-depth", type=int, default=4)
-    p.add_argument("--min-child-weight", type=int, default=10)
+    # v0.4 (2026-05-30): min_child_weight 10→20, reg_lambda 2.0→10.0 để chống
+    # cây vẽ pattern từ <5 mẫu/leaf ở vùng 2-5 km thưa (45 mẫu). Test 4 cấu
+    # hình cho RMSE hold-out 13.93 → 10.94 dB, lệch 2-5 km +17.94 → +3.18 dB.
+    p.add_argument("--min-child-weight", type=int, default=20)
     p.add_argument("--subsample", type=float, default=0.7)
     p.add_argument("--colsample-bytree", type=float, default=0.7)
     p.add_argument("--reg-alpha", type=float, default=1.0)
-    p.add_argument("--reg-lambda", type=float, default=2.0)
+    p.add_argument("--reg-lambda", type=float, default=10.0)
     p.add_argument("--early-stopping-rounds", type=int, default=50)
     p.add_argument(
         "--output-path",
@@ -360,6 +523,11 @@ def main() -> int:
         "--cache-path",
         default=None,
         help="Cache Stage 1 outputs để re-run nhanh (npz). Skip stage1 nếu tồn tại.",
+    )
+    p.add_argument(
+        "--plot-dir",
+        default=None,
+        help="Nếu set, vẽ 5 biểu đồ PNG vào thư mục này (cần matplotlib).",
     )
     args = p.parse_args()
     return _train(args, dict(os.environ))

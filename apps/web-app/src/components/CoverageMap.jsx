@@ -25,6 +25,7 @@ import {
   SATELLITE_BASEMAP_STYLE,
   DEFAULT_FREQ_MHZ,
   DEFAULT_SF,
+  DEFAULT_TX_POWER_DBM,
   DEFAULT_SORT_BY,
   DEFAULT_SORT_ORDER,
   GATEWAY_MARKER_STYLE,
@@ -34,7 +35,6 @@ import {
   MINSF_BAND_COLORS,
   MINSF_FILL_OPACITY,
   PREDICT_MARKER_STYLE,
-  SF_OPTIONS,
   STATUS_COLOR,
   STATUS_COLOR_FALLBACK,
   SURVEY_CIRCLE_PAINT,
@@ -70,10 +70,8 @@ function buildSurveyGeoJson(items) {
   };
 }
 
-/** @typedef {number | "auto"} SfValue */
-
 /**
- * @returns {{ lat: number, lng: number, sf: SfValue | null } | null}
+ * @returns {{ lat: number, lng: number } | null}
  */
 function readUrlState() {
   if (typeof window === "undefined") return null;
@@ -85,29 +83,19 @@ function readUrlState() {
   const lng = Number(lngStr);
   if (!Number.isFinite(lat) || lat < -90 || lat > 90) return null;
   if (!Number.isFinite(lng) || lng < -180 || lng > 180) return null;
-  const sfRaw = p.get("sf");
-  /** @type {SfValue | null} */
-  let sf = null;
-  if (sfRaw === "auto") {
-    sf = "auto";
-  } else if (sfRaw != null) {
-    const n = Number(sfRaw);
-    if (Number.isInteger(n) && n >= 7 && n <= 12) sf = n;
-  }
-  return { lat, lng, sf };
+  return { lat, lng };
 }
 
 /**
  * @param {number} lat
  * @param {number} lng
- * @param {SfValue} sf
  */
-function writeUrlState(lat, lng, sf) {
+function writeUrlState(lat, lng) {
   if (typeof window === "undefined") return;
   const p = new URLSearchParams(window.location.search);
   p.set("lat", lat.toFixed(6));
   p.set("lng", lng.toFixed(6));
-  p.set("sf", String(sf));
+  p.delete("sf");
   const next = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
   window.history.replaceState(null, "", next);
 }
@@ -556,14 +544,13 @@ function appendDataLinkSection(parent, sf) {
 }
 
 /**
- * Nút copy permalink (`?lat=&lng=&sf=`) — feedback "Đã copy!" 2s rồi reset.
+ * Nút copy permalink (`?lat=&lng=`) — feedback "Đã copy!" 2s rồi reset.
  * Clipboard API không có ở SSR → guard `window` tồn tại.
  * @param {HTMLElement} parent
  * @param {number} lat
  * @param {number} lng
- * @param {SfValue} sf
  */
-function appendCopyLinkButton(parent, lat, lng, sf) {
+function appendCopyLinkButton(parent, lat, lng) {
   if (typeof window === "undefined") return;
   const btn = document.createElement("button");
   btn.type = "button";
@@ -576,7 +563,7 @@ function appendCopyLinkButton(parent, lat, lng, sf) {
     const url = new URL(window.location.href);
     url.searchParams.set("lat", lat.toFixed(6));
     url.searchParams.set("lng", lng.toFixed(6));
-    url.searchParams.set("sf", String(sf));
+    url.searchParams.delete("sf");
     void navigator.clipboard.writeText(url.toString()).then(() => {
       btn.textContent = t.popup.copyLink.done;
       if (resetTimer != null) window.clearTimeout(resetTimer);
@@ -649,15 +636,9 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [predictError, setPredictError] = useState(
     /** @type {string | null} */ (null),
   );
-  const [sf, setSf] = useState(
-    /** @returns {SfValue} */
-    () => initialUrlRef.current?.sf ?? DEFAULT_SF,
-  );
-  // Default 14 dBm = AS923-2 cap; user có thể giảm để mô phỏng device pin yếu.
-  const [txPowerDbm, setTxPowerDbm] = useState(/** @type {number} */ (14));
   // Default outdoor — thay đổi sẽ apply ITU-R P.2109 building entry loss BE-side.
   const [environment, setEnvironment] = useState(
-    /** @type {"outdoor" | "indoor" | "indoor_deep"} */ ("outdoor"),
+    /** @type {"outdoor" | "indoor"} */ ("outdoor"),
   );
   // Visualization mode cho tab "points": circle (RSSI) ↔ heatmap (mật độ).
   // Mặc định circle để không đổi behavior hiện tại. State chỉ ý nghĩa khi
@@ -1217,7 +1198,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
    *    RSSI / SNR / Confidence + link gateway phục vụ.
    * Theo business-logic.md §4.2 — dual-layer rule cho 1 feature phục vụ
    * cả end-user (Layer 1) lẫn kỹ sư P1/P2 (Layer 2).
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep", label?: string | null) => HTMLDivElement}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor", label?: string | null) => HTMLDivElement}
    */
   const buildPopupNode = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label) => {
     const root = document.createElement("div");
@@ -1369,7 +1350,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       layer2.appendChild(distRow);
     }
 
-    appendCopyLinkButton(layer2, lat, lng, isAuto ? "auto" : sfUsed);
+    appendCopyLinkButton(layer2, lat, lng);
 
     root.appendChild(layer2);
 
@@ -1389,7 +1370,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   /**
    * Pure marker-drawing helper — không phụ thuộc state, chỉ dùng refs.
    * Cho phép gọi từ effect mà không gây stale closure.
-   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor" | "indoor_deep", label?: string | null) => void}
+   * @type {(lat: number, lng: number, prediction: import("../api/client.js").PredictionT, sfUsed: number, isAuto: boolean, txPowerUsed: number, environmentUsed: "outdoor" | "indoor", label?: string | null) => void}
    */
   const drawSearchMarker = useCallback((lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label) => {
     const map = mapRef.current;
@@ -1491,7 +1472,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       // Bulk endpoint không nhận tx_power/environment → BE dùng defaults
       // (14 dBm outdoor). Popup hiển thị các giá trị này cho consistency.
       // Truyền label để user phân biệt được marker tương ứng row CSV nào.
-      drawSearchMarker(p.lat, p.lng, p.prediction, p.sf, p.isAuto, 14, "outdoor", p.label);
+      drawSearchMarker(p.lat, p.lng, p.prediction, p.sf, p.isAuto, DEFAULT_TX_POWER_DBM, "outdoor", p.label);
       bounds.extend([p.lng, p.lat]);
     }
     if (bulkHandoff.length === 1) {
@@ -1520,20 +1501,17 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     if (!url) return;
     deepLinkConsumedRef.current = true;
     let cancelled = false;
-    const isAuto = url.sf === "auto";
-    /** @type {number} */
-    const sfForUrl = typeof url.sf === "number" ? url.sf : DEFAULT_SF;
     predictCoverage({
       latitude: url.lat,
       longitude: url.lng,
-      spreading_factor: sfForUrl,
+      spreading_factor: DEFAULT_SF,
       frequency_mhz: DEFAULT_FREQ_MHZ,
     })
       .then((prediction) => {
         if (cancelled) return;
         // Deep-link không serialize tx_power/environment → fallback defaults
         // (14 dBm outdoor) khớp BE behavior khi field None trong PredictRequest.
-        drawSearchMarker(url.lat, url.lng, prediction, sfForUrl, isAuto, 14, "outdoor");
+        drawSearchMarker(url.lat, url.lng, prediction, DEFAULT_SF, true, DEFAULT_TX_POWER_DBM, "outdoor");
       })
       .catch((e) => {
         console.error("Deep-link predict failed:", e);
@@ -1544,37 +1522,34 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   }, [mode, drawSearchMarker, bulkHandoff]);
 
   /**
-   * Predict mode: chạy prediction từ pickedCoords + SF hiện tại, vẽ marker
-   * + popup dual-layer.
+   * Predict mode: chạy prediction từ pickedCoords + environment, vẽ marker
+   * + popup dual-layer. SF luôn auto (BE chọn recommended_sf), TX power luôn
+   * 14 dBm (AS923-2 cap).
    */
   async function onPredictSubmit() {
     if (!pickedCoords || predictBusy) return;
     const { lat, lng } = pickedCoords;
     setPredictBusy(true);
     setPredictError(null);
-    // "Tự động": gửi DEFAULT_SF (max sensitivity) cho BE — recommended_sf
-    // trong response sẽ là SF nên dùng. Popup ẩn dòng "SF dùng".
-    const isAuto = sf === "auto";
-    const sfForApi = isAuto ? DEFAULT_SF : sf;
     try {
       const prediction = await predictCoverage({
         latitude: lat,
         longitude: lng,
-        spreading_factor: sfForApi,
+        spreading_factor: DEFAULT_SF,
         frequency_mhz: DEFAULT_FREQ_MHZ,
-        tx_power_dbm: txPowerDbm,
+        tx_power_dbm: DEFAULT_TX_POWER_DBM,
         environment,
       });
       drawSearchMarker(
         lat,
         lng,
         prediction,
-        sfForApi,
-        isAuto,
-        txPowerDbm,
+        DEFAULT_SF,
+        true,
+        DEFAULT_TX_POWER_DBM,
         environment,
       );
-      writeUrlState(lat, lng, sf);
+      writeUrlState(lat, lng);
     } catch (e) {
       console.error("Predict submit failed:", e);
       setPredictError(t.predictPanel.error);
@@ -1582,9 +1557,6 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       setPredictBusy(false);
     }
   }
-
-  // SF dropdown = input cho lần predict tiếp theo. Không auto re-predict
-  // marker đã có (multi-marker thì semantic ambiguous: re-predict cái nào?).
 
   return (
     <div className="h-full w-full">
@@ -1656,53 +1628,6 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
                 </div>
               </div>
 
-              <div className="mt-2 flex items-center gap-2">
-                <label
-                  className="text-xs font-medium text-slate-700"
-                  htmlFor="sf-picker"
-                >
-                  {t.sfPicker.label}
-                </label>
-                <select
-                  id="sf-picker"
-                  value={sf}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setSf(v === "auto" ? "auto" : Number(v));
-                  }}
-                  className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                >
-                  <option value="auto">{t.sfPicker.auto}</option>
-                  {SF_OPTIONS.map((v) => (
-                    <option key={v} value={v}>
-                      {t.sfPicker.option(v)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="mt-2 flex items-center gap-2">
-                <label
-                  className="text-xs font-medium text-slate-700"
-                  htmlFor="tx-power-picker"
-                >
-                  {t.txPowerPicker.label}
-                </label>
-                <select
-                  id="tx-power-picker"
-                  value={txPowerDbm}
-                  onChange={(e) => setTxPowerDbm(Number(e.target.value))}
-                  className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                  title={t.txPowerPicker.hint}
-                >
-                  {t.txPowerPicker.options.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <fieldset className="mt-2">
                 <legend
                   className="text-xs font-medium text-slate-700"
@@ -1723,9 +1648,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
                         checked={environment === opt.value}
                         onChange={() =>
                           setEnvironment(
-                            /** @type {"outdoor" | "indoor" | "indoor_deep"} */ (
-                              opt.value
-                            ),
+                            /** @type {"outdoor" | "indoor"} */ (opt.value),
                           )
                         }
                       />

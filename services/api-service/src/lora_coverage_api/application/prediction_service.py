@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from typing import Literal
 
-from ..domain.coverage import Confidence, ConfidenceMethod, Prediction, Target
+from ..domain.coverage import Confidence, ConfidenceMethod, CoverageStatus, Prediction, Target
 from ..domain.errors import PredictionUnavailable
 from ..domain.result import Err, Ok, Result
+from .path_loss import classify, recommend_sf, status_worse_of
 from .repositories import CoverageQuery, GatewayDirectory
 from .stage2 import Stage2Predictor
 
@@ -84,15 +86,51 @@ class PredictionOrchestrator:
             if isinstance(pred.confidence, Confidence)
             else pred.confidence
         )
+
+        # Residual cộng vào RSSI là dB shift đồng đều — noise floor và sensitivity
+        # bất biến → SNR và margin shift cùng delta. Tính lại để response self-
+        # consistent: SF khuyến nghị + status phản ánh được "máy học nói khoẻ
+        # hơn vật lý dự đoán bao nhiêu".
+        ul_rssi = round(pred.uplink_rssi_dbm + delta, 2)
+        dl_rssi = round(pred.downlink_rssi_dbm + delta, 2)
+        ul_snr = round(pred.uplink_snr_db + delta, 2)
+        dl_snr = round(pred.downlink_snr_db + delta, 2)
+        ul_margin = round(pred.uplink_margin_db + delta, 2)
+        dl_margin = round(pred.downlink_margin_db + delta, 2)
+        sf = target.spreading_factor
+        ul_status = classify(ul_rssi, ul_snr, sf)
+        dl_status = classify(dl_rssi, dl_snr, sf)
+        coverage_status = status_worse_of(ul_status, dl_status)
+        worst_snr = ul_snr if ul_margin <= dl_margin else dl_snr
+        # Bottleneck: margin diff không đổi sau shift đồng đều, nhưng status có
+        # thể chuyển sang STRONG cho cả 2 chiều → "both_ok" eligible. Logic
+        # khớp resolve_bottleneck(); inline để tránh construct LinkBudget tạm.
+        bottleneck: Literal["uplink", "downlink", "both_ok"]
+        if (
+            abs(ul_margin - dl_margin) <= 1.0
+            and ul_status == CoverageStatus.STRONG
+            and dl_status == CoverageStatus.STRONG
+        ):
+            bottleneck = "both_ok"
+        else:
+            bottleneck = "uplink" if ul_margin <= dl_margin else "downlink"
+
         refined = dataclasses.replace(
             pred,
-            rssi_dbm=round(pred.rssi_dbm + delta, 2),
-            uplink_rssi_dbm=round(pred.uplink_rssi_dbm + delta, 2),
-            downlink_rssi_dbm=round(pred.downlink_rssi_dbm + delta, 2),
+            rssi_dbm=dl_rssi,
+            snr_db=dl_snr,
+            coverage_status=coverage_status,
+            recommended_sf=recommend_sf(worst_snr),
+            bottleneck=bottleneck,
+            uplink_rssi_dbm=ul_rssi,
+            uplink_snr_db=ul_snr,
+            uplink_margin_db=ul_margin,
+            uplink_status=ul_status,
+            downlink_rssi_dbm=dl_rssi,
+            downlink_snr_db=dl_snr,
+            downlink_margin_db=dl_margin,
+            downlink_status=dl_status,
             model_version=f"{pred.model_version}+{stage2_out.model_version}",
             confidence=refined_confidence,
         )
-        # NOTE: coverage_status/margins giữ từ Stage 1 — re-classify cần access
-        # path_loss._classify (module-private). Phase 7 refactor: expose
-        # classify() public + áp residual cho margin trước classify.
         return Ok(refined)

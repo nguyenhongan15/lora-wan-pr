@@ -172,39 +172,12 @@ export const strings = {
     apiError:
       "Không tải được dữ liệu API. Kiểm tra api-service đang chạy chưa (http://localhost:8000/healthz).",
     tileErrorTitle: "Tile không load được",
-    sfPicker: {
-      label: "SF",
-      /** @param {number} sf */
-      option: (sf) => `SF${sf}`,
-      auto: "Tự động",
-    },
-    txPowerPicker: {
-      label: "Công suất phát",
-      hint: "8 mức ADR theo LoRaWAN AS923-2 (TXPower 0..7, bước 2 dB, cap 14 dBm).",
-      // LoRaWAN AS923 regional params §2.7.3 — TXPower index 0..7 = Max EIRP
-      // trừ 0, 2, 4, ... 14 dB. Với Max EIRP = 14 dBm (cap VN) → 14, 12, ..., 0.
-      options: [
-        { value: 14, label: "14 dBm (TXPower 0)" },
-        { value: 12, label: "12 dBm (TXPower 1)" },
-        { value: 10, label: "10 dBm (TXPower 2)" },
-        { value: 8, label: "8 dBm (TXPower 3)" },
-        { value: 6, label: "6 dBm (TXPower 4)" },
-        { value: 4, label: "4 dBm (TXPower 5)" },
-        { value: 2, label: "2 dBm (TXPower 6)" },
-        { value: 0, label: "0 dBm (TXPower 7)" },
-      ],
-    },
     environmentPicker: {
       label: "Môi trường",
       hint: "Trong nhà sẽ cộng thêm suy hao xuyên tường theo ITU-R P.2109.",
       options: [
         { value: "outdoor", label: "Ngoài trời", short: "Ngoài trời" },
         { value: "indoor", label: "Trong nhà", short: "Trong nhà" },
-        {
-          value: "indoor_deep",
-          label: "Sâu trong nhà",
-          short: "Sâu trong nhà",
-        },
       ],
     },
     viewModePicker: {

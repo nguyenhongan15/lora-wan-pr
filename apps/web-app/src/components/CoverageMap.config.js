@@ -30,6 +30,9 @@ export const INITIAL_ZOOM = 11;
 export const SF_OPTIONS = /** @type {const} */ ([7, 8, 9, 10, 11, 12]);
 export const DEFAULT_SF = 12;
 
+// VN AS923-2 cap — Max EIRP 14 dBm (TXPower index 0).
+export const DEFAULT_TX_POWER_DBM = 14;
+
 // VN AS923-2 — DNIIT seed cũng dùng 923 (xem migrations/seeds/seed_gateways.sql).
 export const DEFAULT_FREQ_MHZ = 923;
 
