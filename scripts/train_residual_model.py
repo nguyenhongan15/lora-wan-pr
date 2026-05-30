@@ -45,9 +45,9 @@ _BBOX_PRESETS: dict[str, tuple[float, float, float, float]] = {
     "vietnam": (8.4, 23.4, 102.1, 109.5),
 }
 
-# Khớp ml-service/app.py:extract_features_dict — XGBoost predict tại runtime dùng
-# DataFrame với column names này. Thứ tự không quan trọng (xgboost tự align),
-# nhưng giữ explicit để dễ debug.
+# Raw cột query từ DB. ALL gateways trong tập Đà Nẵng có cùng frequency_mhz/
+# gw_alt/gw_ant_h/gw_gain/gw_tx_p → 5 cột này được DROP khỏi training set
+# (xem TRAINING_FEATURE_COLS), nhưng vẫn cần để compute derived columns.
 FEATURE_COLS = [
     "lat",
     "lon",
@@ -59,6 +59,22 @@ FEATURE_COLS = [
     "gw_ant_h",
     "gw_gain",
     "gw_tx_p",
+]
+
+# Columns thực sự fed vào XGBoost (v0.5, 2026-05-31). Experiment "A variant"
+# loại 5 zero-importance feature (test_feature_variants_2026_05_31.py): RMSE
+# 10.94 → 10.37 dB, bias 2-5km -3.18 → +0.43.
+# CRITICAL: phải khớp với services/ml-service/src/lora_ml_predict/app.py
+# (hàm build feature DataFrame). Cập nhật cả 2 cùng lúc khi đổi feature set.
+TRAINING_FEATURE_COLS = [
+    "lat",
+    "lon",
+    "sf",
+    "gw_lat",
+    "gw_lon",
+    "distance_km",
+    "log_distance_km",
+    "delta_alt_m",
 ]
 
 
@@ -397,8 +413,8 @@ def _train(args, env: dict) -> int:
         df["delta_alt_m"] = df["gw_alt"] + df["gw_ant_h"]
         return df
 
-    df_train_full = _add_derived(X_train)
-    df_test = _add_derived(X_test)
+    df_train_full = _add_derived(X_train)[TRAINING_FEATURE_COLS]
+    df_test = _add_derived(X_test)[TRAINING_FEATURE_COLS]
 
     # v0.4: phân tầng theo SF để mỗi nếp gấp có đủ tỷ lệ SF7-SF12; lấy nếp gấp
     # đầu tiên làm train/val cho early-stopping. SF hiếm (vd SF8) không bị bỏ

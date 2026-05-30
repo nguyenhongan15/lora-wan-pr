@@ -1,4 +1,5 @@
 import logging
+import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -10,6 +11,19 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# CRITICAL: phải khớp với scripts/train_residual_model.py:TRAINING_FEATURE_COLS.
+# Đổi feature set yêu cầu retrain model + cập nhật cả hai nơi.
+TRAINING_FEATURE_COLS = [
+    "lat",
+    "lon",
+    "sf",
+    "gw_lat",
+    "gw_lon",
+    "distance_km",
+    "log_distance_km",
+    "delta_alt_m",
+]
+
 # --- Config ---
 
 
@@ -18,7 +32,7 @@ class Settings(BaseSettings):
     db_url: str = Field(alias="LORA_DB_URL")
     port: int = 8001
     host: str = "0.0.0.0"
-    model_version: str = "stage2-xgb-v0.4.0"
+    model_version: str = "stage2-xgb-v0.5.0"
     model_path: str = Field(alias="LORA_ML_MODEL_PATH")
 
     # OOD Constraints (Vietnam, AS923-2)
@@ -146,17 +160,26 @@ def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
 
 
 def extract_features_dict(t: TargetSchema, gw: GatewaySchema) -> dict:
+    """Build 8-feature row khớp TRAINING_FEATURE_COLS (v0.5+).
+
+    Derived columns (distance_km, log_distance_km, delta_alt_m) tính tại đây
+    để model.predict nhận đúng schema. Công thức phải khớp
+    scripts/train_residual_model.py:_add_derived.
+    """
+    lat1, lon1 = math.radians(t.latitude), math.radians(t.longitude)
+    lat2, lon2 = math.radians(gw.latitude), math.radians(gw.longitude)
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    distance_km = 2 * 6371.0088 * math.asin(math.sqrt(min(a, 1.0)))
     return {
         "lat": t.latitude,
         "lon": t.longitude,
-        "sf": t.spreading_factor,
-        "frequency_mhz": t.frequency_mhz,
+        "sf": float(t.spreading_factor),
         "gw_lat": gw.latitude,
         "gw_lon": gw.longitude,
-        "gw_alt": gw.altitude_m,
-        "gw_ant_h": gw.antenna_height_m,
-        "gw_gain": gw.antenna_gain_dbi,
-        "gw_tx_p": gw.tx_power_dbm,
+        "distance_km": distance_km,
+        "log_distance_km": math.log1p(distance_km),
+        "delta_alt_m": gw.altitude_m + gw.antenna_height_m,
     }
 
 
@@ -179,7 +202,9 @@ async def predict_residual(
     if is_ood(t.latitude, t.longitude, t.spreading_factor, t.frequency_mhz):
         return PredictionResponse(residual_db=None, model_version=settings.model_version, ood=True)
 
-    features = pd.DataFrame([extract_features_dict(t, payload.serving_gateway)])
+    features = pd.DataFrame([extract_features_dict(t, payload.serving_gateway)])[
+        TRAINING_FEATURE_COLS
+    ]
 
     try:
         residual = float(request.app.state.model.predict(features)[0])
@@ -218,7 +243,7 @@ async def predict_residuals_batch(
 
     if rows_to_predict:
         try:
-            df_batch = pd.DataFrame(rows_to_predict)
+            df_batch = pd.DataFrame(rows_to_predict)[TRAINING_FEATURE_COLS]
             preds = request.app.state.model.predict(df_batch)
             for i, pred in enumerate(preds):
                 results[map_indices[i]] = BatchResidualItem(residual_db=float(pred), ood=False)
@@ -227,3 +252,14 @@ async def predict_residuals_batch(
             raise HTTPException(status_code=500, detail="Internal batch inference error") from e
 
     return BatchPredictionResponse(model_version=settings.model_version, residuals=results)
+
+
+def main() -> None:
+    """Entry point cho `python -m lora_ml_predict.app` và pyproject script."""
+    import uvicorn
+
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

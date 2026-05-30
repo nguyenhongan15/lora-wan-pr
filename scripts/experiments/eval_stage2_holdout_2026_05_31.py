@@ -10,9 +10,12 @@ import csv
 import json
 import math
 import statistics
+import time
 import urllib.request
 
 API = "http://localhost:8000/api/v1/coverage/predict"
+# api-service rate-limit /coverage/predict = 30/min → sleep >2s giữa các call.
+THROTTLE_S = 2.1
 
 
 def call_predict(lat: float, lon: float, sf: int, freq: float) -> dict | None:
@@ -58,10 +61,11 @@ def main() -> None:
     for i, r in enumerate(rows):
         lat = float(r["lat"])
         lon = float(r["lon"])
-        sf = int(r["spreading_factor"])
-        freq = float(r["frequency_mhz"])
+        sf = int(r.get("spreading_factor") or r["sf"])
+        freq = float(r.get("frequency_mhz") or r["freq_mhz"])
         meas = float(r["rssi_dbm"])
         res = call_predict(lat, lon, sf, freq)
+        time.sleep(THROTTLE_S)
         if res is None or res.get("rssi_dbm") is None:
             n_fail += 1
             continue

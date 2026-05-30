@@ -9,6 +9,9 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic-settings>=2.6.0",
     "python-jose[cryptography]>=3.3.0",
+    "joblib>=1.4",
+    "pandas>=2.2",
+    "xgboost>=2.1",
     "lora-coverage-api",
 ]
 

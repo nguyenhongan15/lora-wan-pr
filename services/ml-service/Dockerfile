@@ -17,6 +17,9 @@ COPY services/ml-service/reference_wireless /build/services/ml-service/reference
 COPY services/api-service/pyproject.toml /build/services/api-service/pyproject.toml
 COPY services/worker-service/pyproject.toml /build/services/worker-service/pyproject.toml
 COPY packages/sdk-python/pyproject.toml /build/packages/sdk-python/pyproject.toml
+# Vendored crc-covlib wheel — uv.lock workspace yêu cầu kể cả khi ml-service
+# không runtime-dùng (api-service mới gọi crc-covlib).
+COPY vendor /build/vendor
 
 ENV UV_LINK_MODE=copy
 RUN uv sync --package lora-ml-predict --no-dev --frozen --no-editable \

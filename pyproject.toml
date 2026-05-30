@@ -61,6 +61,9 @@ allowed-confusables = ["σ", "²", "·", "→", "×"]
 "services/api-service/src/lora_coverage_api/edge/routers/*.py" = ["B008"]
 # conftest phải load_dotenv() trước khi import modules đọc env vars
 "services/api-service/tests/conftest.py" = ["E402"]
+# Experiment scripts dùng ML convention: X/Y là feature matrix / label;
+# Xtr/Xte/Xv = train/test/val splits — uppercase chuẩn ngành, không snake_case.
+"scripts/experiments/*.py" = ["N803", "N806"]
 
 [tool.ruff.format]
 quote-style = "double"
