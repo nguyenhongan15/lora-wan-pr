@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-29T18:45:14Z",
+  "generated_at": "2026-05-30T09:56:08Z",
   "grid_m": 50.0,
   "radius_km": "auto",
   "model": "ITU-R P.1812 + P.2108",
@@ -44,10 +44,10 @@
       "name": "DNIIT GW 06029f",
       "lat": 16.0659959,
       "lon": 108.1532551,
-      "elapsed_s": 32259.7,
+      "elapsed_s": 528.4,
       "cells": 2137444,
-      "covered_cells": 28220,
-      "location_percent": 95.0,
+      "covered_cells": 40507,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -55,10 +55,10 @@
       "name": "DNIIT GW 061f5b",
       "lat": 16.075590133666992,
       "lon": 108.22207641601562,
-      "elapsed_s": 26640.7,
+      "elapsed_s": 521.7,
       "cells": 2137444,
-      "covered_cells": 23374,
-      "location_percent": 95.0,
+      "covered_cells": 46281,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -77,10 +77,10 @@
       "name": "DNIIT GW b44150",
       "lat": 16.073963507473916,
       "lon": 108.1526301279979,
-      "elapsed_s": 31669.3,
+      "elapsed_s": 517.6,
       "cells": 2137444,
-      "covered_cells": 14432,
-      "location_percent": 95.0,
+      "covered_cells": 42638,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -88,10 +88,10 @@
       "name": "DNIIT GW 1ec39f",
       "lat": 16.091299730870233,
       "lon": 108.21745634078981,
-      "elapsed_s": 26210.2,
+      "elapsed_s": 522.6,
       "cells": 2137444,
-      "covered_cells": 32394,
-      "location_percent": 95.0,
+      "covered_cells": 47149,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -99,10 +99,10 @@
       "name": "Gateway Indoor2 S04.10",
       "lat": 16.074187,
       "lon": 108.149817,
-      "elapsed_s": 13355.9,
+      "elapsed_s": 188.5,
       "cells": 1071225,
-      "covered_cells": 20082,
-      "location_percent": 95.0,
+      "covered_cells": 31214,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -110,10 +110,10 @@
       "name": "DNIIT GW 00ab20",
       "lat": 16.0548,
       "lon": 108.21993,
-      "elapsed_s": 26774.8,
+      "elapsed_s": 531.2,
       "cells": 2137444,
-      "covered_cells": 24795,
-      "location_percent": 95.0,
+      "covered_cells": 49325,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -121,10 +121,10 @@
       "name": "DNIIT GW 00ab25",
       "lat": 16.11073,
       "lon": 108.12857,
-      "elapsed_s": 27472.6,
+      "elapsed_s": 536.1,
       "cells": 2137444,
-      "covered_cells": 53919,
-      "location_percent": 95.0,
+      "covered_cells": 78883,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
@@ -132,10 +132,10 @@
       "name": "DNIIT GW 06fcf2",
       "lat": 16.054765682623003,
       "lon": 108.21985626414313,
-      "elapsed_s": 25093.8,
+      "elapsed_s": 534.8,
       "cells": 2137444,
-      "covered_cells": 25431,
-      "location_percent": 95.0,
+      "covered_cells": 52487,
+      "location_percent": 50.0,
       "environment": "outdoor"
     },
     {
