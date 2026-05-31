@@ -25,7 +25,13 @@ from ..domain.coverage import (
 )
 
 # ── Constants (LoRa AS923-2 conservative defaults) ─────────────────────────
-NOISE_FLOOR_DBM_125KHZ = -117.0  # -174 + 10·log10(125e3) + NF(6dB)
+# Lý thuyết thermal: -174 + 10·log10(125e3) + NF(6dB) = -117 dBm. Đây là sàn
+# lý tưởng cho gateway lab; thực địa interference-dominated cao hơn ~13 dB.
+NOISE_FLOOR_DBM_125KHZ = -117.0
+# Empirical mean NF từ Đà Nẵng Nov-Dec 2025 survey (8 gateway, n≥20/gw):
+# mean -103.8 dBm, range [-110.6, -98.9]. Dùng làm fallback cho gateway chưa
+# calibrate riêng (Gateway.noise_floor_dbm IS NULL).
+DEFAULT_NOISE_FLOOR_DBM = -104.0
 SF_SNR_LIMITS_DB: dict[int, float] = {
     7: -7.5,
     8: -10.0,
@@ -131,15 +137,25 @@ def compute_link_budget(
     rx_gain_dbi: float,
     rx_sensitivity_dbm: float,
     sf: int,
+    noise_floor_dbm: float = NOISE_FLOOR_DBM_125KHZ,
 ) -> LinkBudget:
     """Friis: Pr = Pt + Gt + Gr - PL. SNR = Pr - noise_floor.
 
-    Caveat v0: dùng cùng NOISE_FLOOR_DBM_125KHZ cho cả 2 chiều. Thực tế device
-    side NF có thể khác (~3 dB) — refine khi có DL telemetry chính xác.
+    noise_floor_dbm: caller cấp NF thực tế (per-gateway cho UL, hằng số cho
+    DL). Default giữ -117 thermal cho callers cũ không pass.
+
+    margin_db = min(rssi - sensitivity, snr - SF_limit) — link margin thực,
+    "có thể mất bao nhiêu dB nữa thì fail". Lý do dùng min: link pass cần CẢ
+    rssi ≥ sens (silicon front-end) VÀ snr ≥ SF_limit (decode). Khi NF thực
+    >> NF datasheet (interference-dominated UL), giới hạn SNR bị siết trước
+    → margin_sens over-optimistic. Pre-2026-05-31 chỉ dùng rssi-sens → bottleneck
+    label đảo chiều cho 100% holdout SF12.
     """
     rssi_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - pl_db
-    snr_db = rssi_dbm - NOISE_FLOOR_DBM_125KHZ
-    margin_db = rssi_dbm - rx_sensitivity_dbm
+    snr_db = rssi_dbm - noise_floor_dbm
+    sens_margin = rssi_dbm - rx_sensitivity_dbm
+    snr_margin = snr_db - SF_SNR_LIMITS_DB[sf]
+    margin_db = min(sens_margin, snr_margin)
     status = classify(rssi_dbm, snr_db, sf)
     return LinkBudget(
         direction=direction,

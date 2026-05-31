@@ -173,6 +173,10 @@ class Gateway:
       diễn ra ở application layer (path_loss._resolve_rx_gain).
     - rx_sensitivity_dbm: gateway sensitivity per chain. None = derive từ SF
       table (Semtech SX1302 datasheet) ở application layer.
+    - noise_floor_dbm: per-gateway measured noise floor (dBm) tại 125 kHz BW.
+      None = fallback DEFAULT_NOISE_FLOOR_DBM (-104) tại application layer.
+      Calibrate từ survey (rssi - snr) theo gateway; interference-dominated
+      environment ở VN lệch xa giá trị thermal -117.
     """
 
     id: GatewayId
@@ -187,9 +191,12 @@ class Gateway:
     frequency_mhz: float
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
+    noise_floor_dbm: float | None = None
 
     def __post_init__(self) -> None:
         if self.rx_antenna_gain_dbi is not None and not -10.0 <= self.rx_antenna_gain_dbi <= 30.0:
             raise ValueError(f"rx_antenna_gain_dbi out of range: {self.rx_antenna_gain_dbi}")
         if self.rx_sensitivity_dbm is not None and not -150.0 <= self.rx_sensitivity_dbm <= -50.0:
             raise ValueError(f"rx_sensitivity_dbm out of range: {self.rx_sensitivity_dbm}")
+        if self.noise_floor_dbm is not None and not -130.0 <= self.noise_floor_dbm <= -80.0:
+            raise ValueError(f"noise_floor_dbm out of range: {self.noise_floor_dbm}")

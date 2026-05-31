@@ -75,6 +75,7 @@ def _gateway(
     tx_power_dbm: float = 14.0,
     rx_antenna_gain_dbi: float | None = None,
     rx_sensitivity_dbm: float | None = None,
+    noise_floor_dbm: float | None = None,
 ) -> Gateway:
     return Gateway(
         id=GatewayId(uuid4()),
@@ -89,6 +90,7 @@ def _gateway(
         frequency_mhz=923.0,
         rx_antenna_gain_dbi=rx_antenna_gain_dbi,
         rx_sensitivity_dbm=rx_sensitivity_dbm,
+        noise_floor_dbm=noise_floor_dbm,
     )
 
 
@@ -174,9 +176,14 @@ def test_predict_top_level_rssi_equals_downlink_rssi_for_backward_compat() -> No
 
 
 def test_predict_uplink_stronger_when_gateway_tx_lower_than_device() -> None:
-    """Gateway TX yếu (10 dBm) + device TX max (14 dBm) → DL yếu hơn UL → bottleneck=downlink."""
+    """Gateway TX yếu (10 dBm) + device TX max (14 dBm) → DL yếu hơn UL → bottleneck=downlink.
+
+    noise_floor_dbm=-117 (= DL thermal) để UL và DL chia sẻ NF — chỉ còn TX
+    asymmetry tạo chênh margin. Default NF=-104 cho UL sẽ làm SNR-bound siết
+    UL trước, lẫn lộn 2 nguyên nhân (TX vs NF asymmetry).
+    """
     m = _model()
-    gw = _gateway(tx_power_dbm=10.0, antenna_gain_dbi=2.0)
+    gw = _gateway(tx_power_dbm=10.0, antenna_gain_dbi=2.0, noise_floor_dbm=-117.0)
     tgt = _target(16.06, 108.21, sf=7, tx_power_dbm=14.0, tx_antenna_gain_dbi=2.0)
 
     p = m.predict(tgt, gw)
@@ -198,9 +205,13 @@ def test_predict_uplink_weaker_when_device_tx_lower_than_gateway() -> None:
 
 
 def test_predict_bottleneck_both_ok_when_balanced_and_strong() -> None:
-    """Cự ly gần + Pt/Gt/Gr/sens đối xứng hai chiều → UL≈DL margin & STRONG → both_ok."""
+    """Cự ly gần + Pt/Gt/Gr/sens/NF đối xứng hai chiều → UL≈DL margin & STRONG → both_ok.
+
+    noise_floor_dbm=-117 để UL share NF với DL (thermal). Mặc định UL fallback
+    -104 sẽ làm UL margin (SNR-bound) thấp hơn DL → flip thành "uplink".
+    """
     m = _model()
-    gw = _gateway(tx_power_dbm=14.0, antenna_gain_dbi=2.0)
+    gw = _gateway(tx_power_dbm=14.0, antenna_gain_dbi=2.0, noise_floor_dbm=-117.0)
     tgt = Target(
         latitude=16.0501,
         longitude=108.2001,
@@ -270,7 +281,13 @@ def test_predict_falls_back_gateway_rx_gain_to_tx_gain_when_none() -> None:
 
 
 def test_predict_uses_target_rx_sensitivity_override_for_downlink_margin() -> None:
-    """Target.rx_sensitivity_dbm explicit shift DL margin tương ứng so với SF-table fallback."""
+    """Target.rx_sensitivity_dbm explicit shift DL margin tương ứng so với SF-table fallback.
+
+    DL NF hardcoded -117 (thermal) trong Stage1ItuModel → SF7 effective floor =
+    NF + SF_limit = -124.5. Override -124 (4 dB tốt hơn fallback -120) vẫn nằm
+    trong sens-bound regime → margin tăng đúng +4 dB. Ngoài giới hạn này
+    (vd -130) sẽ bị SNR clip — đó là physical realism, không phải bug wiring.
+    """
     m = _model()
     tgt_default = _target(16.10, 108.25, sf=7)  # device sens fallback = -120 dBm
     tgt_better = Target(
@@ -281,7 +298,7 @@ def test_predict_uses_target_rx_sensitivity_override_for_downlink_margin() -> No
         tx_power_dbm=14.0,
         tx_antenna_gain_dbi=2.0,
         rx_antenna_gain_dbi=0.0,
-        rx_sensitivity_dbm=-130.0,  # 10 dB tốt hơn fallback
+        rx_sensitivity_dbm=-124.0,  # 4 dB tốt hơn fallback, vẫn sens-bound
     )
     gw = _gateway()
 
@@ -289,7 +306,7 @@ def test_predict_uses_target_rx_sensitivity_override_for_downlink_margin() -> No
     p_better = m.predict(tgt_better, gw)
 
     assert p_better.downlink_margin_db == pytest.approx(
-        p_default.downlink_margin_db + 10.0, abs=0.05
+        p_default.downlink_margin_db + 4.0, abs=0.05
     )
     assert p_better.uplink_margin_db == pytest.approx(p_default.uplink_margin_db, abs=0.01)
 
@@ -368,14 +385,22 @@ def test_predict_outdoor_does_not_call_bel() -> None:
 
 
 def test_predict_uses_gateway_rx_sensitivity_override_for_uplink_margin() -> None:
-    """Gateway.rx_sensitivity_dbm explicit shift UL margin tương ứng."""
+    """Gateway.rx_sensitivity_dbm explicit shift UL margin tương ứng.
+
+    noise_floor_dbm=-130 (quietest allowed bởi domain CHECK [-130, -80]) để
+    SF7 effective floor = NF + SF_limit = -137.5. Override -137 (14 dB tốt
+    hơn fallback -123) vẫn nằm trong sens-bound regime, diff = +14 dB chứng
+    minh wiring đi đúng. Với NF default -104 (urban interference-dominated),
+    datasheet sens đã snr-bound → override không tạo margin gain — đó là
+    physical realism, integration test sẽ phủ.
+    """
     m = _model()
-    gw_default = _gateway()
-    gw_better = _gateway(rx_sensitivity_dbm=-140.0)  # tốt hơn ~17 dB so với SF7 default -123
+    gw_default = _gateway(noise_floor_dbm=-130.0)
+    gw_better = _gateway(noise_floor_dbm=-130.0, rx_sensitivity_dbm=-137.0)
     tgt = _target(16.10, 108.25, sf=7)
 
     p_default = m.predict(tgt, gw_default)
     p_better = m.predict(tgt, gw_better)
 
-    assert p_better.uplink_margin_db - p_default.uplink_margin_db == pytest.approx(17.0, abs=0.05)
+    assert p_better.uplink_margin_db - p_default.uplink_margin_db == pytest.approx(14.0, abs=0.05)
     assert p_better.downlink_margin_db == pytest.approx(p_default.downlink_margin_db, abs=0.01)

@@ -186,8 +186,6 @@ def _build_stage1(env: dict):
     dem_dir = Path(env["LORA_DEM_DIRECTORY"])
     surf_raw = env.get("LORA_SURFACE_DEM_DIRECTORY", "")
     surf_dir = Path(surf_raw) if surf_raw else None
-    lc_raw = env.get("LORA_LANDCOVER_DIRECTORY", "")
-    lc_dir = Path(lc_raw) if lc_raw else None
     p_time = float(env.get("LORA_ITU_PERCENT_TIME", "50.0"))
     p_loc = float(env.get("LORA_ITU_PERCENT_LOCATION", "50.0"))
     env_name = env.get("LORA_ENV_PROFILE", "suburban")
@@ -195,7 +193,6 @@ def _build_stage1(env: dict):
     backend = CrcCovlibBackend(
         dem_directory=dem_dir,
         surface_dem_directory=surf_dir,
-        landcover_directory=lc_dir,
         model_version="stage2-residual-train",
         percent_time=p_time,
         percent_location=p_loc,
@@ -372,12 +369,11 @@ def _train(args, env: dict) -> int:
         X_train, y_train = cache["X_train"], cache["y_train"]  # noqa: N806
         X_test, y_test = cache["X_test"], cache["y_test"]  # noqa: N806
     else:
-        train_rows = _fetch_rows(
-            env["LORA_DB_URL"], bbox, args.train_start, args.train_end, args.max_link_km
+        db_url = env.get("LORA_DB_URL") or env["DATABASE_URL"].replace(
+            "postgresql+psycopg://", "postgresql://"
         )
-        test_rows = _fetch_rows(
-            env["LORA_DB_URL"], bbox, args.test_start, args.test_end, args.max_link_km
-        )
+        train_rows = _fetch_rows(db_url, bbox, args.train_start, args.train_end, args.max_link_km)
+        test_rows = _fetch_rows(db_url, bbox, args.test_start, args.test_end, args.max_link_km)
         if not train_rows or not test_rows:
             log.error("Empty train or test window — adjust dates")
             return 1

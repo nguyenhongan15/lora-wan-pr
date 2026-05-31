@@ -117,8 +117,10 @@ class GatewayResponse(BaseModel):
     frequency_mhz: float
     # rx_antenna_gain_dbi None = duplex symmetric; rx_sensitivity_dbm None =
     # derive từ SF table ở application layer.
+    # noise_floor_dbm None = fallback DEFAULT_NOISE_FLOOR_DBM ở app layer.
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
+    noise_floor_dbm: float | None = None
 
 
 class GatewayListResponse(BaseModel):
@@ -145,6 +147,7 @@ class GatewayCreateRequest(BaseModel):
     frequency_mhz: Literal[433.0, 868.0, 915.0, 923.0] = 923.0  # type: ignore[valid-type]
     rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
     rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
+    noise_floor_dbm: float | None = Field(default=None, ge=-130, le=-80)
 
 
 class GatewayPatchRequest(BaseModel):
@@ -158,6 +161,7 @@ class GatewayPatchRequest(BaseModel):
     is_public: bool | None = None
     rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
     rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
+    noise_floor_dbm: float | None = Field(default=None, ge=-130, le=-80)
 
 
 # ── Survey training (read-only) ───────────────────────────────────────────

@@ -146,6 +146,9 @@ class GatewayJob:
     # SF. Khử spike PL từ DSM building-receiver artifact (cell rơi vào building
     # bị penalty đột biến). 0 = disabled. Default 5 → ~500m radius khi grid 100m.
     smooth_px: int = 5
+    # Per-gateway UL noise floor (dBm). None = fallback DEFAULT_NOISE_FLOOR_DBM
+    # ở app layer. DL vẫn dùng NOISE_FLOOR_DBM_125KHZ thermal (~-117).
+    noise_floor_dbm: float | None = None
 
 
 def _compute_pl_grid(
@@ -353,6 +356,7 @@ def _smooth_pl_grid(pl_grid: np.ndarray, kernel_px: int) -> np.ndarray:
 def _derive_min_sf(pl_grid: np.ndarray, job: GatewayJob) -> np.ndarray:
     """Vectorized link-budget UL+DL per SF → min_sf (0 = no coverage)."""
     from lora_coverage_api.application.path_loss import (
+        DEFAULT_NOISE_FLOOR_DBM,
         DEVICE_SENSITIVITY_DBM_125KHZ,
         GW_SENSITIVITY_DBM_125KHZ,
         NOISE_FLOOR_DBM_125KHZ,
@@ -372,13 +376,19 @@ def _derive_min_sf(pl_grid: np.ndarray, job: GatewayJob) -> np.ndarray:
     min_sf = np.zeros(pl_grid.shape, dtype=np.uint8)
     valid = np.isfinite(pl_grid)
 
+    # UL NF: per-gateway nếu calibrated, else fallback ~-104 (interference
+    # floor empirical). DL vẫn dùng thermal floor cho đến khi có DL telemetry.
+    ul_noise_floor = (
+        job.noise_floor_dbm if job.noise_floor_dbm is not None else DEFAULT_NOISE_FLOOR_DBM
+    )
+
     # Start from highest SF (12 = most sensitive) and check downward.
     # min_sf assigned = smallest SF where link works.
     # Loop low→high; first SF that works → set min_sf.
     for sf in SF_LEVELS:
         ul_rssi = device_tx_power + device_tx_gain + job.antenna_gain_dbi - pl_grid
         ul_margin = ul_rssi - GW_SENSITIVITY_DBM_125KHZ[sf]
-        ul_snr = ul_rssi - NOISE_FLOOR_DBM_125KHZ
+        ul_snr = ul_rssi - ul_noise_floor
 
         dl_rssi = job.tx_power_dbm + job.antenna_gain_dbi + device_rx_gain - pl_grid
         dl_margin = dl_rssi - DEVICE_SENSITIVITY_DBM_125KHZ[sf]
@@ -670,7 +680,7 @@ def _load_gateways(db_url: str, only_codes: list[str] | None) -> list[dict[str, 
                ST_Y(location::geometry) AS lat,
                ST_X(location::geometry) AS lon,
                altitude_m, antenna_height_m, antenna_gain_dbi,
-               tx_power_dbm, frequency_mhz
+               tx_power_dbm, frequency_mhz, noise_floor_dbm
         FROM geo.gateways
         WHERE is_public = true
     """
@@ -968,6 +978,9 @@ def main() -> int:
                 landcover_dir=landcover_dir,
                 bias_path=bias_path_str,
                 smooth_px=int(args.smooth_px),
+                noise_floor_dbm=(
+                    float(r["noise_floor_dbm"]) if r.get("noise_floor_dbm") is not None else None
+                ),
             )
         )
 

@@ -26,8 +26,10 @@ from ...domain.coverage import (
     TerminalEnvironment,
 )
 from ..path_loss import (
+    DEFAULT_NOISE_FLOOR_DBM,
     DEVICE_SENSITIVITY_DBM_125KHZ,
     GW_SENSITIVITY_DBM_125KHZ,
+    NOISE_FLOOR_DBM_125KHZ,
     SUBURBAN_PROFILE,
     EnvironmentProfile,
     compute_link_budget,
@@ -104,6 +106,16 @@ class Stage1ItuModel:
         gw_sens = resolve_sensitivity(gateway.rx_sensitivity_dbm, GW_SENSITIVITY_DBM_125KHZ, sf)
         dev_sens = resolve_sensitivity(target.rx_sensitivity_dbm, DEVICE_SENSITIVITY_DBM_125KHZ, sf)
 
+        # UL: noise floor per-gateway (interference-dominated). Fallback
+        # DEFAULT_NOISE_FLOOR_DBM (~-104) khi gateway chưa calibrate.
+        # DL: device-side NF chưa đo, vẫn giữ thermal -117. Khi có DL telemetry
+        # ổn định, mới điều chỉnh.
+        ul_noise_floor = (
+            gateway.noise_floor_dbm
+            if gateway.noise_floor_dbm is not None
+            else DEFAULT_NOISE_FLOOR_DBM
+        )
+
         ul = compute_link_budget(
             direction="uplink",
             pl_db=pl_db,
@@ -112,6 +124,7 @@ class Stage1ItuModel:
             rx_gain_dbi=gw_rx_gain,
             rx_sensitivity_dbm=gw_sens,
             sf=sf,
+            noise_floor_dbm=ul_noise_floor,
         )
         dl = compute_link_budget(
             direction="downlink",
@@ -121,6 +134,7 @@ class Stage1ItuModel:
             rx_gain_dbi=target.rx_antenna_gain_dbi,
             rx_sensitivity_dbm=dev_sens,
             sf=sf,
+            noise_floor_dbm=NOISE_FLOOR_DBM_125KHZ,
         )
 
         coverage_status = status_worse_of(ul.status, dl.status)

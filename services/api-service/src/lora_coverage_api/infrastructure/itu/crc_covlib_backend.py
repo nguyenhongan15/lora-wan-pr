@@ -4,6 +4,12 @@ Lib: crc-covlib (CRC Canada, MIT). Wraps ITU-R P.1812-7 (terrain diffraction)
 through C++ core, P.2108-1 clutter through Python helper. DEM = Copernicus
 GLO-30 GeoTIFF tiles under `dem_directory`.
 
+Clutter strategy:
+  - Có DSM (`surface_dem_directory`): P.1812 đã model nhiễu xạ qua building/
+    canopy bằng surface elevation thật → bỏ P.2108 statistic (tránh double-
+    count; xem verify_p2108_double_count_2026_05_31).
+  - Không DSM: dùng P.2108 statistic làm fallback clutter loss.
+
 Design (Ousterhout Ch 4 deep module):
   - Interface: `basic_transmission_loss_db(link) -> float`.
   - Hidden: Simulation object lifecycle, DEM source wiring, percent_time/
@@ -137,19 +143,26 @@ class CrcCovlibBackend:
                 f"khả năng DEM không cover bbox."
             )
 
-        d_km = _haversine_km(
-            link.tx.latitude, link.tx.longitude, link.rx.latitude, link.rx.longitude
-        )
-        # P.2108-1 §3.2 valid cho 0.25 ≤ d ≤ 100 km. Dưới ngưỡng (vd target trùng
-        # toạ độ gateway → d=0) → công thức `log10(d)` blow-up. Vật lý: ở cự ly
-        # < 250 m clutter loss không đáng kể so với free-space + diffraction
-        # P.1812 đã tính, set 0.
-        if d_km < 0.25:
+        # P.2108 clutter chỉ áp khi KHÔNG có DSM. Có DSM → P.1812 đã model
+        # nhiễu xạ qua building/canopy bằng dữ liệu surface thật → cộng P.2108
+        # statistic = double-count (verify 2026-05-31 trên 500 row Đà Nẵng:
+        # WITH P.2108 bias +26.27 dB, WITHOUT +2.66 dB; P.2108 add ~24 dB sat
+        # ngay từ d≥2km). P.2108 vẫn dùng khi DTM-only (fallback path).
+        if self.surface_dem_directory is not None:
             clutter_db = 0.0
         else:
-            clutter_db = itur_p2108.TerrestrialPathClutterLoss(
-                link.freq_mhz / 1000.0, d_km, self.percent_location
+            d_km = _haversine_km(
+                link.tx.latitude, link.tx.longitude, link.rx.latitude, link.rx.longitude
             )
+            # P.2108-1 §3.2 valid cho 0.25 ≤ d ≤ 100 km. Dưới ngưỡng → log10(d)
+            # blow-up. < 250 m clutter loss không đáng kể so với free-space +
+            # diffraction P.1812 đã tính, set 0.
+            if d_km < 0.25:
+                clutter_db = 0.0
+            else:
+                clutter_db = itur_p2108.TerrestrialPathClutterLoss(
+                    link.freq_mhz / 1000.0, d_km, self.percent_location
+                )
 
         return float(pl_p1812 + clutter_db)
 

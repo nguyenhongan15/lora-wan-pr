@@ -27,6 +27,7 @@ _UPDATABLE_COLUMNS = frozenset(
         "is_public",
         "rx_antenna_gain_dbi",
         "rx_sensitivity_dbm",
+        "noise_floor_dbm",
     }
 )
 
@@ -49,6 +50,7 @@ def _row_to_gateway(r: dict[str, Any]) -> Gateway:
         frequency_mhz=float(r["frequency_mhz"]),
         rx_antenna_gain_dbi=_opt_float(r.get("rx_antenna_gain_dbi")),
         rx_sensitivity_dbm=_opt_float(r.get("rx_sensitivity_dbm")),
+        noise_floor_dbm=_opt_float(r.get("noise_floor_dbm")),
     )
 
 
@@ -58,7 +60,8 @@ _SELECT_COLS = """
     ST_X(location::geometry) AS lon,
     altitude_m, antenna_height_m, antenna_gain_dbi,
     tx_power_dbm, frequency_mhz,
-    rx_antenna_gain_dbi, rx_sensitivity_dbm
+    rx_antenna_gain_dbi, rx_sensitivity_dbm,
+    noise_floor_dbm
 """
 
 
@@ -147,7 +150,8 @@ class PgGatewayDirectory:
             ST_X(g.location::geometry) AS lon,
             g.altitude_m, g.antenna_height_m, g.antenna_gain_dbi,
             g.tx_power_dbm, g.frequency_mhz,
-            g.rx_antenna_gain_dbi, g.rx_sensitivity_dbm
+            g.rx_antenna_gain_dbi, g.rx_sensitivity_dbm,
+            g.noise_floor_dbm
         """
         sql = text(
             f"""
@@ -195,14 +199,14 @@ class PgGatewayDirectory:
                 code, name, location,
                 altitude_m, antenna_height_m, antenna_gain_dbi,
                 tx_power_dbm, frequency_mhz, owner_org, is_public,
-                rx_antenna_gain_dbi, rx_sensitivity_dbm
+                rx_antenna_gain_dbi, rx_sensitivity_dbm, noise_floor_dbm
             )
             VALUES (
                 :code, :name,
                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                 :altitude_m, :antenna_height_m, :antenna_gain_dbi,
                 :tx_power_dbm, :frequency_mhz, :owner_org, true,
-                :rx_antenna_gain_dbi, :rx_sensitivity_dbm
+                :rx_antenna_gain_dbi, :rx_sensitivity_dbm, :noise_floor_dbm
             )
             RETURNING id
             """
@@ -224,6 +228,7 @@ class PgGatewayDirectory:
                         "owner_org": None,
                         "rx_antenna_gain_dbi": gateway.rx_antenna_gain_dbi,
                         "rx_sensitivity_dbm": gateway.rx_sensitivity_dbm,
+                        "noise_floor_dbm": gateway.noise_floor_dbm,
                     },
                 )
                 .mappings()
@@ -244,6 +249,7 @@ class PgGatewayDirectory:
             frequency_mhz=gateway.frequency_mhz,
             rx_antenna_gain_dbi=gateway.rx_antenna_gain_dbi,
             rx_sensitivity_dbm=gateway.rx_sensitivity_dbm,
+            noise_floor_dbm=gateway.noise_floor_dbm,
         )
 
     def update(self, gateway_id: GatewayId, patch: dict[str, object]) -> Gateway | None:

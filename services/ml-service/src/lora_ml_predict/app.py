@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     db_url: str = Field(alias="LORA_DB_URL")
     port: int = 8001
     host: str = "0.0.0.0"
-    model_version: str = "stage2-xgb-v0.5.0"
+    model_version: str = "stage2-xgb-v0.6.0"
     model_path: str = Field(alias="LORA_ML_MODEL_PATH")
 
     # OOD Constraints (Vietnam, AS923-2)
