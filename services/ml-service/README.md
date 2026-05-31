@@ -1,75 +1,155 @@
 # ml-service
 
-LoRa coverage ML prediction service. **Status: empty — waiting for new ML dev to build from scratch.**
+FastAPI Stage 2 — XGBoost residual correction on top of Stage 1 ITU-R P.1812 path-loss prediction.
 
-This folder is intentionally empty except for this README and `reference_wireless/`. The previous LightGBM-residual code that the platform owner built before the handoff has been moved to `archive/stage2-lightgbm/` (kept in the repo as a personal-reference benchmark, not deployed). `api-service` currently runs Stage-1-only — `STAGE2_PREDICT_BASE_URL` is empty in `.env`, so the api-service stage2 client short-circuits and responses carry `model_version = "stage1-itu-p1812-v0.1.0"` only.
-
----
-
-## 1. Platform context (read first)
-
-- **Product**: Vietnam LoRaWAN coverage prediction platform. Two user flows:
-  1. **Point prediction** — given (lat, lon, gateway, SF), return RSSI/SNR/coverage/confidence. *This is what `ml-service` will serve.*
-  2. **Min-SF coverage map** — precomputed raster showing the minimum reliable SF per pixel. Pure physics.
-- **Region**: Vietnam only, AS923-2 frequency plan, 14 dBm TX cap. Pilot data is Đà Nẵng (11 gateways) + Hải Phòng (2 gateways).
-- **Stage 1**: ITU-R P.1812-7 + P.2108 clutter loss, via `crc-covlib`. Code lives in `services/api-service/src/lora_coverage_api/application/itu/` + `infrastructure/itu/crc_covlib_backend.py`. **Do not change Stage 1.** You consume it.
-- **Measured Stage 1 quality on test set (Jan–Feb 2026 hold-out)**: bias ≈ +11.65 dB systematic underprediction of loss (Stage 1 too pessimistic), RMSE 7–14 dB over 2–30 km. There is signal for ML to recover.
-- **Architecture rule**: api-service follows a strict 5-layer split (edge → application → domain ← infrastructure) enforced by `import-linter`. ml-service is a separate process — couple to api-service **only via HTTP** (no direct imports beyond what the workspace exposes as a shared library, if you opt into the workspace).
+**Status:** ✅ Active. Model `stage2-xgb-v0.6.0` deployed. RMSE 10.59 dB on Jan–Feb 2026 hold-out (n=337, 4 gw outdoor).
 
 ---
 
-## 2. Reference material in this repo
+## 1. Service contract
 
-### `services/ml-service/reference_wireless/` — the model you authored before joining this codebase
+| Endpoint | Method | Auth | Mô tả |
+|---|---|---|---|
+| `/healthz` | GET | none | Liveness probe |
+| `/residual` | POST | Bearer | Single-point residual `(δ_dB, model_version)` |
+| `/residuals/batch` | POST | Bearer | Batch tối đa 5000 target |
 
-This is the `Wireless-Coverage-Prediction` project (XGBoost direct-RSSI predictor) moved here so you find it without grepping. Not wired into anything. Use it as the reference implementation for feature engineering you already validated (Fresnel obstruction, terrain roughness, landuse ratios from OSM) and the `ColumnTransformer + tree model` pipeline shape.
+**Request body** (`/residual`):
+```json
+{
+  "target": { "lat": 16.05, "lon": 108.21, "sf": 10 },
+  "serving_gateway": {
+    "lat": 16.05480, "lon": 108.21993,
+    "altitude_m": 0.0, "antenna_height_m": 15.0,
+    "frequency_mhz": 923.0
+  }
+}
+```
 
-### `archive/stage2-lightgbm/` — the platform owner's personal Stage 2 LightGBM build
+**Response**:
+```json
+{ "residual_db": -3.42, "model_version": "stage2-xgb-v0.6.0", "confidence": "in_distribution" }
+```
 
-Frozen. RMSE **6.41 dB** on the same Jan–Feb 2026 test set. Kept as a benchmark to beat — not as a starting point you must extend. See `archive/stage2-lightgbm/README.md` for the feature list, training scope, hyperparameter search settings, and lessons learned.
+OOD (lat/lon ngoài bbox VN, SF ngoài [7,12], freq ngoài AS923-2) → `confidence: "out_of_distribution"`, `residual_db: null`. api-service treat null như Stage 1 only fallback.
 
-### Other repo locations you'll want to know
-
-- `services/api-service/src/lora_coverage_api/infrastructure/stage2_client.py` — HTTP client api-service uses to call your service. You change the contract; this client adapts.
-- `migrations/` — DB schema (PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17). Training data lives in the `training` hypertable (validated rows promoted from `quarantine`).
-- `scripts/validate_stage1_itu.py` — Stage 1-only validator. Reproduce the +11.65 dB bias / 7–14 dB RMSE numbers against fresh data.
-
----
-
-## 3. Fixed constraints (you cannot change these)
-
-- **Region**: Vietnam only. AS923-2, 14 dBm TX cap. Multi-region is future work — do not design for it.
-- **DEM source**: **Copernicus GLO-30** GeoTIFF tiles. Host path is `LORA_DATA_DIR` (default `E:/DATN/lora-data`), mounted read-only into the container at `/data`. Surface DEM at `/data/dem-surface` is optional and only used by Stage 1 P.1812 surface mode.
-- **DB schema**: owned by api-service migrations. Do not migrate the DB yourself; if you need a new column, file an ADR or PR against api-service migrations.
-- **Train/val/test split**: train+val = random sample from Nov–Dec 2025, test = Jan–Feb 2026 hold-out. Derived in the query, never persisted. Use the same split if you want to compare against the 6.41 dB baseline.
-- **Auth**: bearer token shared via `LORA_STAGE2_AUTH_TOKEN`. api-service sends `Authorization: Bearer <token>`. You must verify it on every request.
-
----
-
-## 4. What is yours to decide
-
-Everything inside this folder. Specifically:
-
-- **Service stack** — Python deps, package name, entrypoint, framework. Nothing is reserved.
-- **Model architecture** — LightGBM, XGBoost, neural net, ensemble, anything. The 6.41 dB RMSE on the Jan–Feb 2026 test set is the bar.
-- **Prediction target** — residual (correction to Stage 1) vs direct RSSI (skip Stage 1 at inference). Either works on api-service side; you just need to coordinate the response shape.
-- **HTTP contract** — the archived service used `POST /residual` returning `(residual_db, model_version)`. You can keep that, change the route, or split into multiple endpoints (`/predict`, `/batch`, `/lookup`). Coordinate with api-service via `infrastructure/stage2_client.py`.
-- **Feature pipeline** — what to extract from DEM/OSM/gateway metadata, how to encode it, whether to precompute per-tile or compute per-request.
-- **OOD / guardrail / registry** — how to detect out-of-distribution requests, how to clip residuals (if any), where to store model artifacts (filesystem, S3/R2, MLflow).
-- **Training scope** — which devices, which time window, which gateways, whether to include Hải Phòng. Document your choice in the trained artifact's metadata.
-- **Workspace integration** — opt-in. If you add a `pyproject.toml` here and register the folder under `[tool.uv.workspace]` in the root `pyproject.toml`, you get free workspace dep access to `lora-coverage-api` (for Stage 1 sharing). Or stay out of the workspace if you prefer a fully separate Python env.
-- **Container** — your own `Dockerfile`. Wire it into `docker-compose.yml` when ready (the previous block was removed; see the comment in that file for the placeholder).
+**Auth**: shared bearer token qua env `LORA_STAGE2_AUTH_TOKEN`. api-service gửi `Authorization: Bearer <token>` mỗi request.
 
 ---
 
-## 5. Bringing a service online (when you have a model)
+## 2. Model
 
-1. Add `services/ml-service/pyproject.toml` (and `src/` etc.) with your chosen stack.
-2. If joining the uv workspace: add `"services/ml-service"` back to `[tool.uv.workspace] members` in the root `pyproject.toml` and run `uv lock`.
-3. Add a Dockerfile and a service block in `docker-compose.yml` (replace the placeholder comment).
-4. Set `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` (or whatever route/port you pick) in `.env`.
-5. Rebuild api-service: `docker compose up -d --build api-service` (api-service has no source volume — code is `COPY`'d at build time, so `restart` alone is not enough).
-6. Smoke-test against `/healthz` first, then through api-service's `/api/v1/coverage/predict`.
+- **Algorithm**: XGBoost regressor (`xgboost==2.x`)
+- **Features (8)**: `lat, lon, sf, gw_lat, gw_lon, distance_km, log_distance_km, delta_alt_m`
+  - `delta_alt_m = gw_altitude_m + gw_antenna_height_m`
+  - `distance_km` = haversine (target, gateway)
+- **Training data**: `ts.survey_training` table (PostGIS hypertable). Train+val = Nov–Dec 2025 random sample; test = Jan–Feb 2026 hold-out.
+- **Hyperparams**: Optuna 100-trial search (xem `scripts/train_residual_model.py:OPTUNA_CONFIG`)
+- **Artifact**: `data/stage2_xgb.joblib` (joblib pickle, ~3 MB)
 
+### Performance (hold-out)
 
-Document your answers in this README when you decide.
+| Metric | v0.6.0 | Stage 1 only |
+|---|---:|---:|
+| RMSE (overall) | **10.59 dB** | 13.50 dB |
+| MAE | 7.80 dB | — |
+| Bias | +0.77 dB | −6.44 dB |
+| RMSE 5–10 km | 4.2 dB | 25.1 dB |
+
+Stage 2 chính yếu corrected long-range bias (Stage 1 P.1812 under-predicts ở > 5 km).
+
+### Known limitations
+
+- Hold-out chỉ bao 4/13 gateway outdoor. Indoor gw (a84041ffff1ee248) + 8 gw khác chưa được validate.
+- Grid cells xa walk-survey path bị extrapolate — residual mean ~−5 dB → map có thể hiển thị weak hơn thực tế. Xem `core-logic/CLAUDE.md` § feedback cho clip option.
+- Stage 1 P.1812 + DSM tạo diffraction overshoot ở 250m–2km — đây là vấn đề Stage 1, không phải Stage 2.
+
+---
+
+## 3. Local development
+
+```bash
+cd services/ml-service
+uv sync
+LORA_STAGE2_AUTH_TOKEN=dev-token \
+  uv run uvicorn lora_ml_predict.app:app --reload --port 8001
+```
+
+Smoke test:
+```bash
+curl -s http://localhost:8001/healthz
+# {"status":"ok","model_version":"stage2-xgb-v0.6.0"}
+
+curl -s -X POST http://localhost:8001/residual \
+  -H "Authorization: Bearer dev-token" \
+  -H "content-type: application/json" \
+  -d '{"target":{"lat":16.05,"lon":108.21,"sf":10},
+       "serving_gateway":{"lat":16.0548,"lon":108.2199,
+                          "altitude_m":0,"antenna_height_m":15,"frequency_mhz":923}}'
+```
+
+---
+
+## 4. Re-train
+
+```bash
+# Train từ DB hiện tại (Nov–Dec 2025 train, Jan–Feb 2026 holdout)
+uv run python scripts/train_residual_model.py \
+  --output services/ml-service/data/stage2_xgb.joblib \
+  --optuna-trials 100
+
+# Eval offline trước khi deploy
+uv run python scripts/experiments/eval_stage1_vs_stage2_2026_05_31.py
+```
+
+Sau khi swap artifact: rebuild image (ml-service không mount source volume — code COPY at build):
+```bash
+docker compose up -d --build ml-service
+```
+
+Đừng quên bump `MODEL_VERSION` constant trong `src/lora_ml_predict/app.py` — nó là string hardcode (xem memory `project_ml_service_label_baked.md`).
+
+---
+
+## 5. Wiring vào api-service
+
+Trong `.env`:
+```
+STAGE2_PREDICT_BASE_URL=http://ml-service:8001
+LORA_STAGE2_AUTH_TOKEN=<shared-token>
+STAGE2_TIMEOUT_SECONDS=0.5
+```
+
+Rebuild api-service (cũng không có source volume):
+```bash
+docker compose up -d --build api-service
+```
+
+api-service tự gọi `/residual` cho từng request `/api/v1/coverage/predict`. Timeout/500/503 → graceful fallback Stage 1 only (response vẫn 200, chỉ `model_version` không có phần stage2).
+
+---
+
+## 6. File layout
+
+```
+services/ml-service/
+  Dockerfile                         # Multi-stage Python 3.12 + xgboost wheel
+  pyproject.toml                     # Package name: lora-ml-predict
+  src/lora_ml_predict/
+    app.py                           # FastAPI app + model loading + endpoints
+  data/
+    stage2_xgb.joblib                # Active model artifact
+  reference_wireless/                # Legacy reference (XGBoost direct-RSSI), không wire
+```
+
+---
+
+## 7. Production checklist
+
+- [x] Bearer auth required on prediction endpoints
+- [x] OOD guard rejects out-of-Vietnam coordinates
+- [x] Stateless (no DB connection) — model loaded once at boot
+- [x] Health endpoint returns model version cho monitoring
+- [ ] Prometheus metrics endpoint (deferred)
+- [ ] Model registry → R2 (currently filesystem only)
+- [ ] A/B test framework (deferred)

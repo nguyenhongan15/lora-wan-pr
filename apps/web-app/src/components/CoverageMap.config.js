@@ -173,3 +173,28 @@ export const MINSF_BAND_COLORS = {
 
 // Opacity nền fill — đủ rõ band, vẫn thấy địa hình dưới.
 export const MINSF_FILL_OPACITY = 0.55;
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Composite RSSI heatmap palette (mode='estimate').
+ * Dùng cùng palette với SURVEY_CIRCLE_PAINT (STATUS_COLOR) để legend đồng
+ * nhất giữa điểm đo thực và heatmap ước lượng. Bin 5 (< -140 dBm) KHÔNG
+ * render (basemap lộ ra) — coi như không phủ.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/** @type {Record<number, string>} */
+export const RSSI_BAND_COLORS = {
+  1: "#16a34a", // >= -100 dBm (xanh lá — rất mạnh)
+  2: "#eab308", // -110..-100 dBm (vàng — mạnh)
+  3: "#f97316", // -120..-110 dBm (cam — trung bình)
+  4: "#dc2626", // -140..-120 dBm (đỏ — yếu)
+};
+
+export const RSSI_FILL_OPACITY = 0.55;
+
+/** Opacity overlay redundancy (số gateway nghe được) — white hatching. */
+/** @type {Record<number, number>} */
+export const REDUNDANCY_OPACITY = {
+  1: 0, // 1 gw: không overlay (lộ basemap)
+  2: 0.25, // 2 gw: hatching nhạt
+  3: 0.45, // ≥ 3 gw: hatching đậm
+};

@@ -213,8 +213,27 @@ export const strings = {
       model: "Mô hình: ITU-R P.1812 + P.2108 (clutter)",
     },
     estimate: {
-      panelTitle: "Bản đồ ước lượng",
-      placeholder: "Đang phát triển — chưa khả dụng.",
+      panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
+      legendTitle: "Cường độ tín hiệu mạnh nhất (dBm)",
+      bins: {
+        1: "≥ −100 (rất mạnh)",
+        2: "−110 đến −100 (mạnh)",
+        3: "−120 đến −110 (trung bình)",
+        4: "−140 đến −120 (yếu)",
+      },
+      notCovered: "< −140 (không phủ)",
+      overlayTitle: "Số gateway nghe được",
+      overlayLabel: "Hiện overlay",
+      overlayBins: {
+        1: "1 gateway",
+        2: "2 gateway",
+        3: "≥ 3 gateway",
+      },
+      hint: "Mỗi ô 50m × 50m. Tô màu theo cường độ tín hiệu mạnh nhất ước lượng nhận được từ 1 trong 11 gateway (Stage 1 ITU + Stage 2 XGBoost).",
+      loadError:
+        "Không tải được dữ liệu RSSI tổng hợp. Chạy `precompute_rssi_heatmap.py` để tạo.",
+      model:
+        "Mô hình: ITU-R P.1812 + DSM + per-gw NF + Stage 2 XGBoost (clip ±15 dB)",
     },
     urlPositionLabel: "Vị trí từ URL",
     filters: {

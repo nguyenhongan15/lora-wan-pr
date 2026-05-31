@@ -44,6 +44,15 @@ dependencies = [
     # shadow tạo "đảo" SF cao giữa band SF thấp); shapely.contains test
     # nesting để build Polygon(outer, holes=[...]) đúng theo GeoJSON spec.
     "shapely>=2.0",
+    # Stage 2 XGBoost residual model — dùng bởi `scripts/precompute_rssi_heatmap.py`
+    # offline (composite RSSI heatmap). Joblib load model ở worker process,
+    # xgboost.Booster predict trên feature DataFrame (pandas). Trước đây phải
+    # bootstrap pip + pip install thủ công trong container sau mỗi rebuild
+    # (gotcha trong project_ml_deferred.md); thêm declare ở đây để uv tự install.
+    "joblib>=1.3",
+    "xgboost>=2.0",
+    "pandas>=2.2",
+    "scikit-learn>=1.4",
     # ChirpStack v4 không có REST API built-in. Public deployments thường
     # chỉ expose gRPC-web (qua nginx, port 443) — không có sidecar
     # chirpstack-rest-api. Adapter ChirpStack giao tiếp qua gRPC-web frame

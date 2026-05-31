@@ -18,6 +18,7 @@ import {
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
+import { EstimatePanel } from "./EstimatePanel.jsx";
 import { MinSFPanel } from "./MinSFPanel.jsx";
 import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
 import {
@@ -34,6 +35,9 @@ import {
   MARGIN_BAR_RANGE,
   MINSF_BAND_COLORS,
   MINSF_FILL_OPACITY,
+  REDUNDANCY_OPACITY,
+  RSSI_BAND_COLORS,
+  RSSI_FILL_OPACITY,
   PREDICT_MARKER_STYLE,
   STATUS_COLOR,
   STATUS_COLOR_FALLBACK,
@@ -301,6 +305,15 @@ const PREDICT_LINES_LAYER_ID = "predict-lines";
 const MINSF_SOURCE_ID = "minsf-src";
 const MINSF_FILL_LAYER_ID = "minsf-fill";
 const MINSF_OUTLINE_LAYER_ID = "minsf-outline";
+
+// Composite RSSI heatmap (viewMode "estimate"). 2 source độc lập (composite +
+// redundancy overlay). Composite fetch 1 lần khi switch sang estimate; cached
+// trong memory cho lần switch sau. Redundancy overlay toggle độc lập qua
+// checkbox panel.
+const RSSI_COMPOSITE_SOURCE_ID = "rssi-composite-src";
+const RSSI_COMPOSITE_FILL_LAYER_ID = "rssi-composite-fill";
+const RSSI_REDUNDANCY_SOURCE_ID = "rssi-redundancy-src";
+const RSSI_REDUNDANCY_FILL_LAYER_ID = "rssi-redundancy-fill";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
@@ -661,6 +674,14 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [minsfLoadError, setMinsfLoadError] = useState(
     /** @type {string | null} */ (null),
   );
+  // Composite RSSI heatmap (viewMode "estimate"): toggle overlay redundancy +
+  // load error state. Fetch GeoJSON khi vào estimate mode lần đầu, cache
+  // trong source data (không re-fetch khi switch qua lại minsf ↔ estimate).
+  const [showRedundancy, setShowRedundancy] = useState(false);
+  const [estimateLoadError, setEstimateLoadError] = useState(
+    /** @type {string | null} */ (null),
+  );
+  const estimateLoadedRef = useRef(false);
 
   const [contributor, setContributor] = useState(
     () => initialFilterRef.current.contributor,
@@ -895,6 +916,60 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
             "line-width": 0.5,
           }),
         });
+
+        // Composite RSSI heatmap source + 2 layer (composite fill bên dưới,
+        // redundancy overlay bên trên). Layout visibility="none" mặc định —
+        // bật khi coverageViewMode === "estimate".
+        map.addSource(RSSI_COMPOSITE_SOURCE_ID, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: RSSI_COMPOSITE_FILL_LAYER_ID,
+          type: "fill",
+          source: RSSI_COMPOSITE_SOURCE_ID,
+          // fill-sort-key: bin nhỏ (mạnh hơn, vùng nhỏ ở center) lên trên cùng.
+          // Nested polygon: bin1 ⊂ bin2 ⊂ bin3 ⊂ bin4 → cần đảo order render.
+          layout: /** @type {any} */ ({
+            visibility: "none",
+            "fill-sort-key": ["-", 5, ["get", "bin"]],
+          }),
+          paint: /** @type {any} */ ({
+            "fill-color": [
+              "match",
+              ["get", "bin"],
+              1, RSSI_BAND_COLORS[1],
+              2, RSSI_BAND_COLORS[2],
+              3, RSSI_BAND_COLORS[3],
+              4, RSSI_BAND_COLORS[4],
+              "#888888",
+            ],
+            "fill-opacity": RSSI_FILL_OPACITY,
+          }),
+        });
+        map.addSource(RSSI_REDUNDANCY_SOURCE_ID, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: RSSI_REDUNDANCY_FILL_LAYER_ID,
+          type: "fill",
+          source: RSSI_REDUNDANCY_SOURCE_ID,
+          // White overlay với opacity match theo gw_count_min. 1 gw = 0
+          // (không vẽ); 2 gw = 0.25; ≥3 gw = 0.45 → "vùng càng dày càng sáng".
+          layout: /** @type {any} */ ({ visibility: "none" }),
+          paint: /** @type {any} */ ({
+            "fill-color": "#ffffff",
+            "fill-opacity": [
+              "match",
+              ["get", "gw_count_min"],
+              1, REDUNDANCY_OPACITY[1],
+              2, REDUNDANCY_OPACITY[2],
+              3, REDUNDANCY_OPACITY[3],
+              0,
+            ],
+          }),
+        });
       }
 
       // Survey layer chỉ add cho "points" mode. "heatmap" sẽ add raster
@@ -1074,6 +1149,79 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
 
     return () => controller.abort();
   }, [minsfGatewayCode, mode, mapLoaded]);
+
+  // Composite RSSI heatmap: toggle visibility theo coverageViewMode +
+  // checkbox redundancy. Khác min-SF (cần gateway selection) — composite hiển
+  // thị ngay khi switch sang "estimate".
+  useEffect(() => {
+    if (mode !== "heatmap") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getLayer(RSSI_COMPOSITE_FILL_LAYER_ID)) return;
+    const showComposite = coverageViewMode === "estimate";
+    map.setLayoutProperty(
+      RSSI_COMPOSITE_FILL_LAYER_ID,
+      "visibility",
+      showComposite ? "visible" : "none",
+    );
+    map.setLayoutProperty(
+      RSSI_REDUNDANCY_FILL_LAYER_ID,
+      "visibility",
+      showComposite && showRedundancy ? "visible" : "none",
+    );
+  }, [coverageViewMode, showRedundancy, mode, mapLoaded]);
+
+  // Fetch composite + redundancy GeoJSON khi vào estimate mode lần đầu. Cache
+  // qua estimateLoadedRef — không re-fetch khi switch qua lại.
+  useEffect(() => {
+    if (mode !== "heatmap") return;
+    if (coverageViewMode !== "estimate") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (estimateLoadedRef.current) return;
+    if (!map.getSource(RSSI_COMPOSITE_SOURCE_ID)) return;
+
+    const controller = new AbortController();
+    const base = import.meta.env.BASE_URL ?? "/";
+    const compUrl = `${base}coverage/rssi/composite.geojson`;
+    const redUrl = `${base}coverage/rssi/redundancy.geojson`;
+    setEstimateLoadError(null);
+
+    Promise.all([
+      fetch(compUrl, { signal: controller.signal }).then((r) => {
+        if (!r.ok) throw new Error(`composite HTTP ${r.status}`);
+        return r.json();
+      }),
+      fetch(redUrl, { signal: controller.signal }).then((r) => {
+        if (!r.ok) throw new Error(`redundancy HTTP ${r.status}`);
+        return r.json();
+      }),
+    ])
+      .then(([compFc, redFc]) => {
+        if (!compFc || !Array.isArray(compFc.features)) {
+          throw new Error("invalid composite geojson");
+        }
+        if (!redFc || !Array.isArray(redFc.features)) {
+          throw new Error("invalid redundancy geojson");
+        }
+        const compSrc = map.getSource(RSSI_COMPOSITE_SOURCE_ID);
+        const redSrc = map.getSource(RSSI_REDUNDANCY_SOURCE_ID);
+        if (compSrc && "setData" in compSrc) {
+          /** @type {maplibregl.GeoJSONSource} */ (compSrc).setData(compFc);
+        }
+        if (redSrc && "setData" in redSrc) {
+          /** @type {maplibregl.GeoJSONSource} */ (redSrc).setData(redFc);
+        }
+        estimateLoadedRef.current = true;
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        console.error("RSSI heatmap fetch failed:", err);
+        setEstimateLoadError(strings.coverageMap.estimate.loadError);
+      });
+
+    return () => controller.abort();
+  }, [coverageViewMode, mode, mapLoaded]);
 
   // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
   // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
@@ -1724,14 +1872,11 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
                 loadingError={minsfLoadError}
               />
             ) : (
-              <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 shadow-sm">
-                <div className="text-sm font-semibold text-slate-900">
-                  {t.estimate.panelTitle}
-                </div>
-                <div className="mt-2 text-slate-500">
-                  {t.estimate.placeholder}
-                </div>
-              </div>
+              <EstimatePanel
+                showRedundancy={showRedundancy}
+                onToggleRedundancy={setShowRedundancy}
+                loadingError={estimateLoadError}
+              />
             )
           ) : null}
 

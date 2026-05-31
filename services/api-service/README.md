@@ -120,6 +120,28 @@ Tự bảo vệ: admin KHÔNG thể tự sửa `is_admin`/`disabled` của chín
 mình qua API (`AdminSelfModificationError` 400). Demote/disable admin cuối
 cùng → thao tác SQL trực tiếp.
 
+## Stage 2 wiring (gọi ml-service)
+
+`POST /api/v1/coverage/predict` chạy Stage 1 (ITU-R P.1812 + P.2108) trước, rồi gọi Stage 2 ml-service nếu bật:
+
+```
+.env:
+  STAGE2_PREDICT_BASE_URL=http://ml-service:8001
+  STAGE2_TIMEOUT_SECONDS=0.5
+  LORA_STAGE2_AUTH_TOKEN=<shared-secret>
+```
+
+`infrastructure/stage2_client.py` (httpx.AsyncClient) gửi `Authorization: Bearer ...`.
+
+- Stage 2 OK → `model_version = "stage1-itu-p1812-v0.1.0+stage2-xgb-v0.6.0"`, RSSI điều chỉnh theo residual.
+- Stage 2 timeout/500/503/OOD → graceful fallback, response 200, `model_version = "stage1-itu-p1812-v0.1.0"` only.
+- `STAGE2_PREDICT_BASE_URL` rỗng → Stage 1 only, không gọi ml-service.
+
+Khi đổi binding: rebuild api-service (không có source volume mount):
+```bash
+docker compose up -d --build api-service
+```
+
 ## Bất biến cứng (CI enforce)
 
 - `application/` không import `infrastructure/` (import-linter)
