@@ -218,7 +218,7 @@ services:
       # Path tới model artifact trong container. Dummy stub đến từ git
       # (services/ml-service/data/dummy_model.txt → mount /app/data).
       # Empty / non-existent → ml-service trả 503 → api-service Stage1 fallback.
-      LORA_ML_MODEL_PATH: ${LORA_ML_MODEL_PATH:-/app/data/dummy_model.txt}
+      LORA_ML_MODEL_PATH: ${LORA_ML_MODEL_PATH:-/app/data/stage2_xgb.joblib}
     volumes:
       # DEM/DSM tiles dùng chung với api-service (read-only).
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
