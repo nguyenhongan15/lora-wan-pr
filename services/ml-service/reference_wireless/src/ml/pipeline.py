@@ -3,7 +3,10 @@ import pandas as pd
 
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import (
+    StandardScaler,
+    OneHotEncoder
+)
 
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestRegressor
@@ -69,42 +72,82 @@ def build_pipeline(model_type="random_forest"):
 
     # Numeric preprocessing
     numeric_transformer = Pipeline(
-        steps=[("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler())
+        ]
     )
 
     # Categorical preprocessing
     categorical_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+            (
+                "encoder",
+                OneHotEncoder(
+                    handle_unknown="ignore"
+                )
+            )
         ]
     )
 
     # Full preprocessing
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, NUMERIC_FEATURES),
-            ("cat", categorical_transformer, CATEGORICAL_FEATURES),
+            (
+                "num",
+                numeric_transformer,
+                NUMERIC_FEATURES
+            ),
+
+            (
+                "cat",
+                categorical_transformer,
+                CATEGORICAL_FEATURES
+            ),
         ]
     )
 
     # Models
     if model_type == "random_forest":
-        model = RandomForestRegressor(n_estimators=200, max_depth=20, random_state=42, n_jobs=-1)
-    if model_type == "xgboost":
-        from xgboost import XGBRegressor
-
-        model = XGBRegressor(n_estimators=200, max_depth=20, random_state=42, n_jobs=-1)
+        model = RandomForestRegressor( #best parameters found
+            n_estimators=500,
+            max_depth=20,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features="sqrt",
+            random_state=42,
+            n_jobs=-1
+        )
+    if model_type == "extra_trees":
+        from sklearn.ensemble import ExtraTreesRegressor
+        model = ExtraTreesRegressor(  #best parameters found
+            n_estimators=1500,
+            max_depth=20,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            max_features=None,
+            random_state=42,
+            n_jobs=-1
+        )
 
     # Final pipeline
-    pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("model", model)
+        ]
+    )
 
     return pipeline
 
 
 def prepare_data(df: pd.DataFrame):
 
-    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    X = df[
+        NUMERIC_FEATURES +
+        CATEGORICAL_FEATURES
+    ]
     y = df[TARGET]
 
     return X, y
@@ -118,9 +161,15 @@ def get_feature_names(pipeline):
 
     feature_names.extend(NUMERIC_FEATURES)
 
-    cat_encoder = preprocessor.named_transformers_["cat"].named_steps["encoder"]
+    cat_encoder = (
+        preprocessor
+        .named_transformers_["cat"]
+        .named_steps["encoder"]
+    )
 
-    cat_names = cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES)
+    cat_names = cat_encoder.get_feature_names_out(
+        CATEGORICAL_FEATURES
+    )
 
     feature_names.extend(cat_names)
 
