@@ -81,3 +81,4 @@ logs/
 .claude/
 u-work/
 core-logic/
+.vscode/settings.json
