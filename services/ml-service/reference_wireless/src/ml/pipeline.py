@@ -14,51 +14,56 @@ NUMERIC_FEATURES = [
     # Radio
     # "snr", features not usable for prediction since not available at prediction time
     "frequency",
-    "bandwidth",
+    # "bandwidth", // constant in our dataset
     "spreading_factor",
+
     # Geometry
-    "distance",
+    # "distance", //already in log_distance
     "log_distance",
-    "distance_3d",
+    # "distance_3d", //already in log_distance_3d
     "log_distance_3d",
-    # "delta_lat", #too specific ?
-    # "delta_lon",
-    # "angle",
+
+    "delta_lat", 
+    "delta_lon",
+    "angle",
+
     # Terrain elevation
-    "elevation",
+    # "elevation",  //already in delta elev
     "gw_elevation",
     "delta_elevation",
     "elevation_angle",
+
     # Propagation
-    "fspl",
+    # "fspl", //already in distances features
     "slope",
     "roughness",
-    # Terrain
+    #Terrain
     "terrain_mean",
     "terrain_std",
     "terrain_min",
     "terrain_max",
-    "terrain_range",
-    # "los", Redondance with obstruction ratio (los = obstruction_ratio == 0)
-    "obstruction_ratio",
-    "max_obstruction",
-    "mean_obstruction",
+    # "terrain_range", // low importance
+
+    # "los", #Redondance with obstruction ratio (los = obstruction_ratio == 0)
+    # "obstruction_ratio", //low importance
+    # "max_obstruction",
+    # "mean_obstruction", //low importance 
     "fresnel_obstruction_ratio",
     "min_fresnel_clearance",
     "mean_fresnel_clearance",
+
     # Land use ratios
-    "forest_ratio",
-    "water_ratio",
+    # "forest_ratio", // distribution too low to be useful
+    # "water_ratio", // distribution too low to be useful
     "residential_ratio",
-    "unknown_ratio",
+    # "unknown_ratio", //arleady in residential ratio
 ]
 
 CATEGORICAL_FEATURES = [
-    "gateway",  # train in danang and test in hai phong so useless in that case
+    "gateway", #train in danang and test in hai phong so useless in that case 
     # "device", #same idea : not specific to propagation (and not available at prediction time ?)
-    "terrain_type",
+    # "terrain_type", //low importance
 ]
-
 
 def build_pipeline(model_type="random_forest"):
 
