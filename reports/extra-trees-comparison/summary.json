@@ -1,0 +1,53 @@
+{
+  "model": "ExtraTreesRegressor",
+  "params": {
+    "n_estimators": 1500,
+    "max_depth": 20,
+    "min_samples_split": 5,
+    "min_samples_leaf": 2,
+    "max_features": null,
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "n_features": 21,
+  "n_train": 8168,
+  "n_test": 2042,
+  "train": {
+    "n": 8168,
+    "rmse_db": 1.8856752034548718,
+    "mae_db": 1.201191405550432,
+    "bias_db": 2.2130518116720065e-15,
+    "r2": 0.9706066160155408
+  },
+  "test": {
+    "n": 2042,
+    "rmse_db": 3.4963229007896315,
+    "mae_db": 2.02914536158266,
+    "bias_db": -0.0038495028903008555,
+    "r2": 0.8955240742198354
+  },
+  "null_baseline": {
+    "n": 2042,
+    "rmse_db": 108.87461900762202,
+    "mae_db": 108.33594515181196,
+    "bias_db": -108.33594515181196,
+    "r2": -100.30863295437838
+  },
+  "xgboost_comparison": {
+    "model": "XGBoost (same 21 features, RSSI target)",
+    "train": {
+      "n": 8168,
+      "rmse_db": 2.201304166557978,
+      "mae_db": 1.5570102508574812,
+      "bias_db": 0.0016569432735910146,
+      "r2": 0.9599432307130783
+    },
+    "test": {
+      "n": 2042,
+      "rmse_db": 3.8014205366971767,
+      "mae_db": 2.1795556771766895,
+      "bias_db": -0.03318082620768309,
+      "r2": 0.8764948715281297
+    }
+  }
+}

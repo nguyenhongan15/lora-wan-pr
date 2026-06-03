@@ -1,0 +1,22 @@
+{
+  "frequency": 921832497.5514202,
+  "spreading_factor": 10.124975514201763,
+  "log_distance": 2.981148369095039,
+  "log_distance_3d": 2.9948730429098167,
+  "delta_lat": -0.005497165998140435,
+  "delta_lon": -0.021656916126447833,
+  "angle": 0.1618365024999955,
+  "gw_elevation": 71.7560235063663,
+  "delta_elevation": -73.76611165523997,
+  "elevation_angle": -0.06675967855842073,
+  "slope": 1.5474282263976415,
+  "roughness": 1.5813213148585161,
+  "terrain_mean": 13.812745269857173,
+  "terrain_std": 15.874676616814282,
+  "terrain_min": 4.852007835455436,
+  "terrain_max": 78.19637610186092,
+  "fresnel_obstruction_ratio": 0.4086765597939244,
+  "min_fresnel_clearance": -5.246753977721196,
+  "mean_fresnel_clearance": 26.36065135211755,
+  "residential_ratio": 0.16585782674026878
+}
