@@ -82,13 +82,17 @@ RESIDUAL_CLIP_DB = float("inf")
 # Ngưỡng "gateway có nghe được" cho overlay gw_count. -130 = SF12 limit + margin.
 REDUNDANCY_THRESHOLD_DBM = -130.0
 
-# 4 visible RSSI bins (low_dbm, high_dbm, bin_id, label). Cell < -140 dBm KHÔNG
+# 4 visible RSSI bins (low_dbm, high_dbm, bin_id, label). Cell < -137 dBm KHÔNG
 # polygonize → transparent, basemap lộ ra.
+#
+# Ngưỡng align với SX1276 BW125 sensitivity: SF7 -123, SF10 -132, SF12 -137.
+# Bin cũ (-140..-120) gộp cả "SF7 dư margin" lẫn "SF12 sát chết" → 72% diện
+# tích đỏ trên map. Bin mới tách rõ "trung bình SF10-11" vs "SF12-only".
 RSSI_BINS: list[tuple[float, float, int, str]] = [
     (-100.0, math.inf, 1, ">= -100 dBm"),
-    (-110.0, -100.0, 2, "-110 .. -100 dBm"),
-    (-120.0, -110.0, 3, "-120 .. -110 dBm"),
-    (-140.0, -120.0, 4, "-140 .. -120 dBm"),
+    (-115.0, -100.0, 2, "-115 .. -100 dBm"),
+    (-125.0, -115.0, 3, "-125 .. -115 dBm"),
+    (-137.0, -125.0, 4, "-137 .. -125 dBm"),
 ]
 GW_COUNT_BINS: list[tuple[int, int, str]] = [
     (1, 1, "1 gateway"),

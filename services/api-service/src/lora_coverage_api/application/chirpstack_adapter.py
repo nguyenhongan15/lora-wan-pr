@@ -71,6 +71,24 @@ def _decode_gnss(raw: Any) -> float | None:
     return v
 
 
+def _decode_code_rate(raw: Any) -> str | None:
+    """ChirpStack protobuf enum (vd "CR_4_5") → "X/Y". None nếu không hợp lệ."""
+    if raw is None:
+        return None
+    s = str(raw).strip().upper()
+    if not s:
+        return None
+    if "/" in s:
+        return s
+    if s.startswith("CR_"):
+        parts = s[3:].split("_")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return f"{parts[0]}/{parts[1]}"
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            return f"{parts[0]} {parts[1]}/{parts[2]}"
+    return None
+
+
 def _parse_iso(raw: Any) -> datetime | None:
     if not isinstance(raw, str) or not raw:
         return None
@@ -105,6 +123,7 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
         sf = None
     if sf not in _VALID_SF:
         return AdapterResult(rejected=[f"invalid spreadingFactor: {sf_raw!r}"])
+    code_rate = _decode_code_rate(lora.get("codeRate"))
 
     freq_hz_raw = tx.get("frequency")
     try:
@@ -180,6 +199,7 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
                     frequency_mhz=freq_mhz,
                     device_id=device_id,
                     serving_gateway_id=None,  # resolve sau ở application/webhook
+                    code_rate=code_rate,
                 )
             )
         except ValueError as e:

@@ -82,7 +82,7 @@ _QUARANTINE_UPSERT_SQL = text("""
         spreading_factor, frequency_mhz, device_id,
         serving_gateway_id, uploader_id,
         external_id, source_type, contributor_user_id, linked_source_id,
-        submitted_for_community
+        submitted_for_community, code_rate
     )
     VALUES (
         :ts,
@@ -90,7 +90,7 @@ _QUARANTINE_UPSERT_SQL = text("""
         :rssi, :snr, :sf, :freq, :device_id,
         :gw_id, :uploader_id,
         :external_id, :source_type, :contributor_user_id, :linked_source_id,
-        :submitted_for_community
+        :submitted_for_community, :code_rate
     )
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
     DO UPDATE SET
@@ -239,6 +239,7 @@ def upsert_measurement(
             "contributor_user_id": contributor_user_id,
             "linked_source_id": linked_source_id,
             "submitted_for_community": submitted_for_community,
+            "code_rate": rec.code_rate,
         },
     ).one()
     return "inserted" if row.inserted else "updated"

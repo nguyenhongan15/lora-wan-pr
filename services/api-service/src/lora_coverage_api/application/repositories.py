@@ -233,6 +233,10 @@ class TrainingPoint:
     snr_db: float
     spreading_factor: int
     serving_gateway_id: UUID | None
+    device_id: str | None
+    frequency_mhz: float
+    timestamp: datetime
+    code_rate: str | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -67,6 +67,7 @@ class SurveyRecord:
     device_id: str | None = None
     serving_gateway_id: GatewayId | None = None
     submitted_for_community: bool = False
+    code_rate: str | None = None
 
     def __post_init__(self) -> None:
         if not -90.0 <= self.latitude <= 90.0:

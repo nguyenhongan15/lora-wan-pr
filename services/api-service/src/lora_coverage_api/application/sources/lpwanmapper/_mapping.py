@@ -57,11 +57,9 @@ def measurement_records(uplink: dict[str, Any]) -> Iterator[MeasurementRecord]:
         return
 
     tx = uplink.get("txInfo") or {}
-    sf = (
-        (tx.get("modulation") or {}).get("lora", {}).get("spreadingFactor")
-        if isinstance(tx, dict)
-        else None
-    )
+    lora = (tx.get("modulation") or {}).get("lora", {}) if isinstance(tx, dict) else {}
+    sf = lora.get("spreadingFactor") if isinstance(lora, dict) else None
+    code_rate = _decode_code_rate(lora.get("codeRate") if isinstance(lora, dict) else None)
     freq_mhz = _opt_freq_mhz(tx.get("frequency") if isinstance(tx, dict) else None)
 
     obj = uplink.get("object") or {}
@@ -103,6 +101,7 @@ def measurement_records(uplink: dict[str, Any]) -> Iterator[MeasurementRecord]:
             frequency_mhz=freq_mhz,
             device_external_id=str(device),
             serving_gateway_external_id=gw_id,
+            code_rate=code_rate,
         )
 
 
@@ -132,6 +131,30 @@ def _opt_str(v: Any) -> str | None:
         return None
     s = str(v).strip()
     return s or None
+
+
+def _decode_code_rate(v: Any) -> str | None:
+    """ChirpStack protobuf enum (vd "CR_4_5") → "X/Y". Trả None nếu unknown.
+
+    Accept luôn cả định dạng đã canonical ("4/5") cho future-proof. Sample r-dt
+    chỉ có "CR_4_5"; bigger family hỗ trợ CR_4_5..CR_4_8 + CR_LI_X_Y (long-int
+    LR-FHSS variant — chưa thấy thực tế, parse defensive).
+    """
+    if v is None:
+        return None
+    s = str(v).strip().upper()
+    if not s:
+        return None
+    if "/" in s:
+        return s
+    if s.startswith("CR_"):
+        parts = s[3:].split("_")
+        # CR_4_5 → ["4","5"]; CR_LI_4_5 → ["LI","4","5"] (giữ LI prefix)
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return f"{parts[0]}/{parts[1]}"
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            return f"{parts[0]} {parts[1]}/{parts[2]}"
+    return None
 
 
 def _opt_freq_mhz(v: Any) -> float | None:

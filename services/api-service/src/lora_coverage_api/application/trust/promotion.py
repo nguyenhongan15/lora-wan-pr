@@ -77,7 +77,7 @@ _SELECT_BASE = """
         ST_Y(q.location::geometry) AS lat,
         ST_X(q.location::geometry) AS lon,
         q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
-        q.device_id, q.serving_gateway_id
+        q.device_id, q.serving_gateway_id, q.code_rate
     FROM ts.survey_quarantine q
     WHERE q.submitted_for_community = true
       AND q.reject_reason IS NULL
@@ -146,6 +146,7 @@ _LIST_CSV_BATCHES = text(
                     WHERE t.timestamp = q.timestamp
                       AND t.source_type = q.source_type
                       AND t.external_id = q.external_id
+                      AND t.contributor_user_id = q.contributor_user_id
                 )
             THEN 1 ELSE 0 END
         )::int AS pending_review,
@@ -155,6 +156,7 @@ _LIST_CSV_BATCHES = text(
                 WHERE t.timestamp = q.timestamp
                   AND t.source_type = q.source_type
                   AND t.external_id = q.external_id
+                  AND t.contributor_user_id = q.contributor_user_id
             ) THEN 1 ELSE 0 END
         )::int AS promoted
     FROM ts.survey_quarantine q
@@ -176,6 +178,7 @@ _DELETE_CSV_BATCH_TRAINING = text(
     WHERE t.timestamp = q.timestamp
       AND t.source_type = q.source_type
       AND t.external_id = q.external_id
+      AND t.contributor_user_id = q.contributor_user_id
       AND q.uploader_id = :uploader_id
       AND q.source_type = 'csv_upload'
       AND q.uploaded_at = :uploaded_at
@@ -210,6 +213,7 @@ _CSV_STATS_FOR_UPLOADER = text(
                     WHERE t.timestamp = q.timestamp
                       AND t.source_type = q.source_type
                       AND t.external_id = q.external_id
+                      AND t.contributor_user_id = q.contributor_user_id
                 )
             THEN 1 ELSE 0 END
         )::int AS pending_review,
@@ -219,6 +223,7 @@ _CSV_STATS_FOR_UPLOADER = text(
                 WHERE t.timestamp = q.timestamp
                   AND t.source_type = q.source_type
                   AND t.external_id = q.external_id
+                  AND t.contributor_user_id = q.contributor_user_id
             ) THEN 1 ELSE 0 END
         )::int AS promoted
     FROM ts.survey_quarantine q
@@ -269,14 +274,14 @@ _INSERT_TRAINING_FROM_QUARANTINE = text(
         spreading_factor, frequency_mhz, device_id,
         serving_gateway_id, uploader_id,
         external_id, source_type, contributor_user_id, linked_source_id,
-        submitted_for_community
+        submitted_for_community, code_rate
     )
     SELECT
         gen_random_uuid(), q.timestamp, q.location, q.rssi_dbm, q.snr_db,
         q.spreading_factor, q.frequency_mhz, q.device_id,
         q.serving_gateway_id, q.uploader_id,
         q.external_id, q.source_type, q.contributor_user_id, q.linked_source_id,
-        true
+        true, q.code_rate
     FROM ts.survey_quarantine q
     WHERE q.timestamp = :ts AND q.id = :qid
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
@@ -796,6 +801,7 @@ def _row_to_record(row: Any) -> SurveyRecord:
         device_id=row.device_id,
         serving_gateway_id=GatewayId(row.serving_gateway_id) if row.serving_gateway_id else None,
         submitted_for_community=True,
+        code_rate=row.code_rate,
     )
 
 

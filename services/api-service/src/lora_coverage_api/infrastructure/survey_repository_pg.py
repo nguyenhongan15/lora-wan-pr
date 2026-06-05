@@ -40,7 +40,7 @@ class PgSurveyRepository:
             spreading_factor, frequency_mhz, device_id,
             serving_gateway_id, uploader_id,
             external_id, source_type, contributor_user_id, linked_source_id,
-            submitted_for_community
+            submitted_for_community, code_rate
         )
         VALUES (
             :id, :ts,
@@ -48,7 +48,7 @@ class PgSurveyRepository:
             :rssi, :snr, :sf, :freq, :device_id,
             :gw_id, :uploader_id,
             :external_id, :source_type, :contributor_user_id, :linked_source_id,
-            :submitted_for_community
+            :submitted_for_community, :code_rate
         )
         ON CONFLICT (timestamp, id) DO NOTHING
         """
@@ -83,6 +83,7 @@ class PgSurveyRepository:
             "linked_source_id": linked_source_id,
             "contributor_user_id": contributor_user_id,
             "submitted_for_community": submitted_for_community,
+            "code_rate": r.code_rate,
         }
 
     def write_quarantine(self, batch: SurveyBatch) -> SurveyBatchId:
@@ -231,7 +232,8 @@ class PgSurveyRepository:
                 SELECT
                     ST_Y(t.location::geometry) AS lat,
                     ST_X(t.location::geometry) AS lon,
-                    t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id
+                    t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id,
+                    t.device_id, t.frequency_mhz, t.timestamp, t.code_rate
                 FROM ts.survey_training t
                 JOIN auth.linked_sources ls ON ls.id = t.linked_source_id
                 JOIN auth.users u ON u.id = t.contributor_user_id
@@ -261,11 +263,22 @@ class PgSurveyRepository:
                 "ST_Y(t.location::geometry) AS lat, "
                 "ST_X(t.location::geometry) AS lon, "
                 "t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id, "
-                "t.timestamp"
+                "t.device_id, t.frequency_mhz, t.timestamp, t.code_rate"
             )
+            # Dedup quarantine vs training trên key (timestamp, source_type,
+            # external_id) — promotion KHÔNG xoá quarantine row sau khi copy
+            # sang training (giữ để re-promote / audit). Nếu UNION ALL thuần,
+            # row promoted bị count 2 lần.
+            #
+            # Match thêm contributor_user_id: cùng external_id có thể ở
+            # training dưới contributor khác (conflict winner trong ON
+            # CONFLICT DO NOTHING). User hiện tại có quarantine copy chưa lên
+            # training của họ → vẫn phải hiện. Tất cả source hiện hành đều
+            # có external_id NOT NULL → key valid.
             sql = text(
                 f"""
-                SELECT lat, lon, rssi_dbm, snr_db, spreading_factor, serving_gateway_id
+                SELECT lat, lon, rssi_dbm, snr_db, spreading_factor, serving_gateway_id,
+                       device_id, frequency_mhz, timestamp, code_rate
                 FROM (
                     {inner_select}
                     FROM ts.survey_training t
@@ -274,6 +287,13 @@ class PgSurveyRepository:
                     {inner_select}
                     FROM ts.survey_quarantine t
                     {where_sql}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM ts.survey_training tr
+                        WHERE tr.timestamp = t.timestamp
+                          AND tr.source_type = t.source_type
+                          AND tr.external_id = t.external_id
+                          AND tr.contributor_user_id = t.contributor_user_id
+                      )
                 ) u
                 {outer_order_sql}
                 LIMIT :limit OFFSET :offset
@@ -291,6 +311,10 @@ class PgSurveyRepository:
                 snr_db=float(r["snr_db"]),
                 spreading_factor=int(r["spreading_factor"]),
                 serving_gateway_id=r["serving_gateway_id"],
+                device_id=r["device_id"],
+                frequency_mhz=float(r["frequency_mhz"]),
+                timestamp=r["timestamp"],
+                code_rate=r["code_rate"],
             )
             for r in rows
         ]
@@ -304,6 +328,11 @@ class PgSurveyRepository:
         # contributor_user_id = :user_id đã giới hạn data của user → an toàn
         # khi pass linked_source_id thẳng vào WHERE; nếu user truyền source
         # của người khác, intersection rỗng → không leak.
+        #
+        # UNION training + quarantine: dropdown filter phải parity với map
+        # mode='me' (list_training cũng UNION 2 bảng). Device CSV chưa "Đóng
+        # góp cộng đồng" hoặc pending_review chỉ ở quarantine — không union
+        # thì dropdown thiếu so với map.
         params: dict[str, Any] = {"user_id": user_id}
         ls_clause = ""
         if linked_source_id is not None:
@@ -312,13 +341,31 @@ class PgSurveyRepository:
 
         sql = text(
             f"""
-            SELECT t.device_id, COUNT(*) AS cnt
-            FROM ts.survey_training t
-            WHERE t.contributor_user_id = :user_id
-              AND t.device_id IS NOT NULL
-              {ls_clause}
-            GROUP BY t.device_id
-            ORDER BY cnt DESC, t.device_id ASC
+            SELECT device_id, SUM(cnt)::bigint AS cnt
+            FROM (
+                SELECT t.device_id, COUNT(*) AS cnt
+                FROM ts.survey_training t
+                WHERE t.contributor_user_id = :user_id
+                  AND t.device_id IS NOT NULL
+                  {ls_clause}
+                GROUP BY t.device_id
+                UNION ALL
+                SELECT t.device_id, COUNT(*) AS cnt
+                FROM ts.survey_quarantine t
+                WHERE t.contributor_user_id = :user_id
+                  AND t.device_id IS NOT NULL
+                  {ls_clause}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM ts.survey_training tr
+                    WHERE tr.timestamp = t.timestamp
+                      AND tr.source_type = t.source_type
+                      AND tr.external_id = t.external_id
+                      AND tr.contributor_user_id = t.contributor_user_id
+                  )
+                GROUP BY t.device_id
+            ) u
+            GROUP BY device_id
+            ORDER BY cnt DESC, device_id ASC
             LIMIT 200
             """
         )

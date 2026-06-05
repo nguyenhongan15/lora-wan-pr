@@ -72,6 +72,7 @@ class MeasurementRecord:
     frequency_mhz: float | None
     device_external_id: str
     serving_gateway_external_id: str | None
+    code_rate: str | None = None
 
 
 class DataSource(ABC):

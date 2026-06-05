@@ -141,6 +141,10 @@ async def list_training_points(
                 snr_db=p.snr_db,
                 spreading_factor=p.spreading_factor,
                 serving_gateway_id=p.serving_gateway_id,
+                device_id=p.device_id,
+                frequency_mhz=p.frequency_mhz,
+                timestamp=p.timestamp,
+                code_rate=p.code_rate,
             )
             for p in points
         ],

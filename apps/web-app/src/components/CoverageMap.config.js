@@ -183,10 +183,10 @@ export const MINSF_FILL_OPACITY = 0.55;
 
 /** @type {Record<number, string>} */
 export const RSSI_BAND_COLORS = {
-  1: "#16a34a", // >= -100 dBm (xanh lá — rất mạnh)
-  2: "#eab308", // -110..-100 dBm (vàng — mạnh)
-  3: "#f97316", // -120..-110 dBm (cam — trung bình)
-  4: "#dc2626", // -140..-120 dBm (đỏ — yếu)
+  1: "#16a34a", // >= -100 dBm    (xanh lá — SF7 dư margin)
+  2: "#eab308", // -115..-100 dBm (vàng    — SF7–SF9)
+  3: "#f97316", // -125..-115 dBm (cam     — SF10–SF11)
+  4: "#dc2626", // -137..-125 dBm (đỏ      — SF12 sát ngưỡng)
 };
 
 export const RSSI_FILL_OPACITY = 0.55;

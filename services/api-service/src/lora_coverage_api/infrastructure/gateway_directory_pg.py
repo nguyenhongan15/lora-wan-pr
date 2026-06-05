@@ -134,13 +134,26 @@ class PgGatewayDirectory:
         # Mode self/user: chỉ trả gateway có survey từ user đó. INNER JOIN
         # + DISTINCT (1 gateway có nhiều survey) — query plan dùng index
         # ts.survey_training(contributor_user_id) đã tồn tại từ migration.
+        #
+        # UNION training + quarantine: gateway chỉ xuất hiện ở quarantine
+        # (data chưa promote sang training) cũng phải hiện, parity với map
+        # mode='me'. UNION (không ALL) dedup gateway_id ngay trong subquery
+        # → outer DISTINCT chỉ cần handle bbox/is_public collisions.
         if contributor is not None and contributor.mode in ("self", "user"):
-            join_sql = "INNER JOIN ts.survey_training t ON t.serving_gateway_id = g.id"
-            clauses.append("t.contributor_user_id = :contributor_user_id")
-            params["contributor_user_id"] = contributor.target_user_id
+            ls_clause = ""
             if contributor.linked_source_id is not None:
-                clauses.append("t.linked_source_id = :linked_source_id")
+                ls_clause = "AND t.linked_source_id = :linked_source_id"
                 params["linked_source_id"] = contributor.linked_source_id
+            join_sql = (
+                "INNER JOIN ("
+                "  SELECT serving_gateway_id FROM ts.survey_training t"
+                f"  WHERE t.contributor_user_id = :contributor_user_id {ls_clause}"
+                "  UNION"
+                "  SELECT serving_gateway_id FROM ts.survey_quarantine t"
+                f"  WHERE t.contributor_user_id = :contributor_user_id {ls_clause}"
+                ") t ON t.serving_gateway_id = g.id"
+            )
+            params["contributor_user_id"] = contributor.target_user_id
 
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         distinct = "DISTINCT" if join_sql else ""

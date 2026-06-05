@@ -282,6 +282,10 @@ export const SurveyTrainingPoint = z.object({
   snr_db: z.number(),
   spreading_factor: z.number().int(),
   serving_gateway_id: z.string().uuid().nullable(),
+  device_id: z.string().nullable(),
+  frequency_mhz: z.number(),
+  timestamp: z.string(),
+  code_rate: z.string().nullable(),
 });
 
 export const SurveyTrainingList = z.object({

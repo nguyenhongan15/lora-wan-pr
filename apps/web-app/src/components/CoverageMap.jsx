@@ -69,9 +69,53 @@ function buildSurveyGeoJson(items) {
         rssi_dbm: p.rssi_dbm,
         snr_db: p.snr_db,
         spreading_factor: p.spreading_factor,
+        device_id: p.device_id ?? "",
+        frequency_mhz: p.frequency_mhz,
+        timestamp: p.timestamp,
+        code_rate: p.code_rate ?? "",
       },
     })),
   };
+}
+
+/**
+ * Format ISO timestamp → "HH:mm:ss dd/mm/yy" theo local time. Trả "" nếu parse fail.
+ * @param {string} iso
+ * @returns {string}
+ */
+function formatSurveyTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const hh = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  const dd = pad(d.getDate());
+  const mo = pad(d.getMonth() + 1);
+  const yy = pad(d.getFullYear() % 100);
+  return `${hh}:${mm}:${ss} ${dd}/${mo}/${yy}`;
+}
+
+/**
+ * Escape HTML để inject vào popup an toàn (device_id là user-input).
+ * @param {string} s
+ */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => {
+    switch (c) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
 }
 
 /**
@@ -995,18 +1039,30 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       map.on("click", SURVEYS_LAYER_ID, (e) => {
         const f = e.features?.[0];
         if (!f) return;
-        const p = /** @type {{ rssi_dbm: number, snr_db: number, spreading_factor: number }} */ (
-          f.properties
-        );
+        const p = /** @type {{
+         *   rssi_dbm: number,
+         *   snr_db: number,
+         *   spreading_factor: number,
+         *   device_id: string,
+         *   frequency_mhz: number,
+         *   timestamp: string,
+         *   code_rate: string,
+         * }} */ (f.properties);
         const geom = /** @type {GeoJSON.Point} */ (f.geometry);
+        const device = p.device_id ? escapeHtml(p.device_id) : "—";
+        const codeRate = p.code_rate ? escapeHtml(p.code_rate) : "—";
         new maplibregl.Popup({ offset: 8 })
           .setLngLat(/** @type {[number, number]} */ (geom.coordinates))
           .setHTML(
             `<div style="font:12px/1.4 system-ui">
                <div><strong>${t.popup.surveyTitle}</strong></div>
+               <div>${t.popup.deviceLabel}: ${device}</div>
                <div>${t.popup.rssiLabel}: ${Number(p.rssi_dbm).toFixed(1)} dBm</div>
                <div>${t.popup.snrLabel}: ${Number(p.snr_db).toFixed(1)} dB</div>
+               <div>${t.popup.frequencyLabel}: ${Number(p.frequency_mhz).toFixed(2)} MHz</div>
                <div>${t.popup.sfLabel(Number(p.spreading_factor))}</div>
+               <div>${t.popup.codeRateLabel}: ${codeRate}</div>
+               <div>${t.popup.timeLabel}: ${formatSurveyTime(String(p.timestamp))}</div>
              </div>`,
           )
           .addTo(map);

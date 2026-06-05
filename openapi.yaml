@@ -363,7 +363,7 @@ components:
     SurveyTrainingPoint:
       type: object
       additionalProperties: false
-      required: [latitude, longitude, rssi_dbm, snr_db, spreading_factor]
+      required: [latitude, longitude, rssi_dbm, snr_db, spreading_factor, frequency_mhz, timestamp]
       properties:
         latitude: { type: number, format: double }
         longitude: { type: number, format: double }
@@ -371,6 +371,10 @@ components:
         snr_db: { type: number, format: double }
         spreading_factor: { type: integer }
         serving_gateway_id: { type: string, format: uuid, nullable: true }
+        device_id: { type: string, nullable: true }
+        frequency_mhz: { type: number, format: double }
+        timestamp: { type: string, format: date-time }
+        code_rate: { type: string, nullable: true }
 
     SurveyTrainingList:
       type: object

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from lora_coverage_api.application.sources.lpwanmapper._mapping import (
+    _decode_code_rate,
     gateway_record,
     measurement_records,
 )
@@ -179,3 +182,35 @@ class TestMeasurementRecords:
         u = _uplink(rxInfo=[{"gatewayId": "gw-1", "rssi": -90, "gwTime": 1762509600000}])
         recs = list(measurement_records(u))
         assert len(recs) == 1 and recs[0].time.year >= 2025
+
+    def test_code_rate_extracted_from_uplink(self):
+        u = _uplink(
+            txInfo={
+                "frequency": 868_000_000,
+                "modulation": {"lora": {"spreadingFactor": 7, "codeRate": "CR_4_5"}},
+            }
+        )
+        recs = list(measurement_records(u))
+        assert len(recs) == 1 and recs[0].code_rate == "4/5"
+
+    def test_code_rate_missing_yields_none(self):
+        recs = list(measurement_records(_uplink()))
+        assert len(recs) == 1 and recs[0].code_rate is None
+
+
+class TestDecodeCodeRate:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("CR_4_5", "4/5"),
+            ("CR_4_8", "4/8"),
+            ("cr_4_6", "4/6"),
+            ("4/5", "4/5"),
+            ("CR_LI_4_5", "LI 4/5"),
+            ("", None),
+            (None, None),
+            ("bogus", None),
+        ],
+    )
+    def test_decode(self, raw, expected):
+        assert _decode_code_rate(raw) == expected
