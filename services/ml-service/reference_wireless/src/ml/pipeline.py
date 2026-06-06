@@ -11,49 +11,66 @@ from sklearn.preprocessing import (
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestRegressor
 
+from processing.features import add_closest_point_features
+
 TARGET = "rssi"
 
 NUMERIC_FEATURES = [
     # Radio
     # "snr", features not usable for prediction since not available at prediction time
-    "frequency",
+    "frequency", 
     # "bandwidth", // constant in our dataset
-    "spreading_factor",
+    "spreading_factor", 
 
     # Geometry
-    # "distance", //already in log_distance
-    "log_distance",
-    # "distance_3d", //already in log_distance_3d
+    # "distance", #close to distance 3d
+    # "log_distance", #close to log distance 3d
+    "distance_3d", 
     "log_distance_3d",
+
+    "rssi_closest_point",
+    "distance_closest_point",
+    "closest_to_gw_distance",
+    # "ratio_gateway_distance",
+
+    # "rssi_closest_super_point",
+
+    "neighbor_rssi_mean",
+    "neighbor_rssi_weighted_mean",
+    "neighbor_rssi_std",
+
+    "neighbor_distance_mean",
+    "neighbor_gw_distance_mean",
+    # "neighbor_ratio_gateway_distance",
 
     "delta_lat", 
     "delta_lon",
     "angle",
 
     # Terrain elevation
-    # "elevation",  //already in delta elev
+    "elevation",  #already in delta elev
     "gw_elevation",
-    "delta_elevation",
+    "delta_elevation", 
     "elevation_angle",
 
     # Propagation
-    # "fspl", //already in distances features
+    # "fspl", #already in distances features
     "slope",
     "roughness",
     #Terrain
     "terrain_mean",
     "terrain_std",
-    "terrain_min",
+    "terrain_min", #low importance
     "terrain_max",
-    # "terrain_range", // low importance
+    "terrain_range", # low importance
 
     # "los", #Redondance with obstruction ratio (los = obstruction_ratio == 0)
-    # "obstruction_ratio", //low importance
-    # "max_obstruction",
-    # "mean_obstruction", //low importance 
-    "fresnel_obstruction_ratio",
-    "min_fresnel_clearance",
-    "mean_fresnel_clearance",
+    # "obstruction_ratio", #//low importance
+    "max_obstruction", #low importance
+    # "mean_obstruction", #//low importance 
+    "fresnel_obstruction_ratio", #low importance
+    "min_fresnel_clearance", #low importance
+    "mean_fresnel_clearance", #low importance
 
     # Land use ratios
     # "forest_ratio", // distribution too low to be useful
@@ -108,25 +125,14 @@ def build_pipeline(model_type="random_forest"):
         ]
     )
 
-    # Models
-    if model_type == "random_forest":
-        model = RandomForestRegressor( #best parameters found
-            n_estimators=500,
-            max_depth=20,
-            min_samples_split=2,
-            min_samples_leaf=1,
-            max_features="sqrt",
-            random_state=42,
-            n_jobs=-1
-        )
     if model_type == "extra_trees":
         from sklearn.ensemble import ExtraTreesRegressor
         model = ExtraTreesRegressor(  #best parameters found
-            n_estimators=1500,
-            max_depth=20,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            max_features=None,
+            n_estimators=650,
+            max_depth=18,
+            min_samples_split=10,
+            min_samples_leaf=1,
+            max_features=0.7,
             random_state=42,
             n_jobs=-1
         )
@@ -142,12 +148,29 @@ def build_pipeline(model_type="random_forest"):
     return pipeline
 
 
-def prepare_data(df: pd.DataFrame):
+def prepare_data(
+    df: pd.DataFrame,
+    reference_df: pd.DataFrame = None,
+    MIN_DISTANCE=0.1,
+    K=9,
+    K_SEARCH=11,
+    GW_DISTANCE_WEIGHT=1.1
+):
+
+    add_closest_point_features(
+        df,
+        reference_df=reference_df,
+        MIN_DISTANCE=MIN_DISTANCE,
+        K=K,
+        K_SEARCH=K_SEARCH,
+        GW_DISTANCE_WEIGHT=GW_DISTANCE_WEIGHT
+    )
 
     X = df[
         NUMERIC_FEATURES +
         CATEGORICAL_FEATURES
     ]
+
     y = df[TARGET]
 
     return X, y

@@ -355,13 +355,12 @@ ET = légèrement plus précis
 alors :
 
 Si ton objectif est la meilleure prédiction
-
 → prends Extra Trees
 
 Si ton objectif est la robustesse / reproductibilité
-
 → prends Random Forest
 
-
+> [!WARNING]
+> # **NOUVELLE FEATURE : AJOUTER RSSI pts le plus proche et dist3D point le plus proche !!!!!!! (même gateway)**
 
 

@@ -1,9 +1,11 @@
 import pandas as pd
+import numpy as np
 import joblib
 
 from sklearn.inspection import permutation_importance
-from sklearn.model_selection import KFold, RandomizedSearchCV, cross_validate, train_test_split, cross_val_score
+from sklearn.model_selection import KFold, ParameterSampler, RandomizedSearchCV, cross_validate, train_test_split, cross_val_score
 from sklearn.metrics import (
+    root_mean_squared_error,
     mean_absolute_error,
     mean_squared_error,
     r2_score
@@ -17,103 +19,131 @@ from ml.pipeline import (
     build_pipeline,
     prepare_data
 )
+from processing.features import add_closest_point_features
 
 DATA_PATH = "../data/processed/devices_history_full.csv"
 
 
-def train(model_type="random_forest"):
+def train(
+    model_type="extra_trees",
+
+    MIN_DISTANCE=0.1,
+    K=9,
+    K_SEARCH=11,
+    GW_DISTANCE_WEIGHT=1.1,
+
+    show_importance=True,
+    save_model=True
+):
 
     print("Loading data...")
     df = pd.read_csv(DATA_PATH)
-    X, y = prepare_data(df)
 
-    print("Building pipeline...")
-    pipeline = build_pipeline(model_type)
+    kf = KFold(
+        n_splits=5,
+        shuffle=True,
+        random_state=42
+    )
+    
+    r2_scores = []
+    mae_scores = []
+    rmse_scores = []
 
-    print("Cross-validating...")
-    scores = cross_validate(
-        pipeline,
-        X,
-        y,
-        cv=KFold(
-            n_splits=5,
-            shuffle=True,
-            random_state=42
-        ),
-        scoring={
-            "r2": "r2",
-            "mae": "neg_mean_absolute_error",
-            "rmse": "neg_root_mean_squared_error"
-        },
-        n_jobs=-1
+    pipeline = build_pipeline("extra_trees")
+
+    for train_idx, test_idx in kf.split(df):
+
+        train_df = df.iloc[train_idx].copy()
+        test_df = df.iloc[test_idx].copy()
+
+        X_train, y_train = prepare_data(
+            train_df,
+            reference_df=train_df,
+            MIN_DISTANCE=0.1,
+            K=9,
+            K_SEARCH=11,
+            GW_DISTANCE_WEIGHT=1.1
+        )
+
+        X_test, y_test = prepare_data(
+            test_df,
+            reference_df=train_df,
+            MIN_DISTANCE=0.1,
+            K=9,
+            K_SEARCH=11,
+            GW_DISTANCE_WEIGHT=1.1
+        )
+
+        pipeline.fit(X_train, y_train)
+
+        pred = pipeline.predict(X_test)
+
+        r2 = r2_score(
+            y_test,
+            pred
+        )
+
+        mae = mean_absolute_error(
+            y_test,
+            pred
+        )
+
+        rmse = root_mean_squared_error(
+            y_test,
+            pred
+        )
+
+        r2_scores.append(r2)
+        mae_scores.append(mae)
+        rmse_scores.append(rmse)
+
+
+    print(
+        f"R²   : "
+        f"{np.mean(r2_scores):.4f}"
+        f" ± "
+        f"{np.std(r2_scores):.4f}"
+        f"  MAE  : "
+        f"{np.mean(mae_scores):.2f} dBm"
+        f"  RMSE : "
+        f"{np.mean(rmse_scores):.2f} dBm"
     )
 
-    # Spatial train-test split (by cities)
-    # train = df[df["lat"] <= 16.7]   # Da Nang
-    # test  = df[df["lat"] > 16.7]    # Hai Phong
-    # X_train, y_train = prepare_data(train)
-    # X_test, y_test = prepare_data(test)
+    # ------------------------
+    # Final training
+    # ------------------------
 
-    #TO TEST HYPERPARAMETERS TUNING
-    #param_grid = { ... } # Define your hyperparameters grid here
-    # search = RandomizedSearchCV(
-    #     estimator=pipeline,
-    #     param_distributions=param_grid,
-    #     n_iter=20,
-    #     cv=5,
-    #     scoring="r2",
-    #     n_jobs=-1,
-    #     random_state=42
-    # )
-    # print("Training model...")
-    # search.fit(X_train, y_train)
-    # pipeline = search.best_estimator_
-    # print("Best params:")
-    # print(search.best_params_)
+    print("Training final model on full data...")
 
-    # print("Best CV score:")
-    # print(search.best_score_)
+    X, y = prepare_data(
+        df,
+        reference_df=df,
+        MIN_DISTANCE=MIN_DISTANCE,
+        K=K,
+        K_SEARCH=K_SEARCH,
+        GW_DISTANCE_WEIGHT=GW_DISTANCE_WEIGHT
+    )
 
-    #TO TEST FEATURES IMPORTANCES
-    # result = permutation_importance(
-    #     pipeline,
-    #     X_test,
-    #     y_test,
-    #     n_repeats=10,
-    #     random_state=42,
-    #     scoring="r2"
-    # )
-    # importance_df = pd.DataFrame({
-    #     "feature": X_test.columns,
-    #     "importance": result.importances_mean
-    # }).sort_values(
-    #     "importance",
-    #     ascending=False
-    # )
-    # print(importance_df)
-
-        # Metrics (train basis 20%)
-    # mae = mean_absolute_error(y_test, y_pred)
-    # rmse = mean_squared_error(
-    #     y_test,
-    #     y_pred
-    # ) ** 0.5
-    # r2 = r2_score(y_test, y_pred)
-
-    print("\nRESULTS : "+model_type.upper())
-    # print(f"MAE  : {mae:.2f} dBm") #basic split 20%
-    # print(f"RMSE : {rmse:.2f} dBm")
-    # print(f"R²   : {r2:.4f}")
-    print("R²   :", scores["test_r2"].mean())
-    print("MAE  :", -scores["test_mae"].mean())
-    print("RMSE :", -scores["test_rmse"].mean())
+    pipeline = build_pipeline(
+        model_type
+    )
 
     pipeline.fit(X, y)
 
-    print("Saving model...")
-    joblib.dump(
-        pipeline,
-        f"ml/models/{model_type}_model.pkl"
-    )
 
-    print("Done!")
+    # # ------------------------
+    # # Save final model
+    # # ------------------------
+
+    if save_model:
+    
+        print(
+            "Saving model..."
+        )
+    
+        joblib.dump(
+            pipeline,
+            f"ml/models/{model_type}_model.pkl"
+        )
+
+    print("Done.")
