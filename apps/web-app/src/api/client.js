@@ -462,6 +462,7 @@ export async function lookupCoverageBatch(req, signal) {
  *   snrMax?: number,
  *   timeFrom?: string,
  *   timeTo?: string,
+ *   since?: string,
  *   sortBy?: SortBy,
  *   sortOrder?: SortOrder,
  *   rankFrom?: number,
@@ -496,6 +497,7 @@ export async function listSurveyTraining(bbox, opts) {
   if (opts?.snrMax != null) url.searchParams.set("snr_max", String(opts.snrMax));
   if (opts?.timeFrom) url.searchParams.set("time_from", opts.timeFrom);
   if (opts?.timeTo) url.searchParams.set("time_to", opts.timeTo);
+  if (opts?.since) url.searchParams.set("since", opts.since);
   if (opts?.sortBy && opts.sortBy !== "timestamp") {
     url.searchParams.set("sort_by", opts.sortBy);
   }

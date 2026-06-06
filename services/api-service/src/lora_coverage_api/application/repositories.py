@@ -142,6 +142,7 @@ class SurveyIngest(Protocol):
         snr_max: float | None = None,
         time_from: datetime | None = None,
         time_to: datetime | None = None,
+        since: datetime | None = None,
         sort_by: Literal["timestamp", "rssi", "snr"] = "timestamp",
         sort_order: Literal["asc", "desc"] = "desc",
     ) -> Sequence[TrainingPoint]:

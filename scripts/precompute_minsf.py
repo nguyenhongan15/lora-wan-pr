@@ -159,6 +159,7 @@ def _compute_pl_grid(
     lon_min: float,
     step_dlat: float,
     step_dlon: float,
+    skip_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Sample P.1812 path-loss + P.2108 clutter trên grid nx×ny.
 
@@ -167,6 +168,10 @@ def _compute_pl_grid(
     fixed per gw → set ngoài 2 vòng for. Loop cell chỉ gọi
     `GenerateReceptionPointResult(lat, lon)` (RX coord là argument, không phải
     state). Tiết kiệm ~17 setter × 1.6M cell ≈ ~27M Python→C++ trip.
+
+    `skip_mask` (optional bool ndarray shape (ny, nx)): True = bỏ qua cell
+    (giữ NaN). Dùng cho Phase B của 2-phase dominance prefilter — chỉ compute
+    cell nơi gateway này là dominant từ pass thô.
     """
     from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
     from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
@@ -223,6 +228,9 @@ def _compute_pl_grid(
     for iy in range(ny):
         lat = lat_min + iy * step_dlat
         for ix in range(nx):
+            if skip_mask is not None and skip_mask[iy, ix]:
+                n_done += 1
+                continue
             lon = lon_min + ix * step_dlon
             try:
                 pl = sim.GenerateReceptionPointResult(lat, lon)

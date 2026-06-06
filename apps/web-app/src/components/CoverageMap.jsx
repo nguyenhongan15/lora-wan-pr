@@ -1,5 +1,5 @@
 // @ts-check
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -35,14 +35,13 @@ import {
   MARGIN_BAR_RANGE,
   MINSF_BAND_COLORS,
   MINSF_FILL_OPACITY,
-  REDUNDANCY_OPACITY,
-  RSSI_BAND_COLORS,
   RSSI_FILL_OPACITY,
   PREDICT_MARKER_STYLE,
   STATUS_COLOR,
   STATUS_COLOR_FALLBACK,
   SURVEY_CIRCLE_PAINT,
 } from "./CoverageMap.config.js";
+import { ESTIMATE_RSSI_BAND_COLORS } from "./legend.js";
 import {
   addSurveyHeatmapLayer,
   setSurveyHeatmapVisible,
@@ -350,14 +349,16 @@ const MINSF_SOURCE_ID = "minsf-src";
 const MINSF_FILL_LAYER_ID = "minsf-fill";
 const MINSF_OUTLINE_LAYER_ID = "minsf-outline";
 
-// Composite RSSI heatmap (viewMode "estimate"). 2 source độc lập (composite +
-// redundancy overlay). Composite fetch 1 lần khi switch sang estimate; cached
-// trong memory cho lần switch sau. Redundancy overlay toggle độc lập qua
-// checkbox panel.
+// Composite RSSI heatmap (viewMode "estimate"). Fetch 1 lần khi switch sang
+// estimate; cached trong source data cho lần switch sau.
 const RSSI_COMPOSITE_SOURCE_ID = "rssi-composite-src";
 const RSSI_COMPOSITE_FILL_LAYER_ID = "rssi-composite-fill";
-const RSSI_REDUNDANCY_SOURCE_ID = "rssi-redundancy-src";
-const RSSI_REDUNDANCY_FILL_LAYER_ID = "rssi-redundancy-fill";
+
+// Satellite overlay — chỉ visible khi coverageViewMode === "minsf" (đối
+// chiếu band SF với buildings/đường). Estimate view dùng basemap CARTO
+// sạch (composite RSSI cell trông rõ hơn).
+const SATELLITE_OVERLAY_SOURCE_ID = "satellite-overlay-src";
+const SATELLITE_OVERLAY_LAYER_ID = "satellite-overlay";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
@@ -634,6 +635,35 @@ function appendCopyLinkButton(parent, lat, lng) {
   parent.appendChild(btn);
 }
 
+// Realtime "Theo dõi trực tiếp" — chu kỳ polling backend khi bật mode.
+// Tham chiếu duy nhất trong file để tránh magic number rải rác.
+const REALTIME_POLL_MS = 3000;
+// Sau khoảng này không thấy gói tin mới → tự tắt toggle (user quên tắt khi
+// rời site đo). Reset timer mỗi lần lastSeenAt advance.
+const REALTIME_IDLE_AUTO_OFF_MS = 15 * 60 * 1000;
+// Tick re-render badge "Mới nhất: Ns trước" — counter chạy độc lập với
+// polling interval (poll 3s nhưng UI tick 5s là vừa mắt, đỡ jitter).
+const REALTIME_BADGE_TICK_MS = 5000;
+// Khi auto-pan tới điểm mới, zoom tối thiểu để user thấy chi tiết đường đi.
+// Giữ zoom cao hơn nếu user đang zoom xa hơn (max → preserve user intent).
+const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 15;
+// Reference ổn định cho displayedItems khi chưa có data — tránh `?? []` tạo
+// array mới mỗi render gây useEffect deps re-fire.
+const EMPTY_TRAINING_ITEMS = Object.freeze(/** @type {never[]} */ ([]));
+
+/**
+ * @param {number | null} lastSeenAt epoch ms
+ * @param {number} now epoch ms
+ * @param {typeof strings.coverageMap.filters.realtime} t
+ * @returns {string}
+ */
+function formatLastSeenLabel(lastSeenAt, now, t) {
+  if (lastSeenAt === null) return t.lastSeenNever;
+  const diffSec = Math.max(0, Math.floor((now - lastSeenAt) / 1000));
+  if (diffSec < 60) return t.lastSeenSecondsAgo(diffSec);
+  return t.lastSeenMinutesAgo(Math.floor(diffSec / 60));
+}
+
 
 /**
  * @param {{
@@ -705,10 +735,11 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   );
 
   // Tab "Bản đồ phủ sóng" (mode === "heatmap") có 2 layer toggle độc lập với
-  // viewMode points/heatmap. "minsf" hiển thị overlay precomputed; "estimate"
-  // là placeholder roadmap.
+  // viewMode points/heatmap. "estimate" là composite RSSI heatmap (default —
+  // hiển thị toàn cảnh phủ sóng cộng dồn 13 gateway); "minsf" cần user chọn
+  // gateway nên kém trực quan cho lần đầu vào tab.
   const [coverageViewMode, setCoverageViewMode] = useState(
-    /** @type {"minsf" | "estimate"} */ ("minsf"),
+    /** @type {"minsf" | "estimate"} */ ("estimate"),
   );
   // Code gateway đang được chọn để hiển thị min-SF overlay (null = không chọn).
   // Dùng `code` thay `id` vì precompute script ghi GeoJSON theo code (`{code}.geojson`).
@@ -718,10 +749,9 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [minsfLoadError, setMinsfLoadError] = useState(
     /** @type {string | null} */ (null),
   );
-  // Composite RSSI heatmap (viewMode "estimate"): toggle overlay redundancy +
-  // load error state. Fetch GeoJSON khi vào estimate mode lần đầu, cache
-  // trong source data (không re-fetch khi switch qua lại minsf ↔ estimate).
-  const [showRedundancy, setShowRedundancy] = useState(false);
+  // Composite RSSI heatmap (viewMode "estimate"): load error state. Fetch
+  // GeoJSON khi vào estimate mode lần đầu, cache trong source data (không
+  // re-fetch khi switch qua lại minsf ↔ estimate).
   const [estimateLoadError, setEstimateLoadError] = useState(
     /** @type {string | null} */ (null),
   );
@@ -758,6 +788,24 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [sortConfig, setSortConfig] = useState(
     () => initialPointsFilterRef.current.sortConfig,
   );
+
+  // Realtime "Theo dõi trực tiếp" — chỉ active khi contributor === "me".
+  // `lastPointTimestampRef` = cursor cho param `since`; advance = max(timestamp)
+  // sau mỗi response. `sessionCounterRef` ref vì cập nhật tần suất cao nhưng
+  // chỉ cần render qua badge (lastSeenAt state đã trigger re-render).
+  // `realtimeFeatures` accumulator: snapshot lần đầu + append incremental.
+  const [realtimeEnabled, setRealtimeEnabled] = useState(false);
+  const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
+  const lastPointTimestampRef = useRef(/** @type {string | null} */ (null));
+  const sessionCounterRef = useRef(0);
+  const [lastSeenAt, setLastSeenAt] = useState(
+    /** @type {number | null} */ (null),
+  );
+  const [realtimeFeatures, setRealtimeFeatures] = useState(
+    /** @type {import("../api/client.js").SurveyTrainingPointT[]} */ ([]),
+  );
+  // Tick để badge "Mới nhất: Ns trước" tự re-render dù không có điểm mới.
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
   // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
@@ -826,9 +874,17 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       snrRange,
       timeRange,
       sortConfig,
+      // Tách cache realtime ↔ static — query realtime gửi kèm `since` cursor
+      // không nên pollute snapshot mà tab khác / lần switch off đọc lại.
+      realtimeEnabled,
     ],
-    queryFn: () =>
-      listSurveyTraining(undefined, {
+    queryFn: () => {
+      // Realtime: cursor null lần đầu (snapshot toàn bộ) → set từ effect
+      // merge bên dưới. Static (realtimeEnabled = false): không gửi since.
+      const since = realtimeEnabled
+        ? lastPointTimestampRef.current ?? undefined
+        : undefined;
+      return listSurveyTraining(undefined, {
         contributor,
         linkedSourceId: linkedSourceForQuery ?? undefined,
         deviceId: deviceIdForQuery ?? undefined,
@@ -842,12 +898,133 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
         timeTo: timeRange.to ?? undefined,
         sortBy: sortConfig.sortBy,
         sortOrder: sortConfig.sortOrder,
-      }),
+        since,
+      });
+    },
     enabled: mode === "points",
     // contributor !== community gặp 401/403 không nên retry tự động —
     // user thấy panel error 1 lần đỡ spam request.
     retry: contributor === "community" ? 3 : false,
+    // refetchIntervalInBackground mặc định false → tab ẩn tự pause polling.
+    refetchInterval:
+      realtimeEnabled && contributor === "me" ? REALTIME_POLL_MS : false,
   });
+
+  // Reset realtime khi rời khỏi mode "me" hoặc logout — toggle realtime chỉ
+  // có ý nghĩa với data của chính chủ. Cleanup cursor + counter + features
+  // để lần bật lại snapshot từ đầu.
+  useEffect(() => {
+    if (contributor === "me" && user) return;
+    setRealtimeEnabled(false);
+    setRealtimeFeatures([]);
+    setLastSeenAt(null);
+    lastPointTimestampRef.current = null;
+    sessionCounterRef.current = 0;
+  }, [contributor, user]);
+
+  // Reset cursor + accumulator khi filter đổi giữa chừng realtime — kết quả
+  // mới khác hẳn, không thể incremental từ cursor cũ. Cũng fire khi bật/tắt
+  // realtime để lần snapshot mới luôn full-fetch.
+  useEffect(() => {
+    if (!realtimeEnabled) return;
+    lastPointTimestampRef.current = null;
+    sessionCounterRef.current = 0;
+    setRealtimeFeatures([]);
+  }, [
+    realtimeEnabled,
+    contributor,
+    linkedSourceForQuery,
+    deviceIdForQuery,
+    sourceType,
+    sfList,
+    rssiRange,
+    snrRange,
+    timeRange,
+    sortConfig,
+  ]);
+
+  // Merge incremental result: snapshot lần đầu (cursor null) hoặc append
+  // điểm mới với dedup theo (timestamp + device_id + serving_gateway_id).
+  // Advance cursor = max(timestamp) — server-time, không đụng clock skew.
+  useEffect(() => {
+    if (!realtimeEnabled) return;
+    if (!surveysQ.data) return;
+    const items = surveysQ.data.items;
+    if (lastPointTimestampRef.current === null) {
+      setRealtimeFeatures(items);
+      sessionCounterRef.current = 0;
+    } else if (items.length > 0) {
+      setRealtimeFeatures((prev) => {
+        const seen = new Set(
+          prev.map(
+            (p) =>
+              `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
+          ),
+        );
+        const fresh = items.filter(
+          (p) =>
+            !seen.has(
+              `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
+            ),
+        );
+        sessionCounterRef.current += fresh.length;
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+    }
+    if (items.length > 0) {
+      const maxTs = items.reduce(
+        (m, p) => (p.timestamp > m ? p.timestamp : m),
+        items[0].timestamp,
+      );
+      lastPointTimestampRef.current = maxTs;
+      setLastSeenAt(Date.now());
+    }
+  }, [surveysQ.data, realtimeEnabled]);
+
+  // Idle timer — sau 15 phút không có điểm mới → tự tắt toggle. Reset mỗi
+  // khi lastSeenAt advance (dep đổi → effect re-run → setTimeout mới).
+  useEffect(() => {
+    if (!realtimeEnabled) return;
+    const timer = setTimeout(() => {
+      setRealtimeEnabled(false);
+    }, REALTIME_IDLE_AUTO_OFF_MS);
+    return () => clearTimeout(timer);
+  }, [realtimeEnabled, lastSeenAt]);
+
+  // Tick re-render badge "Mới nhất: Ns trước" — dù không có điểm mới counter
+  // vẫn cần update.
+  useEffect(() => {
+    if (!realtimeEnabled) return;
+    const interval = setInterval(
+      () => setNowTick(Date.now()),
+      REALTIME_BADGE_TICK_MS,
+    );
+    return () => clearInterval(interval);
+  }, [realtimeEnabled]);
+
+  // Auto-pan tới điểm mới nhất khi user bật "Tự theo dõi vị trí". Lấy điểm
+  // cuối array — merge logic append fresh vào cuối nên đây là điểm mới nhất
+  // về cả thời gian lẫn thứ tự nhận.
+  useEffect(() => {
+    if (!realtimeEnabled || !autoFollowEnabled) return;
+    if (realtimeFeatures.length === 0) return;
+    const newest = realtimeFeatures[realtimeFeatures.length - 1];
+    const map = mapRef.current;
+    if (!map) return;
+    map.flyTo({
+      center: [newest.longitude, newest.latitude],
+      zoom: Math.max(map.getZoom(), REALTIME_AUTO_FOLLOW_MIN_ZOOM),
+      duration: 800,
+    });
+  }, [realtimeFeatures, realtimeEnabled, autoFollowEnabled]);
+
+  // Render source: realtime → accumulated features; static → snapshot từ
+  // useQuery. EMPTY_TRAINING_ITEMS giữ ref ổn định khi data chưa có (tránh
+  // `?? []` tạo array mới mỗi render gây setData effect re-fire).
+  const displayedItems = useMemo(() => {
+    if (realtimeEnabled) return realtimeFeatures;
+    return surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
+  }, [realtimeEnabled, realtimeFeatures, surveysQ.data]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -857,9 +1034,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     try {
       map = new maplibregl.Map({
         container,
-        style: /** @type {any} */ (
-          mode === "heatmap" ? SATELLITE_BASEMAP_STYLE : BASEMAP_STYLE
-        ),
+        style: /** @type {any} */ (BASEMAP_STYLE),
         center: INITIAL_CENTER,
         zoom: INITIAL_ZOOM,
       });
@@ -914,6 +1089,23 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       // ngay khi map load để khi user chọn gateway chỉ cần setData. Layer ẩn
       // mặc định (visibility="none") — bật khi viewMode==="minsf" và có data.
       if (mode === "heatmap") {
+        // Satellite ESRI overlay — add TRƯỚC các fill layer để nó nằm dưới
+        // (maplibre stack: add sau = trên). Default hidden; toggle visible
+        // khi coverageViewMode === "minsf".
+        map.addSource(SATELLITE_OVERLAY_SOURCE_ID, {
+          type: "raster",
+          tiles: SATELLITE_BASEMAP_STYLE.sources.basemap.tiles,
+          tileSize: SATELLITE_BASEMAP_STYLE.sources.basemap.tileSize,
+          attribution: SATELLITE_BASEMAP_STYLE.sources.basemap.attribution,
+          maxzoom: SATELLITE_BASEMAP_STYLE.sources.basemap.maxzoom,
+        });
+        map.addLayer({
+          id: SATELLITE_OVERLAY_LAYER_ID,
+          type: "raster",
+          source: SATELLITE_OVERLAY_SOURCE_ID,
+          layout: /** @type {any} */ ({ visibility: "none" }),
+        });
+
         map.addSource(MINSF_SOURCE_ID, {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -961,9 +1153,8 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
           }),
         });
 
-        // Composite RSSI heatmap source + 2 layer (composite fill bên dưới,
-        // redundancy overlay bên trên). Layout visibility="none" mặc định —
-        // bật khi coverageViewMode === "estimate".
+        // Composite RSSI heatmap source + fill layer. Layout visibility="none"
+        // mặc định — bật khi coverageViewMode === "estimate".
         map.addSource(RSSI_COMPOSITE_SOURCE_ID, {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -973,45 +1164,24 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
           type: "fill",
           source: RSSI_COMPOSITE_SOURCE_ID,
           // fill-sort-key: bin nhỏ (mạnh hơn, vùng nhỏ ở center) lên trên cùng.
-          // Nested polygon: bin1 ⊂ bin2 ⊂ bin3 ⊂ bin4 → cần đảo order render.
+          // Nested polygon: bin1 ⊂ bin2 ⊂ ... ⊂ bin6 → cần đảo order render.
           layout: /** @type {any} */ ({
             visibility: "none",
-            "fill-sort-key": ["-", 5, ["get", "bin"]],
+            "fill-sort-key": ["-", 7, ["get", "bin"]],
           }),
           paint: /** @type {any} */ ({
             "fill-color": [
               "match",
               ["get", "bin"],
-              1, RSSI_BAND_COLORS[1],
-              2, RSSI_BAND_COLORS[2],
-              3, RSSI_BAND_COLORS[3],
-              4, RSSI_BAND_COLORS[4],
+              1, ESTIMATE_RSSI_BAND_COLORS[1],
+              2, ESTIMATE_RSSI_BAND_COLORS[2],
+              3, ESTIMATE_RSSI_BAND_COLORS[3],
+              4, ESTIMATE_RSSI_BAND_COLORS[4],
+              5, ESTIMATE_RSSI_BAND_COLORS[5],
+              6, ESTIMATE_RSSI_BAND_COLORS[6],
               "#888888",
             ],
             "fill-opacity": RSSI_FILL_OPACITY,
-          }),
-        });
-        map.addSource(RSSI_REDUNDANCY_SOURCE_ID, {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-        });
-        map.addLayer({
-          id: RSSI_REDUNDANCY_FILL_LAYER_ID,
-          type: "fill",
-          source: RSSI_REDUNDANCY_SOURCE_ID,
-          // White overlay với opacity match theo gw_count_min. 1 gw = 0
-          // (không vẽ); 2 gw = 0.25; ≥3 gw = 0.45 → "vùng càng dày càng sáng".
-          layout: /** @type {any} */ ({ visibility: "none" }),
-          paint: /** @type {any} */ ({
-            "fill-color": "#ffffff",
-            "fill-opacity": [
-              "match",
-              ["get", "gw_count_min"],
-              1, REDUNDANCY_OPACITY[1],
-              2, REDUNDANCY_OPACITY[2],
-              3, REDUNDANCY_OPACITY[3],
-              0,
-            ],
           }),
         });
       }
@@ -1077,11 +1247,12 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       });
 
       // Trigger render survey nếu data đã sẵn trước khi map load xong.
-      if (surveysQ.data) {
+      // Dùng displayedItems để chung pipeline với realtime accumulator.
+      if (displayedItems.length > 0) {
         const src = map.getSource(SURVEYS_SOURCE_ID);
         if (src && "setData" in src) {
           /** @type {maplibregl.GeoJSONSource} */ (src).setData(
-            buildSurveyGeoJson(surveysQ.data.items),
+            buildSurveyGeoJson(displayedItems),
           );
         }
       }
@@ -1100,15 +1271,16 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   }, []);
 
   // Survey: 1 lệnh setData() trên GeoJSON source thay vì 4k+ HTML markers.
+  // Dep theo displayedItems → realtime append fresh ⇒ effect tự fire setData.
   useEffect(() => {
     if (mode !== "points") return;
     const map = mapRef.current;
-    if (!map || !surveysQ.data) return;
+    if (!map) return;
     if (!mapLoaded || !map.getSource(SURVEYS_SOURCE_ID)) return;
     /** @type {maplibregl.GeoJSONSource} */ (
       map.getSource(SURVEYS_SOURCE_ID)
-    ).setData(buildSurveyGeoJson(surveysQ.data.items));
-  }, [surveysQ.data, mode, mapLoaded]);
+    ).setData(buildSurveyGeoJson(displayedItems));
+  }, [displayedItems, mode, mapLoaded]);
 
   // Toggle visibility 2 layer điểm đo theo viewMode — circle ↔ heatmap. Cả 2
   // dùng chung source nên filter (sf/rssi/...) auto-apply cho cả 2 mode.
@@ -1139,6 +1311,21 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     map.setLayoutProperty(MINSF_FILL_LAYER_ID, "visibility", visible);
     map.setLayoutProperty(MINSF_OUTLINE_LAYER_ID, "visibility", visible);
   }, [coverageViewMode, minsfGatewayCode, mode, mapLoaded]);
+
+  // Satellite ESRI overlay: chỉ hiện khi đang xem min-SF (cần đối chiếu
+  // với buildings/đường). Estimate view dùng basemap CARTO cho composite
+  // RSSI nhìn rõ hơn.
+  useEffect(() => {
+    if (mode !== "heatmap") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getLayer(SATELLITE_OVERLAY_LAYER_ID)) return;
+    map.setLayoutProperty(
+      SATELLITE_OVERLAY_LAYER_ID,
+      "visibility",
+      coverageViewMode === "minsf" ? "visible" : "none",
+    );
+  }, [coverageViewMode, mode, mapLoaded]);
 
   // Fetch GeoJSON tĩnh từ public/coverage/minsf/{code}.geojson khi user chọn
   // gateway. File precomputed offline qua `scripts/precompute_minsf.py` —
@@ -1206,29 +1393,23 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     return () => controller.abort();
   }, [minsfGatewayCode, mode, mapLoaded]);
 
-  // Composite RSSI heatmap: toggle visibility theo coverageViewMode +
-  // checkbox redundancy. Khác min-SF (cần gateway selection) — composite hiển
-  // thị ngay khi switch sang "estimate".
+  // Composite RSSI heatmap: toggle visibility theo coverageViewMode. Khác
+  // min-SF (cần gateway selection) — composite hiển thị ngay khi switch
+  // sang "estimate".
   useEffect(() => {
     if (mode !== "heatmap") return;
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
     if (!map.getLayer(RSSI_COMPOSITE_FILL_LAYER_ID)) return;
-    const showComposite = coverageViewMode === "estimate";
     map.setLayoutProperty(
       RSSI_COMPOSITE_FILL_LAYER_ID,
       "visibility",
-      showComposite ? "visible" : "none",
+      coverageViewMode === "estimate" ? "visible" : "none",
     );
-    map.setLayoutProperty(
-      RSSI_REDUNDANCY_FILL_LAYER_ID,
-      "visibility",
-      showComposite && showRedundancy ? "visible" : "none",
-    );
-  }, [coverageViewMode, showRedundancy, mode, mapLoaded]);
+  }, [coverageViewMode, mode, mapLoaded]);
 
-  // Fetch composite + redundancy GeoJSON khi vào estimate mode lần đầu. Cache
-  // qua estimateLoadedRef — không re-fetch khi switch qua lại.
+  // Fetch composite GeoJSON khi vào estimate mode lần đầu. Cache qua
+  // estimateLoadedRef — không re-fetch khi switch qua lại.
   useEffect(() => {
     if (mode !== "heatmap") return;
     if (coverageViewMode !== "estimate") return;
@@ -1240,33 +1421,20 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     const controller = new AbortController();
     const base = import.meta.env.BASE_URL ?? "/";
     const compUrl = `${base}coverage/rssi/composite.geojson`;
-    const redUrl = `${base}coverage/rssi/redundancy.geojson`;
     setEstimateLoadError(null);
 
-    Promise.all([
-      fetch(compUrl, { signal: controller.signal }).then((r) => {
+    fetch(compUrl, { signal: controller.signal })
+      .then((r) => {
         if (!r.ok) throw new Error(`composite HTTP ${r.status}`);
         return r.json();
-      }),
-      fetch(redUrl, { signal: controller.signal }).then((r) => {
-        if (!r.ok) throw new Error(`redundancy HTTP ${r.status}`);
-        return r.json();
-      }),
-    ])
-      .then(([compFc, redFc]) => {
+      })
+      .then((compFc) => {
         if (!compFc || !Array.isArray(compFc.features)) {
           throw new Error("invalid composite geojson");
         }
-        if (!redFc || !Array.isArray(redFc.features)) {
-          throw new Error("invalid redundancy geojson");
-        }
         const compSrc = map.getSource(RSSI_COMPOSITE_SOURCE_ID);
-        const redSrc = map.getSource(RSSI_REDUNDANCY_SOURCE_ID);
         if (compSrc && "setData" in compSrc) {
           /** @type {maplibregl.GeoJSONSource} */ (compSrc).setData(compFc);
-        }
-        if (redSrc && "setData" in redSrc) {
-          /** @type {maplibregl.GeoJSONSource} */ (redSrc).setData(redFc);
         }
         estimateLoadedRef.current = true;
       })
@@ -1807,6 +1975,31 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
           />
         )}
 
+        {/* Live badge: chỉ hiện khi realtime mode đang ON ở tab "me". Đặt
+            top-center vì panel filter chiếm góc top-left và view-mode toggle
+            chiếm top-right. */}
+        {realtimeEnabled && contributor === "me" && mode === "points" && (
+          <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+              <span className="font-semibold text-red-700">
+                {t.filters.realtime.liveBadge}
+              </span>
+            </div>
+            <div className="text-slate-600">
+              {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
+            </div>
+            <div className="text-slate-500">
+              {t.filters.realtime.lastSeenLabel}:{" "}
+              {formatLastSeenLabel(
+                lastSeenAt,
+                nowTick,
+                t.filters.realtime,
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Container anchor cả trên + dưới: `bottom-44` (=11rem) chừa zone
             cho legend ở góc dưới-trái. `pointer-events-none` để vùng trống
             (khi panel collapsed) không chặn map click; children tự bật lại. */}
@@ -1916,6 +2109,10 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
               onTimeRangeChange={setTimeRange}
               sortConfig={sortConfig}
               onSortConfigChange={setSortConfig}
+              realtimeEnabled={realtimeEnabled}
+              onRealtimeEnabledChange={setRealtimeEnabled}
+              autoFollowEnabled={autoFollowEnabled}
+              onAutoFollowEnabledChange={setAutoFollowEnabled}
             />
           ) : mode === "heatmap" ? (
             // Tab "Bản đồ phủ sóng": minsf panel (gateway dropdown + legend)
@@ -1928,11 +2125,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
                 loadingError={minsfLoadError}
               />
             ) : (
-              <EstimatePanel
-                showRedundancy={showRedundancy}
-                onToggleRedundancy={setShowRedundancy}
-                loadingError={estimateLoadError}
-              />
+              <EstimatePanel loadingError={estimateLoadError} />
             )
           ) : null}
 

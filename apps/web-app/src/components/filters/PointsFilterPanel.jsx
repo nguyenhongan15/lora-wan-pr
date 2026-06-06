@@ -47,6 +47,10 @@ const t = strings.coverageMap.filters;
  *   onTimeRangeChange: (v: TimeRange) => void,
  *   sortConfig: SortConfig,
  *   onSortConfigChange: (v: SortConfig) => void,
+ *   realtimeEnabled: boolean,
+ *   onRealtimeEnabledChange: (v: boolean) => void,
+ *   autoFollowEnabled: boolean,
+ *   onAutoFollowEnabledChange: (v: boolean) => void,
  * }} props
  */
 export function PointsFilterPanel({
@@ -69,6 +73,10 @@ export function PointsFilterPanel({
   onTimeRangeChange,
   sortConfig,
   onSortConfigChange,
+  realtimeEnabled,
+  onRealtimeEnabledChange,
+  autoFollowEnabled,
+  onAutoFollowEnabledChange,
 }) {
   const [open, setOpen] = useState(false);
 
@@ -149,6 +157,43 @@ export function PointsFilterPanel({
               onChange={onDeviceIdChange}
               linkedSourceId={linkedSourceId}
             />
+            <div className="border-t border-slate-200 pt-2.5 space-y-1.5">
+              <div className="text-xs font-semibold text-slate-700">
+                {t.realtime.sectionLabel}
+              </div>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={realtimeEnabled}
+                  onChange={(e) => onRealtimeEnabledChange(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">{t.realtime.toggleLabel}</span>
+                  <span className="block text-xs text-slate-500">
+                    {t.realtime.toggleHint}
+                  </span>
+                </span>
+              </label>
+              {realtimeEnabled && (
+                <label className="flex items-start gap-2 pl-5">
+                  <input
+                    type="checkbox"
+                    checked={autoFollowEnabled}
+                    onChange={(e) =>
+                      onAutoFollowEnabledChange(e.target.checked)
+                    }
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span>{t.realtime.autoFollowLabel}</span>
+                    <span className="block text-xs text-slate-500">
+                      {t.realtime.autoFollowHint}
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
           </>
         )}
         {/* SourceTypeFilter ẩn khi mode "me" — mỗi linked_source đã bind 1

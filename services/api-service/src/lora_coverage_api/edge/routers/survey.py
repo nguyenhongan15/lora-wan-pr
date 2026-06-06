@@ -7,7 +7,7 @@ SQL — KHÔNG kiểm tra quyền lại.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -31,6 +31,10 @@ _MAX_RANK_WINDOW = 50000
 
 # SF range cứng theo schema DB constraint (xem migration 0003).
 _SF_MIN, _SF_MAX = 7, 12
+
+# Cap quá khứ cho cursor `since` (realtime polling). 24h đủ rộng cho walk-test
+# liên tục cả ngày; chặn caller pass `since=2020-01-01` gây full-scan.
+_SINCE_MAX_LOOKBACK = timedelta(hours=24)
 
 router = APIRouter(prefix="/api/v1/survey", tags=["survey"])
 
@@ -81,6 +85,13 @@ async def list_training_points(
     snr_max: float | None = Query(default=None, ge=-30, le=30),
     time_from: datetime | None = Query(default=None),
     time_to: datetime | None = Query(default=None),
+    since: datetime | None = Query(
+        default=None,
+        description=(
+            "Incremental cursor cho realtime polling — chỉ trả điểm có "
+            "timestamp > since. Cap 24h quá khứ để chặn full-scan."
+        ),
+    ),
     sort_by: Literal["timestamp", "rssi", "snr"] = Query(default="timestamp"),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
     rank_from: int | None = Query(default=None, ge=1, le=_MAX_RANK_WINDOW),
@@ -103,6 +114,14 @@ async def list_training_points(
     _validate_range(snr_min, snr_max, "snr")
     if time_from is not None and time_to is not None and time_from > time_to:
         raise HTTPException(status_code=422, detail="time_from phải <= time_to")
+    if since is not None:
+        # Normalise naive datetime → UTC để so sánh nhất quán với now(UTC).
+        since_utc = since if since.tzinfo else since.replace(tzinfo=UTC)
+        if since_utc < datetime.now(UTC) - _SINCE_MAX_LOOKBACK:
+            raise HTTPException(
+                status_code=422,
+                detail="since không được cách quá 24 giờ trước",
+            )
     offset, eff_limit = _resolve_window(rank_from, rank_to, limit)
 
     # Resolver mở connection ngắn để verify linked_source ownership.
@@ -129,6 +148,7 @@ async def list_training_points(
         snr_max=snr_max,
         time_from=time_from,
         time_to=time_to,
+        since=since,
         sort_by=sort_by,
         sort_order=sort_order,
     )

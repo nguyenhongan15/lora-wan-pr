@@ -1,7 +1,12 @@
 // @ts-check
 import { strings } from "../strings.js";
+import { SURVEY_RSSI_BINS } from "./legend.js";
 
 const t = strings.coverageMap.legend;
+
+// Legend chip render strong → weak (top → bottom, đảo lại so với
+// SURVEY_RSSI_BINS sort weak → strong).
+const LEGEND_ROWS = [...SURVEY_RSSI_BINS].reverse();
 
 /**
  * Legend cố định cho cả tab "Bản đồ điểm đo" và "Bản đồ phủ sóng".
@@ -20,22 +25,15 @@ export function MapLegend({ gatewayCount, surveyCount = null }) {
           {surveyCount != null && <div>{t.surveyCount(surveyCount)}</div>}
         </div>
       <div className="flex flex-col gap-1">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-green-600" />
-          {t.strongRssi}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-yellow-500" />
-          {t.mediumRssi}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-orange-500" />
-          {t.weakRssi}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-red-600" />
-          {t.noCoverage}
-        </span>
+        {LEGEND_ROWS.map((bin) => (
+          <span key={bin.label} className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: bin.color }}
+            />
+            {bin.label}
+          </span>
+        ))}
       </div>
     </div>
   );

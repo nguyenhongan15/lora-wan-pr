@@ -41,6 +41,8 @@ import numpy as np
 import osmium
 import rasterio
 from rasterio.features import rasterize
+from rasterio.transform import from_origin
+from rasterio.warp import Resampling, reproject
 from shapely.geometry import Polygon, box
 
 log = logging.getLogger("build_dsm")
@@ -206,15 +208,63 @@ class _BuildingHandler(osmium.SimpleHandler):
             self.entries.append((p, height))
 
 
-def _build_dsm_for_tile(tile_path: Path, pbf_path: Path, out_path: Path) -> dict[str, float | int]:
-    """Sinh 1 surface tile từ 1 terrain tile + buildings trong PBF."""
+def _build_dsm_for_tile(
+    tile_path: Path,
+    pbf_path: Path,
+    out_path: Path,
+    pixel_size_m: float | None = None,
+) -> dict[str, float | int]:
+    """Sinh 1 surface tile từ 1 terrain tile + buildings trong PBF.
+
+    Nếu `pixel_size_m` set + khác native resolution, terrain được reproject
+    sang grid mới (bilinear) trước khi rasterize buildings — giúp building
+    polygon nhỏ < 30m hiện rõ ở DSM 10m / 5m.
+    """
     t0 = time.time()
     with rasterio.open(tile_path) as src:
-        terrain = src.read(1).astype(np.float32)
-        transform = src.transform
+        terrain_native = src.read(1).astype(np.float32)
+        native_transform = src.transform
         bounds = src.bounds
         nodata = src.nodata
         profile = src.profile.copy()
+        src_crs = src.crs
+
+    # Resample terrain to target pixel size if requested. Native GLO-30 = ~30m
+    # (~0.000278° at equator); target 10m → ~0.0000926°. Bilinear resample đủ
+    # smooth cho terrain (P.1812 nội suy profile DSM dọc tia tx→rx).
+    if pixel_size_m is not None:
+        native_pixel_m = abs(native_transform.a) * 111000.0  # rough deg→m at equator
+        if abs(native_pixel_m - pixel_size_m) > 0.5:
+            log.info(
+                "[%s] resampling terrain %.1fm → %.1fm (bilinear)",
+                tile_path.name,
+                native_pixel_m,
+                pixel_size_m,
+            )
+            target_deg = pixel_size_m / 111000.0
+            new_nx = round((bounds.right - bounds.left) / target_deg)
+            new_ny = round((bounds.top - bounds.bottom) / target_deg)
+            new_transform = from_origin(bounds.left, bounds.top, target_deg, target_deg)
+            terrain = np.zeros((new_ny, new_nx), dtype=np.float32)
+            reproject(
+                source=terrain_native,
+                destination=terrain,
+                src_transform=native_transform,
+                src_crs=src_crs,
+                dst_transform=new_transform,
+                dst_crs=src_crs,
+                resampling=Resampling.bilinear,
+                src_nodata=nodata,
+                dst_nodata=nodata if nodata is not None else 0,
+            )
+            transform = new_transform
+            profile.update(width=new_nx, height=new_ny, transform=new_transform)
+        else:
+            terrain = terrain_native
+            transform = native_transform
+    else:
+        terrain = terrain_native
+        transform = native_transform
 
     log.info(
         "[%s] tile bounds (%.4f,%.4f)-(%.4f,%.4f) shape=%s",
@@ -336,6 +386,16 @@ def main() -> int:
         action="store_true",
         help="Recompute even if output already exists",
     )
+    parser.add_argument(
+        "--pixel-size-m",
+        type=float,
+        default=None,
+        help=(
+            "Output pixel size (mét). Default: giữ native (Copernicus GLO-30 ~30m). "
+            "Set 10 để build DSM 10m — terrain bilinear upsample, building "
+            "rasterize ở 10m grid."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.dem_dir.is_dir():
@@ -364,7 +424,9 @@ def main() -> int:
         if out_path.exists() and not args.force:
             log.info("[%s] skip (đã có %s, dùng --force để overwrite)", tile.name, out_path)
             continue
-        summary.append(_build_dsm_for_tile(tile, args.pbf, out_path))
+        summary.append(
+            _build_dsm_for_tile(tile, args.pbf, out_path, pixel_size_m=args.pixel_size_m)
+        )
 
     log.info("=" * 60)
     log.info("Summary: %d tile processed", len(summary))

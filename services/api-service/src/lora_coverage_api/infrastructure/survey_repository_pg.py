@@ -163,6 +163,7 @@ class PgSurveyRepository:
         snr_max: float | None = None,
         time_from: datetime | None = None,
         time_to: datetime | None = None,
+        since: datetime | None = None,
         sort_by: Literal["timestamp", "rssi", "snr"] = "timestamp",
         sort_order: Literal["asc", "desc"] = "desc",
     ) -> Sequence[TrainingPoint]:
@@ -211,6 +212,11 @@ class PgSurveyRepository:
         if time_to is not None:
             where.append("t.timestamp <= :time_to")
             params["time_to"] = time_to
+        if since is not None:
+            # Strict `>` để cursor không lặp lại row đã trả; caller advance
+            # cursor = max(timestamp) sau mỗi lần fetch.
+            where.append("t.timestamp > :since")
+            params["since"] = since
 
         sort_column = _SORT_COLUMN[sort_by]
         sort_dir = "ASC" if sort_order == "asc" else "DESC"

@@ -4,6 +4,8 @@
 // kiểu marker, defaults SF/freq/sort. Khi muốn đổi basemap, ngưỡng phủ
 // sóng, hay màu trạng thái — chỉ sửa file này.
 
+import { surveyRssiColorExpression } from "./legend.js";
+
 /* ─────────────────────────────────────────────────────────────────────────
  * Geometry & camera
  * ─────────────────────────────────────────────────────────────────────── */
@@ -63,9 +65,10 @@ export const MARGIN_BAR_RANGE = { min: -10, max: 20 };
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Basemap raster tiles.
- *  - BASEMAP_STYLE (CARTO Voyager): tab "Bản đồ điểm đo" + "Dự đoán điểm".
- *  - SATELLITE_BASEMAP_STYLE (ESRI World Imagery): tab "Bản đồ phủ sóng" —
- *    người dùng cần đối chiếu band min-SF với toà nhà/đường thực tế.
+ *  - BASEMAP_STYLE (CARTO Voyager): basemap mặc định mọi tab.
+ *  - SATELLITE_BASEMAP_STYLE (ESRI World Imagery): overlay raster chỉ
+ *    hiện khi coverageViewMode === "minsf" (đối chiếu band SF với
+ *    toà nhà/đường thực tế). Tab "Bản đồ ước lượng" không bật overlay.
  * ─────────────────────────────────────────────────────────────────────── */
 
 export const BASEMAP_STYLE = {
@@ -105,27 +108,14 @@ export const SATELLITE_BASEMAP_STYLE = {
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Survey circle paint — maplibre `step` expression theo RSSI dBm.
- *  ≥ -100 : strong  (green)
- *  [-115, -100) : good (yellow)
- *  [-120, -115) : marginal (orange)
- *  < -120 : weak (red)
- * Đổi ngưỡng / màu ở đây sẽ thay đổi cách hiển thị toàn bộ map.
+ * Survey circle paint — palette + step expression lấy từ ./legend.js
+ * (single source of truth). Đổi màu / ngưỡng ở legend.js sẽ tự động sync
+ * cả paint expression này lẫn chip màu trong MapLegend.jsx.
  * ─────────────────────────────────────────────────────────────────────── */
 
 export const SURVEY_CIRCLE_PAINT = {
   "circle-radius": 4,
-  "circle-color": [
-    "step",
-    ["get", "rssi_dbm"],
-    "#dc2626", // < -120
-    -120,
-    "#f97316", // [-120, -115)
-    -115,
-    "#eab308", // [-115, -100)
-    -100,
-    "#16a34a", // ≥ -100
-  ],
+  "circle-color": surveyRssiColorExpression(),
   "circle-stroke-color": "#ffffff",
   "circle-stroke-width": 1,
 };
@@ -176,25 +166,10 @@ export const MINSF_FILL_OPACITY = 0.55;
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Composite RSSI heatmap palette (mode='estimate').
- * Dùng cùng palette với SURVEY_CIRCLE_PAINT (STATUS_COLOR) để legend đồng
- * nhất giữa điểm đo thực và heatmap ước lượng. Bin 5 (< -140 dBm) KHÔNG
- * render (basemap lộ ra) — coi như không phủ.
+ * Palette + ngưỡng tách sang ./legend.js (single source of truth, song song
+ * SURVEY_RSSI_BINS). Khớp RSSI_BINS Python trong precompute_rssi_heatmap.py.
+ * Đổi màu / ngưỡng / label ở legend.js sẽ sync cả paint expression lẫn chip
+ * trong EstimatePanel.jsx.
  * ─────────────────────────────────────────────────────────────────────── */
 
-/** @type {Record<number, string>} */
-export const RSSI_BAND_COLORS = {
-  1: "#16a34a", // >= -100 dBm    (xanh lá — SF7 dư margin)
-  2: "#eab308", // -115..-100 dBm (vàng    — SF7–SF9)
-  3: "#f97316", // -125..-115 dBm (cam     — SF10–SF11)
-  4: "#dc2626", // -137..-125 dBm (đỏ      — SF12 sát ngưỡng)
-};
-
 export const RSSI_FILL_OPACITY = 0.55;
-
-/** Opacity overlay redundancy (số gateway nghe được) — white hatching. */
-/** @type {Record<number, number>} */
-export const REDUNDANCY_OPACITY = {
-  1: 0, // 1 gw: không overlay (lộ basemap)
-  2: 0.25, // 2 gw: hatching nhạt
-  3: 0.45, // ≥ 3 gw: hatching đậm
-};

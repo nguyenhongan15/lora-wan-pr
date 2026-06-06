@@ -6,7 +6,7 @@ residual clip ±15 dB). Composite = max(RSSI) toàn 11 gw; overlay gw_count =
 số gateway nghe được tín hiệu ≥ -130 dBm.
 
 Output:
-  - composite.geojson   : 4 dải RSSI (≥-100, -100~-110, -110~-120, -120~-140)
+  - composite.geojson   : 7 dải RSSI 10-dB step (≥-80, -90..-80, ..., -140..-130)
   - redundancy.geojson  : 3 dải gw_count (1, 2, ≥3)
   - manifest.json       : generated_at, model, bbox, gateway list
 
@@ -52,7 +52,6 @@ for _p in (str(API_SRC), str(REPO_ROOT / "scripts")):
 
 from precompute_minsf import (  # noqa: E402
     GatewayJob,
-    _assemble_polygons_with_holes,
     _compute_pl_grid,
     _load_dotenv_if_present,
     _load_gateways,
@@ -82,17 +81,18 @@ RESIDUAL_CLIP_DB = float("inf")
 # Ngưỡng "gateway có nghe được" cho overlay gw_count. -130 = SF12 limit + margin.
 REDUNDANCY_THRESHOLD_DBM = -130.0
 
-# 4 visible RSSI bins (low_dbm, high_dbm, bin_id, label). Cell < -137 dBm KHÔNG
-# polygonize → transparent, basemap lộ ra.
-#
-# Ngưỡng align với SX1276 BW125 sensitivity: SF7 -123, SF10 -132, SF12 -137.
-# Bin cũ (-140..-120) gộp cả "SF7 dư margin" lẫn "SF12 sát chết" → 72% diện
-# tích đỏ trên map. Bin mới tách rõ "trung bình SF10-11" vs "SF12-only".
+# 6 visible RSSI bins khớp SURVEY_RSSI_BINS (5 dB step trong -120..-100, plus
+# tail trên/dưới). Cell < -130 dBm KHÔNG polygonize → transparent, basemap lộ
+# ra. Bin id 1 = mạnh nhất, 6 = yếu nhất. Palette + label frontend mapping ở
+# apps/web-app/src/components/legend.js (SURVEY_RSSI_BINS, single source of
+# truth) — Survey Points map + Estimate composite map dùng chung scheme.
 RSSI_BINS: list[tuple[float, float, int, str]] = [
-    (-100.0, math.inf, 1, ">= -100 dBm"),
-    (-115.0, -100.0, 2, "-115 .. -100 dBm"),
-    (-125.0, -115.0, 3, "-125 .. -115 dBm"),
-    (-137.0, -125.0, 4, "-137 .. -125 dBm"),
+    (-100.0, math.inf, 1, "> -100 dBm"),
+    (-105.0, -100.0, 2, "-105 .. -100 dBm"),
+    (-110.0, -105.0, 3, "-110 .. -105 dBm"),
+    (-115.0, -110.0, 4, "-115 .. -110 dBm"),
+    (-120.0, -115.0, 5, "-120 .. -115 dBm"),
+    (-130.0, -120.0, 6, "< -120 dBm"),
 ]
 GW_COUNT_BINS: list[tuple[int, int, str]] = [
     (1, 1, "1 gateway"),
@@ -101,9 +101,13 @@ GW_COUNT_BINS: list[tuple[int, int, str]] = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class RssiJob:
-    """Per-gateway compute spec: sub-bbox snapped to common grid indices."""
+    """Per-gateway compute spec: sub-bbox snapped to common grid indices.
+
+    `skip_mask` (Phase B của 2-phase dominance prefilter): bool ndarray shape
+    (sub_ny, sub_nx). True = bỏ qua cell. None = compute full sub-grid (default).
+    """
 
     code: str
     name: str
@@ -130,6 +134,7 @@ class RssiJob:
     smooth_px: int
     stage2_model_path: str
     heatmap_sf: int
+    skip_mask: Any = None
 
 
 # Worker-process cache: joblib model load 1 lần, reuse cho tất cả gw trên cùng
@@ -192,6 +197,7 @@ def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
         job.sub_lon_min,
         job.step_dlat,
         job.step_dlon,
+        skip_mask=job.skip_mask,
     )
     if job.smooth_px > 1:
         pl_grid = _smooth_pl_grid(pl_grid, job.smooth_px)
@@ -416,6 +422,29 @@ def _build_sea_mask_dem(
     return mask
 
 
+def _smooth_nan_safe(
+    arr: np.ndarray,
+    sigma: float,
+) -> np.ndarray:
+    """NaN-safe Gaussian smoothing: làm mịn tia diffraction artifact của P.1812
+    mà KHÔNG lan giá trị finite ra cell NaN (no-coverage / sea). Standard
+    scipy.ndimage.gaussian_filter propagate NaN khắp kernel → vô dụng cho heatmap.
+    Cách chuẩn: filter(arr*mask)/filter(mask), cell ban đầu NaN giữ NaN.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    finite = np.isfinite(arr)
+    filled = np.where(finite, arr, 0.0).astype(np.float32)
+    weights = finite.astype(np.float32)
+    num = gaussian_filter(filled, sigma=sigma, mode="constant", cval=0.0)
+    den = gaussian_filter(weights, sigma=sigma, mode="constant", cval=0.0)
+    out = np.full_like(arr, np.nan, dtype=np.float32)
+    safe = den > 1e-6
+    out[safe] = num[safe] / den[safe]
+    out[~finite] = np.nan
+    return out
+
+
 def _polygonize_mask(
     mask: np.ndarray,
     lon0: float,
@@ -423,33 +452,251 @@ def _polygonize_mask(
     step_dlon: float,
     step_dlat: float,
 ) -> list[list[list[list[float]]]]:
-    """Binary mask → MultiPolygon coords via marching squares + hole detection."""
+    """Binary mask → MultiPolygon coords via rasterio.features.shapes (GDAL native).
+
+    GDAL polygonize xử lý hole topology native trong O(cell) thay vì O(poly²)
+    pairwise covers của marching-squares assembler. Stair-step pixel boundary
+    thay sub-pixel contour — chấp nhận được ở 10m visualization."""
     if mask.sum() == 0:
         return []
-    from shapely.geometry import Polygon as ShapelyPoly
-    from skimage import measure  # type: ignore[import-untyped]
+    from rasterio.features import shapes  # type: ignore[import-untyped]
+    from rasterio.transform import from_origin
 
-    padded = np.pad(mask.astype(np.uint8), 1, mode="constant", constant_values=0)
-    contours = measure.find_contours(padded.astype(float), 0.5)
-    rings: list[list[list[float]]] = []
-    polys: list[Any] = []
-    for contour in contours:
-        ring: list[list[float]] = []
-        for row, col in contour:
-            r = row - 1
-            c = col - 1
-            lon = lon0 + c * step_dlon
-            lat = lat0 + r * step_dlat
-            ring.append([round(lon, 6), round(lat, 6)])
-        if ring and ring[0] != ring[-1]:
-            ring.append(ring[0])
-        if len(ring) < 4:
+    ny, _nx = mask.shape
+    lat_max = lat0 + (ny - 1) * step_dlat
+    # mask[iy=0] = lat0 (south); rasterio expects north-up → flip vertical.
+    mask_u8 = np.ascontiguousarray(mask[::-1, :].astype(np.uint8))
+    transform = from_origin(lon0, lat_max, step_dlon, step_dlat)
+    polys: list[list[list[list[float]]]] = []
+    for geom, val in shapes(mask_u8, mask=mask_u8.astype(bool), transform=transform):
+        if val != 1 or geom.get("type") != "Polygon":
             continue
-        rings.append(ring)
-        polys.append(ShapelyPoly(ring))
-    if not polys:
+        rings = geom["coordinates"]
+        rounded = [[[round(c[0], 6), round(c[1], 6)] for c in ring] for ring in rings]
+        polys.append(rounded)
+    return polys
+
+
+def _build_jobs(
+    rows: list[dict[str, Any]],
+    lat_min: float,
+    lon_min: float,
+    lat_max: float,
+    lon_max: float,
+    step_dlat: float,
+    step_dlon: float,
+    nx: int,
+    ny: int,
+    grid_m: float,
+    per_gw_radius_km: float,
+    dem_dir: str,
+    surface_dem_dir: str,
+    location_percent: float,
+    smooth_px: int,
+    stage2_path: str,
+    heatmap_sf: int,
+    skip_masks: dict[str, np.ndarray] | None = None,
+) -> list[RssiJob]:
+    """Build RssiJob list. If `skip_masks` given (Phase B), skip mỗi gw không có
+    mask hoặc mask all-True (dominant nowhere)."""
+    jobs: list[RssiJob] = []
+    radius_deg_lat = per_gw_radius_km * 1000.0 / 111320.0
+    for r in rows:
+        gw_lat = float(r["lat"])
+        gw_lon = float(r["lon"])
+        radius_deg_lon = per_gw_radius_km * 1000.0 / (111320.0 * math.cos(math.radians(gw_lat)))
+        sub_lat_lo = max(gw_lat - radius_deg_lat, lat_min)
+        sub_lat_hi = min(gw_lat + radius_deg_lat, lat_max)
+        sub_lon_lo = max(gw_lon - radius_deg_lon, lon_min)
+        sub_lon_hi = min(gw_lon + radius_deg_lon, lon_max)
+        if sub_lat_lo >= sub_lat_hi or sub_lon_lo >= sub_lon_hi:
+            log.info("[%s] sub-bbox không giao grid — skip", r["code"])
+            continue
+        iy_start = max(0, math.floor((sub_lat_lo - lat_min) / step_dlat))
+        ix_start = max(0, math.floor((sub_lon_lo - lon_min) / step_dlon))
+        iy_end = min(ny, math.ceil((sub_lat_hi - lat_min) / step_dlat) + 1)
+        ix_end = min(nx, math.ceil((sub_lon_hi - lon_min) / step_dlon) + 1)
+        sub_ny = iy_end - iy_start
+        sub_nx = ix_end - ix_start
+        if sub_ny <= 0 or sub_nx <= 0:
+            continue
+        sub_lat_origin = lat_min + iy_start * step_dlat
+        sub_lon_origin = lon_min + ix_start * step_dlon
+        code = str(r["code"])
+        gw_skip_mask: np.ndarray | None = None
+        if skip_masks is not None:
+            gw_skip_mask = skip_masks.get(code)
+            if gw_skip_mask is None:
+                log.info("[%s] không có skip_mask — gw dominant nowhere, skip Phase B", code)
+                continue
+            if gw_skip_mask.shape != (sub_ny, sub_nx):
+                raise RuntimeError(
+                    f"[{code}] skip_mask shape {gw_skip_mask.shape} != ({sub_ny}, {sub_nx})"
+                )
+            if gw_skip_mask.all():
+                log.info("[%s] tất cả cells skip — gw dominant nowhere", code)
+                continue
+        jobs.append(
+            RssiJob(
+                code=code,
+                name=str(r["name"]),
+                lat=gw_lat,
+                lon=gw_lon,
+                altitude_m=float(r["altitude_m"]),
+                antenna_height_m=float(r["antenna_height_m"]),
+                antenna_gain_dbi=float(r["antenna_gain_dbi"]),
+                tx_power_dbm=float(r["tx_power_dbm"]),
+                frequency_mhz=float(r["frequency_mhz"]),
+                noise_floor_dbm=(
+                    float(r["noise_floor_dbm"]) if r.get("noise_floor_dbm") is not None else None
+                ),
+                iy_start=iy_start,
+                ix_start=ix_start,
+                sub_ny=sub_ny,
+                sub_nx=sub_nx,
+                sub_lat_min=sub_lat_origin,
+                sub_lon_min=sub_lon_origin,
+                step_dlat=step_dlat,
+                step_dlon=step_dlon,
+                grid_m=grid_m,
+                dem_dir=dem_dir,
+                surface_dem_dir=surface_dem_dir,
+                location_percent=location_percent,
+                smooth_px=smooth_px,
+                stage2_model_path=stage2_path,
+                heatmap_sf=heatmap_sf,
+                skip_mask=gw_skip_mask,
+            )
+        )
+    return jobs
+
+
+def _run_jobs(jobs: list[RssiJob], workers: int) -> list[dict[str, Any]]:
+    """Run a batch of RssiJob via multiprocessing pool (or sequential if workers <= 1)."""
+    if not jobs:
         return []
-    return _assemble_polygons_with_holes(rings, polys)
+    t_start = time.time()
+    if workers <= 1 or len(jobs) <= 1:
+        results = [_compute_one_rssi(j) for j in jobs]
+    else:
+        with mp.Pool(processes=workers) as pool:
+            results = pool.map(_compute_one_rssi, jobs)
+    log.info("All %d gateway done in %.0fs", len(results), time.time() - t_start)
+    return results
+
+
+def _composite_results(
+    results: list[dict[str, Any]],
+    ny: int,
+    nx: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Stitch per-gw sub-grids onto common (ny, nx) grid.
+
+    Returns (composite_rssi, gw_count, dominant_idx):
+      - composite_rssi: max(RSSI) per cell, NaN nếu không gw nào cover
+      - gw_count: số gw có RSSI ≥ REDUNDANCY_THRESHOLD_DBM
+      - dominant_idx: index vào `results` của gw thắng max (-1 = không gw nào)
+    """
+    composite = np.full((ny, nx), np.nan, dtype=np.float32)
+    gw_count = np.zeros((ny, nx), dtype=np.uint8)
+    dominant = np.full((ny, nx), -1, dtype=np.int16)
+    for gw_idx, r in enumerate(results):
+        sub = r["rssi_grid"]
+        iy0, ix0 = r["iy_start"], r["ix_start"]
+        iy1, ix1 = iy0 + r["sub_ny"], ix0 + r["sub_nx"]
+        block = composite[iy0:iy1, ix0:ix1]
+        is_winner = np.isfinite(sub) & (~np.isfinite(block) | (sub > block))
+        composite[iy0:iy1, ix0:ix1] = np.fmax(block, sub)
+        dom_block = dominant[iy0:iy1, ix0:ix1]
+        dominant[iy0:iy1, ix0:ix1] = np.where(is_winner, np.int16(gw_idx), dom_block)
+        heard = (np.nan_to_num(sub, nan=-9999.0) >= REDUNDANCY_THRESHOLD_DBM).astype(np.uint8)
+        gw_count[iy0:iy1, ix0:ix1] = gw_count[iy0:iy1, ix0:ix1] + heard
+    return composite, gw_count, dominant
+
+
+def _build_skip_masks_fine(
+    rows: list[dict[str, Any]],
+    dominant_coarse: np.ndarray,
+    lat_min: float,
+    lon_min: float,
+    lat_max: float,
+    lon_max: float,
+    step_dlat_fine: float,
+    step_dlon_fine: float,
+    nx_fine: int,
+    ny_fine: int,
+    step_dlat_coarse: float,
+    step_dlon_coarse: float,
+    ny_coarse: int,
+    nx_coarse: int,
+    per_gw_radius_km: float,
+    dominance_buffer: int,
+) -> dict[str, np.ndarray]:
+    """For each gw, derive fine-grid skip_mask (True = NOT dominant) by upsampling
+    dilated coarse dominance map. Order of `rows` must match `_composite_results`
+    gw_idx assignment in Phase A."""
+    from scipy.ndimage import binary_dilation  # type: ignore[import-untyped]
+
+    skip_masks: dict[str, np.ndarray] = {}
+    radius_deg_lat = per_gw_radius_km * 1000.0 / 111320.0
+    for gw_idx, r in enumerate(rows):
+        code = str(r["code"])
+        gw_lat = float(r["lat"])
+        gw_lon = float(r["lon"])
+        radius_deg_lon = per_gw_radius_km * 1000.0 / (111320.0 * math.cos(math.radians(gw_lat)))
+        sub_lat_lo = max(gw_lat - radius_deg_lat, lat_min)
+        sub_lat_hi = min(gw_lat + radius_deg_lat, lat_max)
+        sub_lon_lo = max(gw_lon - radius_deg_lon, lon_min)
+        sub_lon_hi = min(gw_lon + radius_deg_lon, lon_max)
+        if sub_lat_lo >= sub_lat_hi or sub_lon_lo >= sub_lon_hi:
+            continue
+        iy_start = max(0, math.floor((sub_lat_lo - lat_min) / step_dlat_fine))
+        ix_start = max(0, math.floor((sub_lon_lo - lon_min) / step_dlon_fine))
+        iy_end = min(ny_fine, math.ceil((sub_lat_hi - lat_min) / step_dlat_fine) + 1)
+        ix_end = min(nx_fine, math.ceil((sub_lon_hi - lon_min) / step_dlon_fine) + 1)
+        sub_ny = iy_end - iy_start
+        sub_nx = ix_end - ix_start
+        if sub_ny <= 0 or sub_nx <= 0:
+            continue
+        gw_dom_coarse = dominant_coarse == np.int16(gw_idx)
+        if not gw_dom_coarse.any():
+            continue
+        if dominance_buffer > 0:
+            gw_dom_coarse = binary_dilation(gw_dom_coarse, iterations=dominance_buffer)
+        iy_fine_global = (iy_start + np.arange(sub_ny)).astype(np.float64)
+        ix_fine_global = (ix_start + np.arange(sub_nx)).astype(np.float64)
+        fine_lat = lat_min + iy_fine_global * step_dlat_fine
+        fine_lon = lon_min + ix_fine_global * step_dlon_fine
+        iy_c = np.clip(((fine_lat - lat_min) / step_dlat_coarse).astype(np.int32), 0, ny_coarse - 1)
+        ix_c = np.clip(((fine_lon - lon_min) / step_dlon_coarse).astype(np.int32), 0, nx_coarse - 1)
+        in_region = gw_dom_coarse[iy_c[:, None], ix_c[None, :]]
+        if not in_region.any():
+            continue
+        skip_masks[code] = (~in_region).astype(bool)
+    return skip_masks
+
+
+def _upsample_coarse_to_fine(
+    coarse: np.ndarray,
+    lat_min: float,
+    lon_min: float,
+    step_dlat_coarse: float,
+    step_dlon_coarse: float,
+    ny_coarse: int,
+    nx_coarse: int,
+    step_dlat_fine: float,
+    step_dlon_fine: float,
+    ny_fine: int,
+    nx_fine: int,
+) -> np.ndarray:
+    """Nearest-neighbor upsample coarse 2D grid → fine. Shared lat_min/lon_min origin."""
+    iy_fine = np.arange(ny_fine).astype(np.float64)
+    ix_fine = np.arange(nx_fine).astype(np.float64)
+    fine_lat = lat_min + iy_fine * step_dlat_fine
+    fine_lon = lon_min + ix_fine * step_dlon_fine
+    iy_c = np.clip(((fine_lat - lat_min) / step_dlat_coarse).astype(np.int32), 0, ny_coarse - 1)
+    ix_c = np.clip(((fine_lon - lon_min) / step_dlon_coarse).astype(np.int32), 0, nx_coarse - 1)
+    return coarse[iy_c[:, None], ix_c[None, :]]
 
 
 def main() -> int:
@@ -461,6 +708,48 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--grid-m", type=float, default=GRID_METERS_DEFAULT)
+    parser.add_argument(
+        "--coarse-grid-m",
+        type=float,
+        default=GRID_METERS_DEFAULT,
+        help=(
+            "Phase A grid (m) cho 2-phase per-gw dominance prefilter. Khi"
+            " --grid-m < --coarse-grid-m, Phase A chạy ở --coarse-grid-m để"
+            " xác định gateway dominant tại mỗi cell, rồi Phase B chạy"
+            " --grid-m chỉ tính cell nơi gateway này dominant (giảm ~N× cost"
+            " với N = số gateway). Default = --grid-m (single-phase)."
+        ),
+    )
+    parser.add_argument(
+        "--dominance-buffer",
+        type=int,
+        default=1,
+        help=(
+            "Buffer coarse cells around mỗi gw's dominant region trong Phase B."
+            " Default 1 = dilate ±1 coarse cell để xử lý edge artifact ở boundary."
+        ),
+    )
+    parser.add_argument(
+        "--smooth-sigma",
+        type=float,
+        default=0.0,
+        help=(
+            "NaN-safe Gaussian smoothing σ (đơn vị cell) áp lên composite RSSI"
+            " grid trước khi polygonize. 0 = tắt. Khuyến nghị 2.0 (≈20m @ grid"
+            " 10m) để làm mịn tia diffraction artifact của P.1812 trên DSM"
+            " building-resolution. NaN cell giữ nguyên (không lan ra biển/no-cov)."
+        ),
+    )
+    parser.add_argument(
+        "--opening-size",
+        type=int,
+        default=0,
+        help=(
+            "Morphological opening kernel size (cell, vuông) áp lên BIN MASK"
+            " trước polygonize. Xoá radial strip thin <N cell rộng (diffraction"
+            " wedge artifact mà gaussian không xoá hết). 0=tắt. Khuyến nghị 3-5."
+        ),
+    )
     parser.add_argument(
         "--bbox",
         default="danang",
@@ -497,7 +786,7 @@ def main() -> int:
         help=(
             "P.1812 location %. Default 10 = 'RSSI mà 90% địa điểm vượt' — khớp"
             " survey thực tế (user ưu tiên vị trí thu được sóng). Loc%=50 (median)"
-            " quá pessimistic, gây bias −6 dB cho heatmap composite. Min-SF map"
+            " quá pessimistic, gây bias -6 dB cho heatmap composite. Min-SF map"
             " vẫn dùng loc%=50 (design margin)."
         ),
     )
@@ -512,7 +801,17 @@ def main() -> int:
         default=15.0,
         help=(
             "Sub-bbox half-side (km) per gateway around its location. Cell xa hơn "
-            "khả năng RSSI < -140 dBm vẫn rớt khỏi bin 4. Default 15."
+            "khả năng RSSI < -140 dBm vẫn rớt khỏi bin cuối. Default 15."
+        ),
+    )
+    parser.add_argument(
+        "--max-radius-km",
+        type=float,
+        default=0.0,
+        help=(
+            "Circular clip radius (km) post-composite: cell xa nhất khỏi MỌI"
+            " gateway > radius này → NaN. 0=tắt (chỉ giới hạn bởi --per-gw-radius-km"
+            " hình vuông). Giúp map gọn như Viana-style. Khuyến nghị 10."
         ),
     )
     parser.add_argument(
@@ -614,93 +913,166 @@ def main() -> int:
         )
         return 0
 
-    jobs: list[RssiJob] = []
-    radius_deg_lat = args.per_gw_radius_km * 1000.0 / 111320.0
-    for r in rows:
-        gw_lat = float(r["lat"])
-        gw_lon = float(r["lon"])
-        radius_deg_lon = (
-            args.per_gw_radius_km * 1000.0 / (111320.0 * math.cos(math.radians(gw_lat)))
+    two_phase = args.grid_m < args.coarse_grid_m - 0.1
+    if two_phase:
+        step_dlon_c, step_dlat_c = meters_to_degrees(
+            center_lat, args.coarse_grid_m, args.coarse_grid_m
         )
-        sub_lat_lo = max(gw_lat - radius_deg_lat, lat_min)
-        sub_lat_hi = min(gw_lat + radius_deg_lat, lat_max)
-        sub_lon_lo = max(gw_lon - radius_deg_lon, lon_min)
-        sub_lon_hi = min(gw_lon + radius_deg_lon, lon_max)
-        if sub_lat_lo >= sub_lat_hi or sub_lon_lo >= sub_lon_hi:
-            log.info("[%s] sub-bbox không giao common grid — skip", r["code"])
-            continue
-        iy_start = max(0, math.floor((sub_lat_lo - lat_min) / step_dlat))
-        ix_start = max(0, math.floor((sub_lon_lo - lon_min) / step_dlon))
-        iy_end = min(ny, math.ceil((sub_lat_hi - lat_min) / step_dlat) + 1)
-        ix_end = min(nx, math.ceil((sub_lon_hi - lon_min) / step_dlon) + 1)
-        sub_ny = iy_end - iy_start
-        sub_nx = ix_end - ix_start
-        if sub_ny <= 0 or sub_nx <= 0:
-            continue
-        sub_lat_origin = lat_min + iy_start * step_dlat
-        sub_lon_origin = lon_min + ix_start * step_dlon
-        jobs.append(
-            RssiJob(
-                code=str(r["code"]),
-                name=str(r["name"]),
-                lat=gw_lat,
-                lon=gw_lon,
-                altitude_m=float(r["altitude_m"]),
-                antenna_height_m=float(r["antenna_height_m"]),
-                antenna_gain_dbi=float(r["antenna_gain_dbi"]),
-                tx_power_dbm=float(r["tx_power_dbm"]),
-                frequency_mhz=float(r["frequency_mhz"]),
-                noise_floor_dbm=(
-                    float(r["noise_floor_dbm"]) if r.get("noise_floor_dbm") is not None else None
-                ),
-                iy_start=iy_start,
-                ix_start=ix_start,
-                sub_ny=sub_ny,
-                sub_nx=sub_nx,
-                sub_lat_min=sub_lat_origin,
-                sub_lon_min=sub_lon_origin,
-                step_dlat=step_dlat,
-                step_dlon=step_dlon,
-                grid_m=args.grid_m,
-                dem_dir=dem_dir,
-                surface_dem_dir=surface_dem_dir,
-                location_percent=args.location_percent,
-                smooth_px=args.smooth_px,
-                stage2_model_path=stage2_path,
-                heatmap_sf=args.heatmap_sf,
+        nx_c = math.ceil((lon_max - lon_min) / step_dlon_c) + 1
+        ny_c = math.ceil((lat_max - lat_min) / step_dlat_c) + 1
+        log.info(
+            "Phase A coarse grid: %d×%d cell @ %.0fm",
+            nx_c,
+            ny_c,
+            args.coarse_grid_m,
+        )
+        coarse_jobs = _build_jobs(
+            rows,
+            lat_min,
+            lon_min,
+            lat_max,
+            lon_max,
+            step_dlat_c,
+            step_dlon_c,
+            nx_c,
+            ny_c,
+            args.coarse_grid_m,
+            args.per_gw_radius_km,
+            dem_dir,
+            surface_dem_dir,
+            args.location_percent,
+            args.smooth_px,
+            stage2_path,
+            args.heatmap_sf,
+        )
+        if not coarse_jobs:
+            log.error("Phase A: không có job")
+            return 1
+        log.info(
+            "Phase A: %d job (avg sub-grid %.0f cell)",
+            len(coarse_jobs),
+            sum(j.sub_ny * j.sub_nx for j in coarse_jobs) / len(coarse_jobs),
+        )
+        coarse_results = _run_jobs(coarse_jobs, args.workers)
+        _, gw_count_coarse, dominant_coarse = _composite_results(coarse_results, ny_c, nx_c)
+        n_dom = int((dominant_coarse >= 0).sum())
+        log.info(
+            "Phase A composite: %d/%d coarse cell có gw dominant",
+            n_dom,
+            ny_c * nx_c,
+        )
+        skip_masks = _build_skip_masks_fine(
+            rows,
+            dominant_coarse,
+            lat_min,
+            lon_min,
+            lat_max,
+            lon_max,
+            step_dlat,
+            step_dlon,
+            nx,
+            ny,
+            step_dlat_c,
+            step_dlon_c,
+            ny_c,
+            nx_c,
+            args.per_gw_radius_km,
+            args.dominance_buffer,
+        )
+        total_full = sum(int(m.size) for m in skip_masks.values())
+        total_skip = sum(int(m.sum()) for m in skip_masks.values())
+        log.info(
+            "Phase B: %d gw có dominance region; skip %d/%d sub-grid cell (%.1f%%)",
+            len(skip_masks),
+            total_skip,
+            total_full,
+            100.0 * total_skip / max(total_full, 1),
+        )
+        fine_jobs = _build_jobs(
+            rows,
+            lat_min,
+            lon_min,
+            lat_max,
+            lon_max,
+            step_dlat,
+            step_dlon,
+            nx,
+            ny,
+            args.grid_m,
+            args.per_gw_radius_km,
+            dem_dir,
+            surface_dem_dir,
+            args.location_percent,
+            args.smooth_px,
+            stage2_path,
+            args.heatmap_sf,
+            skip_masks=skip_masks,
+        )
+        if not fine_jobs:
+            log.error("Phase B: không có job (dominance prefilter cắt sạch)")
+            return 1
+        log.info(
+            "Phase B: %d job (avg compute %.0f cell sau prefilter)",
+            len(fine_jobs),
+            sum(
+                (j.sub_ny * j.sub_nx) - (int(j.skip_mask.sum()) if j.skip_mask is not None else 0)
+                for j in fine_jobs
             )
+            / len(fine_jobs),
         )
-
-    if not jobs:
-        log.error("Không có job để chạy")
-        return 1
-    avg_cells = sum(j.sub_ny * j.sub_nx for j in jobs) / len(jobs)
-    log.info(
-        "%d job sẵn sàng (per-gw radius %.0f km, sub-grid avg ~%.0f cell)",
-        len(jobs),
-        args.per_gw_radius_km,
-        avg_cells,
-    )
-
-    t_start = time.time()
-    if args.workers <= 1 or len(jobs) <= 1:
-        results = [_compute_one_rssi(j) for j in jobs]
+        fine_results = _run_jobs(fine_jobs, args.workers)
+        log.info("Compositing fine grid %d×%d...", ny, nx)
+        composite, _, _ = _composite_results(fine_results, ny, nx)
+        # gw_count fine = upsample coarse vì Phase B chỉ compute cell dominant
+        # → gw_count fine không meaningful nếu lấy từ fine_results.
+        gw_count = _upsample_coarse_to_fine(
+            gw_count_coarse,
+            lat_min,
+            lon_min,
+            step_dlat_c,
+            step_dlon_c,
+            ny_c,
+            nx_c,
+            step_dlat,
+            step_dlon,
+            ny,
+            nx,
+        )
+        results = fine_results
     else:
-        with mp.Pool(processes=args.workers) as pool:
-            results = pool.map(_compute_one_rssi, jobs)
-    log.info("All %d gateway done in %.0fs", len(results), time.time() - t_start)
-
-    log.info("Compositing onto common grid %d×%d...", ny, nx)
-    composite = np.full((ny, nx), np.nan, dtype=np.float32)
-    gw_count = np.zeros((ny, nx), dtype=np.uint8)
-    for r in results:
-        sub = r["rssi_grid"]
-        iy0, ix0 = r["iy_start"], r["ix_start"]
-        iy1, ix1 = iy0 + r["sub_ny"], ix0 + r["sub_nx"]
-        block = composite[iy0:iy1, ix0:ix1]
-        composite[iy0:iy1, ix0:ix1] = np.fmax(block, sub)
-        heard = (np.nan_to_num(sub, nan=-9999.0) >= REDUNDANCY_THRESHOLD_DBM).astype(np.uint8)
-        gw_count[iy0:iy1, ix0:ix1] = gw_count[iy0:iy1, ix0:ix1] + heard
+        log.info("Single-phase: grid %d×%d @ %.0fm", nx, ny, args.grid_m)
+        jobs = _build_jobs(
+            rows,
+            lat_min,
+            lon_min,
+            lat_max,
+            lon_max,
+            step_dlat,
+            step_dlon,
+            nx,
+            ny,
+            args.grid_m,
+            args.per_gw_radius_km,
+            dem_dir,
+            surface_dem_dir,
+            args.location_percent,
+            args.smooth_px,
+            stage2_path,
+            args.heatmap_sf,
+        )
+        if not jobs:
+            log.error("Không có job để chạy")
+            return 1
+        avg_cells = sum(j.sub_ny * j.sub_nx for j in jobs) / len(jobs)
+        log.info(
+            "%d job sẵn sàng (per-gw radius %.0f km, sub-grid avg ~%.0f cell)",
+            len(jobs),
+            args.per_gw_radius_km,
+            avg_cells,
+        )
+        results = _run_jobs(jobs, args.workers)
+        log.info("Compositing onto common grid %d×%d...", ny, nx)
+        composite, gw_count, _ = _composite_results(results, ny, nx)
 
     n_covered = int(np.isfinite(composite).sum())
     log.info(
@@ -748,13 +1120,69 @@ def main() -> int:
             n_before - n_after,
         )
 
-    log.info("Polygonizing 4 RSSI bins...")
+    if args.max_radius_km > 0:
+        radius_m = args.max_radius_km * 1000.0
+        covered = np.zeros((ny, nx), dtype=bool)
+        for r in rows:
+            gw_lat = float(r["lat"])
+            gw_lon = float(r["lon"])
+            cos_lat = math.cos(math.radians(gw_lat))
+            dlat_deg = radius_m / 111320.0
+            dlon_deg = radius_m / (111320.0 * max(cos_lat, 1e-6))
+            iy0 = max(0, math.floor((gw_lat - dlat_deg - lat_min) / step_dlat))
+            iy1 = min(ny, math.ceil((gw_lat + dlat_deg - lat_min) / step_dlat) + 1)
+            ix0 = max(0, math.floor((gw_lon - dlon_deg - lon_min) / step_dlon))
+            ix1 = min(nx, math.ceil((gw_lon + dlon_deg - lon_min) / step_dlon) + 1)
+            if iy1 <= iy0 or ix1 <= ix0:
+                continue
+            iy_arr = np.arange(iy0, iy1)
+            ix_arr = np.arange(ix0, ix1)
+            dy = (lat_min + iy_arr[:, None] * step_dlat - gw_lat) * 111320.0
+            dx = (lon_min + ix_arr[None, :] * step_dlon - gw_lon) * 111320.0 * cos_lat
+            dist = np.sqrt(dy * dy + dx * dx)
+            covered[iy0:iy1, ix0:ix1] |= dist <= radius_m
+        n_before = int(np.isfinite(composite).sum())
+        composite[~covered] = np.nan
+        gw_count[~covered] = 0
+        n_after = int(np.isfinite(composite).sum())
+        log.info(
+            "Applied circular clip radius=%.1f km: %d cell finite → %d (%d removed)",
+            args.max_radius_km,
+            n_before,
+            n_after,
+            n_before - n_after,
+        )
+
+    if args.smooth_sigma > 0:
+        log.info(
+            "Applying NaN-safe Gaussian smoothing σ=%.2f cell (~%.0fm @ grid %.0fm)...",
+            args.smooth_sigma,
+            args.smooth_sigma * args.grid_m,
+            args.grid_m,
+        )
+        composite = _smooth_nan_safe(composite, args.smooth_sigma)
+
+    opening_struct = None
+    if args.opening_size > 0:
+        opening_struct = np.ones((args.opening_size, args.opening_size), dtype=bool)
+        log.info(
+            "Morphological opening enabled: kernel %dx%d cell (≈%dm wide)",
+            args.opening_size,
+            args.opening_size,
+            args.opening_size * int(args.grid_m),
+        )
+
+    log.info("Polygonizing %d RSSI bins...", len(RSSI_BINS))
     composite_features: list[dict[str, Any]] = []
     for low, high, bin_id, label in RSSI_BINS:
         if math.isinf(high):
             mask = np.isfinite(composite) & (composite >= low)
         else:
             mask = np.isfinite(composite) & (composite >= low) & (composite < high)
+        if opening_struct is not None:
+            from scipy.ndimage import binary_opening
+
+            mask = binary_opening(mask, structure=opening_struct)
         n_cells = int(mask.sum())
         polys = _polygonize_mask(mask, lon_min, lat_min, step_dlon, step_dlat)
         log.info(
@@ -844,6 +1272,9 @@ def main() -> int:
         "heatmap_sf": args.heatmap_sf,
         "location_percent": args.location_percent,
         "redundancy_threshold_dbm": REDUNDANCY_THRESHOLD_DBM,
+        "smooth_sigma_cell": args.smooth_sigma if args.smooth_sigma > 0 else None,
+        "opening_size_cell": args.opening_size if args.opening_size > 0 else None,
+        "max_radius_km": args.max_radius_km if args.max_radius_km > 0 else None,
         "sea_mask": sea_mask_meta,
         "rssi_bins": [
             {

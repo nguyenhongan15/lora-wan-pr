@@ -46,10 +46,8 @@ export const strings = {
       gatewayCount: (gw) => `${gw ?? "…"} gateway`,
       /** @param {number} sv */
       surveyCount: (sv) => `${sv} điểm đo`,
-      strongRssi: "≥ -100 dBm",
-      mediumRssi: "-115 đến -100 dBm",
-      weakRssi: "-120 đến -115 dBm",
-      noCoverage: "< -120 dBm",
+      // Nhãn từng bin RSSI (chip màu legend) đã chuyển sang
+      // components/legend.js (SURVEY_RSSI_BINS) — single source of truth.
       // Legend dạng dài (component Legend nội bộ — hiện không dùng nhưng giữ
       // chuỗi để khi bật lại không bị mất đồng bộ).
       strongLong: "Mạnh (≥ -100 dBm)",
@@ -220,19 +218,14 @@ export const strings = {
       panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
       legendTitle: "Cường độ tín hiệu mạnh nhất (dBm)",
       bins: {
-        1: "≥ −100 dBm (SF7 dư margin)",
-        2: "−115 đến −100 (SF7–SF9)",
-        3: "−125 đến −115 (SF10–SF11)",
-        4: "−137 đến −125 (SF12 sát ngưỡng)",
+        1: "> −100 dBm",
+        2: "−105 đến −100 dBm",
+        3: "−110 đến −105 dBm",
+        4: "−115 đến −110 dBm",
+        5: "−120 đến −115 dBm",
+        6: "< −120 dBm",
       },
-      notCovered: "< −137 (không phủ)",
-      overlayTitle: "Số gateway nghe được",
-      overlayLabel: "Hiện overlay",
-      overlayBins: {
-        1: "1 gateway",
-        2: "2 gateway",
-        3: "≥ 3 gateway",
-      },
+      notCovered: "< −130 (không phủ)",
       hint: "Mỗi ô 50m × 50m. Tô màu theo cường độ tín hiệu mạnh nhất ước lượng nhận được từ 1 trong 11 gateway (Stage 1 ITU + Stage 2 XGBoost).",
       loadError:
         "Không tải được dữ liệu RSSI tổng hợp. Chạy `precompute_rssi_heatmap.py` để tạo.",
@@ -272,6 +265,23 @@ export const strings = {
         open: "Mở bộ lọc",
         close: "Đóng bộ lọc",
         title: "Bộ lọc",
+      },
+      realtime: {
+        sectionLabel: "Theo dõi trực tiếp",
+        toggleLabel: "Bật theo dõi trực tiếp",
+        toggleHint:
+          "Tự cập nhật điểm đo từ thiết bị mỗi vài giây. Tự tắt sau 15 phút không có gói tin mới.",
+        autoFollowLabel: "Tự theo dõi vị trí",
+        autoFollowHint: "Tự dịch bản đồ tới điểm đo mới nhất.",
+        liveBadge: "● TRỰC TIẾP",
+        lastSeenLabel: "Mới nhất",
+        lastSeenNever: "chưa có",
+        /** @param {number} s */
+        lastSeenSecondsAgo: (s) => `${s}s trước`,
+        /** @param {number} m */
+        lastSeenMinutesAgo: (m) => `${m} phút trước`,
+        /** @param {number} n */
+        sessionCounter: (n) => `Đã ghi ${n} điểm`,
       },
       timeRange: {
         legend: "Khoảng thời gian",
