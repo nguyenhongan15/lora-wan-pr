@@ -131,10 +131,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-uv
 
-      - name: Migrate + seed
-        run: |
-          uv run alembic -c migrations/alembic.ini upgrade head
-          uv run python scripts/seed_gateways.py
+      - name: Migrate
+        run: uv run alembic -c migrations/alembic.ini upgrade head
 
       - name: Pytest
         run: uv run pytest -v
