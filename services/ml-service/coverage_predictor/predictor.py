@@ -24,10 +24,6 @@ def predict(
         The predicted signal strength in dBm.
     """
 
-    if gateway is None:
-        # gateway = select_best_gateway(lat, lon)
-        print("No gateway provided, using default gateway 'gateway_1'")
-
     if frequency is None:
         frequency = 868.1
 

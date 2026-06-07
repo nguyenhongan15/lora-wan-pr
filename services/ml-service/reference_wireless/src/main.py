@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from build_reference_dataset import build_reference_dataset
+from build_gateways_dataset import build_gateways_dataset
 
 
 DATA_PATH = "../data/processed/devices_history_full.csv"

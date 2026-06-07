@@ -4,12 +4,8 @@ REFERENCE_COLUMNS = [
     "lat",
     "lon",
     "gateway",
-    "gateway_id",
-    "gw_lat",
-    "gw_lon",
     "rssi",
-    "distance_3d",
-    "closest_to_gw_distance",
+    "distance",
 ]
 
 def build_reference_dataset(
