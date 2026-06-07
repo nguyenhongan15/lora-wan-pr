@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-
+from build_reference_dataset import build_reference_dataset
 
 
 DATA_PATH = "../data/processed/devices_history_full.csv"
@@ -20,8 +20,8 @@ FORCE_FETCH = False
 ADD_FEATURES = False
 TRAIN =False
 MODEL_TYPE = "extra_trees"
-SHOW_PLOTS = True
-SAVE_DATA_WITH_FEATURES = True
+SHOW_PLOTS = False
+SAVE_DATA_WITH_FEATURES = False
 
 def main():
     if(os.path.exists(DATA_PATH) and not FORCE_FETCH):
