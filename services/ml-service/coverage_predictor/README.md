@@ -1,13 +1,18 @@
 coverage_predictor/
-
 │
-├── predictor.py              
-├── feature_builder.py 
-├── neighbor_features.py 
+├── predictor.py
+├── feature_builder.py
+├── neighbor_features.py
+├── terrain.py
 │
 ├── data/
+│   ├── gateways.csv
 │   ├── reference_points.csv
-│   └── gateways.csv
+│   └── terrain/
+│       ├── dem.tif
+│       ├── dem2.tif
+│       ├── landuse.geojson
+│       └── landuse2.geojson
 │
 └── model/
     └── extra_trees_model.pkl
@@ -18,14 +23,11 @@ Workflow :
 predict(lat, lon)
         │
         ▼
-select_gateway()
-        │
-        ▼
 build_features()
         │
         ├── geometry
         ├── terrain
-        └── get_neighbor_features()
+        └── neighbor
         │
         ▼
 model.predict()
