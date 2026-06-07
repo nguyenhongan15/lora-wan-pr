@@ -25,7 +25,7 @@ def predict(
     """
 
     if frequency is None:
-        frequency = 868.1
+        frequency = 922200000
 
     if spreading_factor is None:
         spreading_factor = 7
