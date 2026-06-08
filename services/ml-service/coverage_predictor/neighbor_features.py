@@ -5,7 +5,7 @@ from scipy.spatial import cKDTree
 
 
 REFERENCE = pd.read_csv(
-    "coverage_predictor/data/reference_points.csv"
+    "./data/reference_points.csv"
 )
 
 LAT_TO_M = 111000.0
@@ -68,36 +68,31 @@ def compute_neighbor_features(
     """
 
     data = TREES[gateway]
-
     point = np.array([
         lat * LAT_TO_M,
         lon * LON_TO_M
     ])
 
+    SEARCH_K = min(
+        K_SEARCH + 50,
+        len(data["rssi"])
+    )
+
     dist_all, idx_all = data["tree"].query(
         point,
-        k=min(
-            K_SEARCH,
-            len(data["rssi"])
-        )
+        k=SEARCH_K
     )
 
     dist_all = np.atleast_1d(dist_all)
     idx_all = np.atleast_1d(idx_all)
 
-    keep = []
+    keep = [
+        (d, idx)
+        for d, idx in zip(dist_all, idx_all)
+        if d > MIN_DISTANCE
+    ]
 
-    for d, idx in zip(
-        dist_all,
-        idx_all
-    ):
-
-        if d <= MIN_DISTANCE:
-            continue
-
-        keep.append(
-            (d, idx)
-        )
+    keep = keep[:K_SEARCH]
 
     if len(keep) == 0:
 

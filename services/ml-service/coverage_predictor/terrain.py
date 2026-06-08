@@ -54,8 +54,9 @@ def get_elevation(lat, lon):
 
     if lat is None or lon is None:
         return None
-
+    
     if not (-90 <= lat <= 90):
+        
         return None
 
     if not (-180 <= lon <= 180):

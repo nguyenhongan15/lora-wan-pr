@@ -9,11 +9,11 @@ from terrain import (
 )
 
 from neighbor_features import (
-    get_neighbor_features,
+    compute_neighbor_features,
 )
 
 GATEWAYS = pd.read_csv(
-    "coverage_predictor/data/gateways.csv"
+    "./data/gateways.csv"
 )
 
 
@@ -82,24 +82,34 @@ def build_features(
 
     else:
 
-        gw = GATEWAYS[
-            GATEWAYS["gateway"]
-            ==
-            gateway
-        ].iloc[0]
+        candidates = GATEWAYS[
+            GATEWAYS["gateway"] == gateway
+        ].copy()
+
+        if len(candidates) == 0:
+            raise ValueError(
+                f"Unknown gateway: {gateway}"
+            )
+
+        elif len(candidates) == 1:
+            gw = candidates.iloc[0]
+
+        else:
+
+            dist = (
+                (candidates["gw_lat"] - lat) ** 2
+                +
+                (candidates["gw_lon"] - lon) ** 2
+            )
+
+            gw = candidates.loc[
+                dist.idxmin()
+            ]
 
     gateway = gw["gateway"]
-
     gw_lat = gw["gw_lat"]
     gw_lon = gw["gw_lon"]
-
-    gw_elevation = gw[
-        "gw_elevation"
-    ]
-
-    gateway_id = gw[
-        "gateway_id"
-    ]
+    gw_elevation = gw[ "gw_elevation" ]
 
     # -------------------------
     # Geometry
@@ -167,9 +177,8 @@ def build_features(
     # -------------------------
     # Neighbor features
     # -------------------------
-
     neighbor = (
-        get_neighbor_features(
+        compute_neighbor_features(
             lat,
             lon,
             gateway,
