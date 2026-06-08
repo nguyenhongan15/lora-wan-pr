@@ -5,6 +5,7 @@ Pure types + invariants. Theo system-architecture.md §4.2.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -39,6 +40,26 @@ def is_in_vietnam(latitude: float, longitude: float) -> bool:
         VIETNAM_LAT_MIN <= latitude <= VIETNAM_LAT_MAX
         and VIETNAM_LNG_MIN <= longitude <= VIETNAM_LNG_MAX
     )
+
+
+# Khoảng cách tối đa từ điểm đo tới serving gateway (km). Trùng filter
+# d<50km Stage 1 ETL — survey corruption memory note 2026-05-27 (Hải Phòng
+# row gắn gw Đà Nẵng ~554km). Reject ở ingest time → quarantine không
+# nhận data invalid ngay từ đầu.
+MAX_GATEWAY_DISTANCE_KM = 50.0
+
+_EARTH_RADIUS_KM = 6371.0088
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance giữa 2 điểm WGS84 (km). Đủ chính xác cho gate
+    50km — sai số ellipsoid vs sphere <0.5%."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb / 2) ** 2
+    return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
 class SurveyBatchStatus(StrEnum):

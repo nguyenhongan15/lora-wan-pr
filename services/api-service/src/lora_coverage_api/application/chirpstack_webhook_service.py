@@ -19,13 +19,23 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from ..domain.survey import SurveyBatch, UploaderId
+from ..domain.survey import (
+    MAX_GATEWAY_DISTANCE_KM,
+    SurveyBatch,
+    UploaderId,
+    haversine_km,
+)
 from .chirpstack_adapter import (
     AdapterResult,
     chirpstack_uplink_to_survey_records,
 )
 from .repositories import SurveyIngest
 from .webhook_auth import WebhookContext
+
+# ChirpStack adapter là source_type duy nhất ingest qua webhook hiện tại.
+# Đẩy lên const để khi expose webhook cho source khác (vd LoRaWAN gateway
+# bridge), chỗ này dễ override.
+_WEBHOOK_SOURCE_TYPE = "chirpstack"
 
 # Namespace cố định để uuid5 deterministic giữa các lần restart.
 # UUID này KHÔNG bí mật, nó chỉ là salt cho hash đầu vào.
@@ -77,32 +87,71 @@ class ChirpstackWebhookService:
         đẩy thẳng xuống repo để filter contributor hoạt động.
         """
         adapter_result: AdapterResult = chirpstack_uplink_to_survey_records(uplink)
+        rejected = list(adapter_result.rejected)
 
         if not adapter_result.records:
             return WebhookIngestReceipt(
                 accepted_count=0,
                 inserted_count=0,
-                rejected_count=len(adapter_result.rejected),
-                rejected_reasons=adapter_result.rejected,
+                rejected_count=len(rejected),
+                rejected_reasons=rejected,
+            )
+
+        # Filter distance gateway → measurement (>50km). Adapter đã reject
+        # bbox; ở đây chỉ cần distance check. Records không match gateway
+        # external_id trong DB → giữ lại (không thể check, fall through theo
+        # behavior hiện tại — serving_gateway_id=None ở quarantine).
+        gw_ext_ids = adapter_result.gateway_external_ids
+        unique_ext = {x for x in gw_ext_ids if x}
+        coords_map = (
+            self._repo.lookup_gateway_coords(
+                source_type=_WEBHOOK_SOURCE_TYPE,
+                external_ids=list(unique_ext),
+            )
+            if unique_ext
+            else {}
+        )
+
+        kept_records = []
+        kept_orig_idx: list[int] = []
+        for orig_i, (rec, gw_ext) in enumerate(
+            zip(adapter_result.records, gw_ext_ids, strict=True)
+        ):
+            if gw_ext and gw_ext in coords_map:
+                gw_lat, gw_lon = coords_map[gw_ext]
+                dist_km = haversine_km(rec.latitude, rec.longitude, gw_lat, gw_lon)
+                if dist_km > MAX_GATEWAY_DISTANCE_KM:
+                    rejected.append(
+                        f"gateway distance {dist_km:.1f}km > {MAX_GATEWAY_DISTANCE_KM}km"
+                    )
+                    continue
+            kept_records.append(rec)
+            kept_orig_idx.append(orig_i)
+
+        if not kept_records:
+            return WebhookIngestReceipt(
+                accepted_count=0,
+                inserted_count=0,
+                rejected_count=len(rejected),
+                rejected_reasons=rejected,
             )
 
         dedup_id = uplink.get("deduplicationId") or uplink.get("_id") or ""
         ids: list[uuid.UUID]
         external_ids: list[str | None]
         if not isinstance(dedup_id, str) or not dedup_id:
-            # Không có dedup → fallback random uuid (mất idempotency cho uplink này).
-            # external_id = None ⇒ UNIQUE PARTIAL không apply, không chặn replay.
-            ids = [uuid.uuid4() for _ in adapter_result.records]
-            external_ids = [None] * len(adapter_result.records)
+            # Không có dedup → fallback random uuid (mất idempotency).
+            ids = [uuid.uuid4() for _ in kept_records]
+            external_ids = [None] * len(kept_records)
         else:
-            # rx_index map theo thứ tự records adapter trả ra. Adapter giữ
-            # thứ tự rxInfo gốc (đã có test bao phủ).
-            ids = [_record_id(dedup_id, i) for i in range(len(adapter_result.records))]
-            external_ids = [_external_id(dedup_id, i) for i in range(len(adapter_result.records))]
+            # rx_index = index GỐC trong rxInfo (trước filter) → cùng uplink
+            # retry → cùng external_id bất kể distance filter output.
+            ids = [_record_id(dedup_id, i) for i in kept_orig_idx]
+            external_ids = [_external_id(dedup_id, i) for i in kept_orig_idx]
 
         batch = SurveyBatch(
             uploader_id=UploaderId(context.user_id),
-            records=adapter_result.records,
+            records=kept_records,
         )
         inserted = self._repo.write_quarantine_idempotent(
             batch,
@@ -115,8 +164,8 @@ class ChirpstackWebhookService:
         )
 
         return WebhookIngestReceipt(
-            accepted_count=len(adapter_result.records),
+            accepted_count=len(kept_records),
             inserted_count=inserted,
-            rejected_count=len(adapter_result.rejected),
-            rejected_reasons=adapter_result.rejected,
+            rejected_count=len(rejected),
+            rejected_reasons=rejected,
         )

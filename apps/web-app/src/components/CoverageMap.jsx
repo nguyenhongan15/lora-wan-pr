@@ -78,6 +78,38 @@ function buildSurveyGeoJson(items) {
 }
 
 /**
+ * Build FeatureCollection<LineString> nối mỗi điểm đo → gateway serving.
+ * Bỏ qua point không có serving_gateway_id, hoặc gateway chưa load
+ * (race khi gateways query chưa xong).
+ *
+ * @param {ReadonlyArray<import("../api/client.js").SurveyTrainingPointT>} items
+ * @param {ReadonlyArray<import("../api/client.js").GatewayT>} gateways
+ * @returns {GeoJSON.FeatureCollection<GeoJSON.LineString>}
+ */
+function buildSurveyConnectionLinesGeoJson(items, gateways) {
+  const gwById = new Map(gateways.map((g) => [g.id, g]));
+  /** @type {GeoJSON.Feature<GeoJSON.LineString>[]} */
+  const features = [];
+  for (const p of items) {
+    if (!p.serving_gateway_id) continue;
+    const gw = gwById.get(p.serving_gateway_id);
+    if (!gw) continue;
+    features.push({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [p.longitude, p.latitude],
+          [gw.longitude, gw.latitude],
+        ],
+      },
+      properties: {},
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/**
  * Format ISO timestamp → "HH:mm:ss dd/mm/yy" theo local time. Trả "" nếu parse fail.
  * @param {string} iso
  * @returns {string}
@@ -329,6 +361,13 @@ function writeFilterUrlState(state) {
 // chỉ thấy 2 hàm `addSurveyHeatmapLayer` / `setSurveyHeatmapVisible`.
 const SURVEYS_SOURCE_ID = "surveys-src";
 const SURVEYS_LAYER_ID = "surveys-circle";
+
+// Đường nét đứt nối điểm đo → serving gateway (toggle "Hiện kết nối điểm
+// đo-gateway" trong filter panel). 1 source + 1 line layer, setData khi
+// displayedItems hoặc gateways đổi. Chỉ vẽ feature cho point có
+// serving_gateway_id match với gateway đã load.
+const SURVEY_CONNECTION_LINES_SOURCE_ID = "survey-connection-lines-src";
+const SURVEY_CONNECTION_LINES_LAYER_ID = "survey-connection-lines";
 
 // ViewMode cho tab "Bản đồ điểm đo" — toggle circle/heatmap mật độ. Định
 // nghĩa local vì MapViewModeToggle hiện nhận `string` chung (xài cho cả
@@ -733,6 +772,9 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [viewMode, setViewMode] = useState(
     /** @type {ViewMode} */ ("points"),
   );
+  // Toggle "Hiện kết nối điểm đo-gateway" — vẽ đường nét đứt từ mỗi điểm
+  // đo đến gateway đã thu được. Chỉ ý nghĩa khi mode === "points".
+  const [showConnectionLines, setShowConnectionLines] = useState(false);
 
   // Tab "Bản đồ phủ sóng" (mode === "heatmap") có 2 layer toggle độc lập với
   // viewMode points/heatmap. "estimate" là composite RSSI heatmap (default —
@@ -1198,6 +1240,31 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       // Thứ tự add quan trọng: heatmap thêm trước → nằm dưới circle trong
       // render stack. Khi đổi viewMode chỉ flip visibility, không reorder.
       addSurveyHeatmapLayer(map, SURVEYS_SOURCE_ID);
+
+      // Connection-lines: source + layer add 1 lần, default hidden. Nằm
+      // giữa heatmap và circle để line trên heatmap (visible) nhưng dưới
+      // circle (giữ click hit-test).
+      map.addSource(SURVEY_CONNECTION_LINES_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: SURVEY_CONNECTION_LINES_LAYER_ID,
+        type: "line",
+        source: SURVEY_CONNECTION_LINES_SOURCE_ID,
+        layout: /** @type {any} */ ({
+          visibility: "none",
+          "line-cap": "butt",
+          "line-join": "round",
+        }),
+        paint: /** @type {any} */ ({
+          "line-color": "#475569",
+          "line-width": 1.2,
+          "line-opacity": 0.75,
+          "line-dasharray": [2, 2],
+        }),
+      });
+
       map.addLayer({
         id: SURVEYS_LAYER_ID,
         type: "circle",
@@ -1297,6 +1364,46 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     );
     setSurveyHeatmapVisible(map, !showCircle);
   }, [viewMode, mode, mapLoaded]);
+
+  // setData line nối điểm đo → serving gateway. Fire khi displayedItems
+  // hoặc gateway list đổi (race: gateway có thể load sau survey). Skip
+  // build nếu toggle off để khỏi tốn CPU khi user không xem.
+  useEffect(() => {
+    if (mode !== "points") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getSource(SURVEY_CONNECTION_LINES_SOURCE_ID)) return;
+    const src = /** @type {maplibregl.GeoJSONSource} */ (
+      map.getSource(SURVEY_CONNECTION_LINES_SOURCE_ID)
+    );
+    if (!showConnectionLines) {
+      src.setData({ type: "FeatureCollection", features: [] });
+      return;
+    }
+    const gateways = gatewaysQ.data?.items ?? [];
+    src.setData(buildSurveyConnectionLinesGeoJson(displayedItems, gateways));
+  }, [
+    displayedItems,
+    gatewaysQ.data,
+    showConnectionLines,
+    mode,
+    mapLoaded,
+  ]);
+
+  // Flip visibility line layer theo toggle. Tách khỏi setData để bật/tắt
+  // không trigger rebuild FeatureCollection (giữ data ngay khi tắt cũng
+  // OK vì effect setData ở trên đã clear features khi toggle off).
+  useEffect(() => {
+    if (mode !== "points") return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (!map.getLayer(SURVEY_CONNECTION_LINES_LAYER_ID)) return;
+    map.setLayoutProperty(
+      SURVEY_CONNECTION_LINES_LAYER_ID,
+      "visibility",
+      showConnectionLines ? "visible" : "none",
+    );
+  }, [showConnectionLines, mode, mapLoaded]);
 
   // Tab "Bản đồ phủ sóng": sync visibility 2 layer min-SF với viewMode +
   // có gateway đang chọn. Khi switch sang "estimate" hoặc bỏ chọn gateway →
@@ -2113,6 +2220,8 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
               onRealtimeEnabledChange={setRealtimeEnabled}
               autoFollowEnabled={autoFollowEnabled}
               onAutoFollowEnabledChange={setAutoFollowEnabled}
+              connectionLinesEnabled={showConnectionLines}
+              onConnectionLinesEnabledChange={setShowConnectionLines}
             />
           ) : mode === "heatmap" ? (
             // Tab "Bản đồ phủ sóng": minsf panel (gateway dropdown + legend)

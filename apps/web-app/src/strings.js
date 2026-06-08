@@ -176,7 +176,7 @@ export const strings = {
     tileErrorTitle: "Tile không load được",
     environmentPicker: {
       label: "Môi trường",
-      hint: "Trong nhà sẽ cộng thêm suy hao xuyên tường theo ITU-R P.2109.",
+      
       options: [
         { value: "outdoor", label: "Ngoài trời", short: "Ngoài trời" },
         { value: "indoor", label: "Trong nhà", short: "Trong nhà" },
@@ -218,15 +218,15 @@ export const strings = {
       panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
       legendTitle: "Cường độ tín hiệu mạnh nhất (dBm)",
       bins: {
-        1: "> −100 dBm",
-        2: "−105 đến −100 dBm",
-        3: "−110 đến −105 dBm",
-        4: "−115 đến −110 dBm",
-        5: "−120 đến −115 dBm",
-        6: "< −120 dBm",
+        1: "> -100 dBm",
+        2: "-105 đến -100 dBm",
+        3: "-110 đến -105 dBm",
+        4: "-115 đến -110 dBm",
+        5: "-120 đến -115 dBm",
+        6: "< -120 dBm",
       },
-      notCovered: "< −130 (không phủ)",
-      hint: "Mỗi ô 50m × 50m. Tô màu theo cường độ tín hiệu mạnh nhất ước lượng nhận được từ 1 trong 11 gateway (Stage 1 ITU + Stage 2 XGBoost).",
+      notCovered: "< -130 (không phủ)",
+      
       loadError:
         "Không tải được dữ liệu RSSI tổng hợp. Chạy `precompute_rssi_heatmap.py` để tạo.",
       model:
@@ -265,6 +265,11 @@ export const strings = {
         open: "Mở bộ lọc",
         close: "Đóng bộ lọc",
         title: "Bộ lọc",
+      },
+      connectionLines: {
+        sectionLabel: "Kết nối điểm đo - gateway",
+        toggleLabel: "Hiện kết nối điểm đo-gateway",
+        
       },
       realtime: {
         sectionLabel: "Theo dõi trực tiếp",

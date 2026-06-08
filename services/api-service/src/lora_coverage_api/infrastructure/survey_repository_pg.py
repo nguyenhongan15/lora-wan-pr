@@ -325,6 +325,35 @@ class PgSurveyRepository:
             for r in rows
         ]
 
+    def lookup_gateway_coords(
+        self,
+        *,
+        source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[float, float]]:
+        if not external_ids:
+            return {}
+        sql = text(
+            """
+            SELECT external_id,
+                   ST_Y(location::geometry) AS lat,
+                   ST_X(location::geometry) AS lon
+            FROM geo.gateways
+            WHERE source_type = :source_type
+              AND external_id = ANY(:external_ids)
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    sql,
+                    {"source_type": source_type, "external_ids": list(external_ids)},
+                )
+                .mappings()
+                .all()
+            )
+        return {r["external_id"]: (float(r["lat"]), float(r["lon"])) for r in rows}
+
     def list_user_devices(
         self,
         *,

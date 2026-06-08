@@ -34,6 +34,7 @@ import structlog
 from cryptography.fernet import InvalidToken
 from sqlalchemy import Connection, text
 
+from ...domain.survey import MAX_GATEWAY_DISTANCE_KM, haversine_km, is_in_vietnam
 from ..identity import User
 from ..linking import CredentialCipher, LinkedSourceNotFoundError
 from ..sources import (
@@ -244,7 +245,12 @@ class SyncService:
         try:
             adapter = get_adapter(source_type)
             handle = adapter.connect(creds)
-            gw_inserted, gw_updated, gw_uuid_by_external = _ingest_gateways(
+            (
+                gw_inserted,
+                gw_updated,
+                gw_uuid_by_external,
+                gw_coords_by_external,
+            ) = _ingest_gateways(
                 conn,
                 adapter,
                 handle,
@@ -269,7 +275,9 @@ class SyncService:
                 ls_id=ls_id,
                 since=row.last_sync_at,
                 gw_uuid_by_external=gw_uuid_by_external,
+                gw_coords_by_external=gw_coords_by_external,
                 submitted_for_community=contribute,
+                log=log,
             )
         except (UnknownSourceTypeError, SourceError) as exc:
             err = _sanitise_exc(exc)
@@ -392,9 +400,10 @@ def _ingest_gateways(
     source_type: str,
     user_id: UUID,
     ls_id: UUID,
-) -> tuple[int, int, dict[str, UUID]]:
+) -> tuple[int, int, dict[str, UUID], dict[str, tuple[float, float]]]:
     inserted = updated = 0
     uuid_by_external: dict[str, UUID] = {}
+    coords_by_external: dict[str, tuple[float, float]] = {}
     for rec in adapter.fetch_gateways(handle):
         if not isinstance(rec, GatewayRecord):  # defensive
             continue
@@ -406,11 +415,12 @@ def _ingest_gateways(
             linked_source_id=ls_id,
         )
         uuid_by_external[rec.external_id] = gw_uuid
+        coords_by_external[rec.external_id] = (rec.latitude, rec.longitude)
         if status == "inserted":
             inserted += 1
         else:
             updated += 1
-    return inserted, updated, uuid_by_external
+    return inserted, updated, uuid_by_external, coords_by_external
 
 
 def _ingest_devices(
@@ -453,15 +463,39 @@ def _ingest_measurements(
     ls_id: UUID,
     since: datetime | None,
     gw_uuid_by_external: dict[str, UUID],
+    gw_coords_by_external: dict[str, tuple[float, float]],
     submitted_for_community: bool,
+    log: Any,
 ) -> tuple[int, int]:
+    """Filter GPS-invalid records (bbox + serving-gw distance) trước upsert.
+    Skip log batch-aggregate; record-level chi tiết quá ồn cho sync chu kỳ.
+    """
     inserted = updated = 0
+    skipped_bbox = skipped_distance = 0
     for rec in adapter.fetch_measurements(handle, since=since):
+        if not is_in_vietnam(rec.latitude, rec.longitude):
+            skipped_bbox += 1
+            continue
+
         gw_uuid = (
             gw_uuid_by_external.get(rec.serving_gateway_external_id)
             if rec.serving_gateway_external_id
             else None
         )
+        # Distance check chỉ khi resolve được gw coords (sync vừa upsert ở
+        # bước trước → luôn có). Gateway external_id không match → gw_uuid
+        # = None, skip distance check (đã không gắn FK serving_gateway).
+        gw_coords = (
+            gw_coords_by_external.get(rec.serving_gateway_external_id)
+            if rec.serving_gateway_external_id
+            else None
+        )
+        if gw_coords is not None:
+            dist_km = haversine_km(rec.latitude, rec.longitude, gw_coords[0], gw_coords[1])
+            if dist_km > MAX_GATEWAY_DISTANCE_KM:
+                skipped_distance += 1
+                continue
+
         status = upsert_measurement(
             conn,
             rec,
@@ -476,6 +510,15 @@ def _ingest_measurements(
             inserted += 1
         else:
             updated += 1
+
+    if skipped_bbox or skipped_distance:
+        log.info(
+            "sync_measurements_gps_skipped",
+            skipped_bbox=skipped_bbox,
+            skipped_distance=skipped_distance,
+            max_distance_km=MAX_GATEWAY_DISTANCE_KM,
+        )
+
     return inserted, updated
 
 

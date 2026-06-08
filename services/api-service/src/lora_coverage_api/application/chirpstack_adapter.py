@@ -30,6 +30,7 @@ from ..domain.survey import (
     SNR_MAX_DB,
     SNR_MIN_DB,
     SurveyRecord,
+    is_in_vietnam,
 )
 
 # ChirpStack encode SF qua chuỗi bandwidth/codeRate; SF nằm ở
@@ -44,10 +45,16 @@ _GNSS_SCALE = 1e7
 
 @dataclass(frozen=True, slots=True)
 class AdapterResult:
-    """Kết quả map 1 uplink. Có thể có 0..N records + reasons reject."""
+    """Kết quả map 1 uplink. Có thể có 0..N records + reasons reject.
+
+    `gateway_external_ids` song song với `records` (cùng index, cùng độ dài) —
+    chứa ChirpStack gatewayId của rxInfo entry tương ứng (None nếu thiếu).
+    Service layer dùng để resolve gateway lat/lng + filter distance.
+    """
 
     records: list[SurveyRecord] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
+    gateway_external_ids: list[str | None] = field(default_factory=list)
 
 
 def _decode_gnss(raw: Any) -> float | None:
@@ -141,6 +148,11 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
         return AdapterResult(rejected=["missing/invalid device GPS"])
     if not -90.0 <= dev_lat <= 90.0 or not -180.0 <= dev_lon <= 180.0:
         return AdapterResult(rejected=[f"GPS out of range: {dev_lat},{dev_lon}"])
+    # VN bbox guard (scope Vietnam only). Early reject — không tạo record nào
+    # để adapter pure giữ trách nhiệm filter coords. Distance-to-gateway check
+    # cần DB lookup → ở application layer (ChirpstackWebhookService).
+    if not is_in_vietnam(dev_lat, dev_lon):
+        return AdapterResult(rejected=[f"GPS outside Vietnam: {dev_lat},{dev_lon}"])
 
     # ── timestamp gốc của uplink ─────────────────────────────────────────
     uplink_time = _parse_iso(uplink.get("time")) or datetime.now(tz=UTC)
@@ -158,6 +170,7 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
         return AdapterResult(rejected=["missing rxInfo"])
 
     records: list[SurveyRecord] = []
+    gateway_external_ids: list[str | None] = []
     for i, rx in enumerate(rx_list):
         if not isinstance(rx, dict):
             rejected.append(f"rxInfo[{i}] not object")
@@ -187,6 +200,10 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
         # Timestamp ưu tiên gwTime của rxInfo này, fallback uplink time.
         ts = _parse_iso(rx.get("gwTime")) or uplink_time
 
+        gw_ext_id = rx.get("gatewayId")
+        if not isinstance(gw_ext_id, str) or not gw_ext_id:
+            gw_ext_id = None
+
         try:
             records.append(
                 SurveyRecord(
@@ -202,10 +219,15 @@ def chirpstack_uplink_to_survey_records(uplink: dict[str, Any]) -> AdapterResult
                     code_rate=code_rate,
                 )
             )
+            gateway_external_ids.append(gw_ext_id)
         except ValueError as e:
             rejected.append(f"rxInfo[{i}] domain reject: {e}")
 
-    return AdapterResult(records=records, rejected=rejected)
+    return AdapterResult(
+        records=records,
+        rejected=rejected,
+        gateway_external_ids=gateway_external_ids,
+    )
 
 
 def chirpstack_batch_to_survey_records(
@@ -214,9 +236,15 @@ def chirpstack_batch_to_survey_records(
     """Convenience: map nhiều uplink, gộp records + rejected reasons."""
     all_records: list[SurveyRecord] = []
     all_rejected: list[str] = []
+    all_gw_ext: list[str | None] = []
     for idx, up in enumerate(uplinks):
         r = chirpstack_uplink_to_survey_records(up)
         all_records.extend(r.records)
+        all_gw_ext.extend(r.gateway_external_ids)
         for reason in r.rejected:
             all_rejected.append(f"uplink[{idx}]: {reason}")
-    return AdapterResult(records=all_records, rejected=all_rejected)
+    return AdapterResult(
+        records=all_records,
+        rejected=all_rejected,
+        gateway_external_ids=all_gw_ext,
+    )

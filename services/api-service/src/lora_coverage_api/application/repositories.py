@@ -160,6 +160,21 @@ class SurveyIngest(Protocol):
         """
         ...
 
+    def lookup_gateway_coords(
+        self,
+        *,
+        source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[float, float]]:
+        """Bulk lookup gateway (lat, lng) theo (source_type, external_id).
+
+        Webhook ingest dùng để filter measurement có serving gateway > 50km
+        khỏi điểm đo TRƯỚC khi insert quarantine. external_id nào không match
+        → vắng mặt trong dict (caller tự xử case "không tìm thấy gw" =
+        không thể check distance).
+        """
+        ...
+
     def list_user_devices(
         self,
         *,

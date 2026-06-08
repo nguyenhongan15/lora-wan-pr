@@ -24,10 +24,15 @@ class FakeSurveyIngest:
         self,
         training: Sequence[TrainingPoint] = (),
         devices: Sequence[UserDevice] = (),
+        gateway_coords: dict[tuple[str, str], tuple[float, float]] | None = None,
     ) -> None:
         self._quarantined: list[SurveyBatch] = []
         self._training: list[TrainingPoint] = list(training)
         self._devices: list[UserDevice] = list(devices)
+        # Map (source_type, external_id) → (lat, lon) cho lookup_gateway_coords.
+        self._gateway_coords: dict[tuple[str, str], tuple[float, float]] = dict(
+            gateway_coords or {}
+        )
         # Set các (timestamp, record_id) đã thấy → mô phỏng PK conflict.
         self._seen_ids: set[tuple[object, UUID]] = set()
 
@@ -123,6 +128,18 @@ class FakeSurveyIngest:
         # signature, để integration test (PgRepo) verify SQL thật sự apply.
         _ = device_id, contributor, source_type, time_from, time_to
         return items[offset : offset + limit]
+
+    def lookup_gateway_coords(
+        self,
+        *,
+        source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[float, float]]:
+        return {
+            ext: self._gateway_coords[(source_type, ext)]
+            for ext in external_ids
+            if (source_type, ext) in self._gateway_coords
+        }
 
     def list_user_devices(
         self,

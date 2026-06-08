@@ -51,6 +51,8 @@ const t = strings.coverageMap.filters;
  *   onRealtimeEnabledChange: (v: boolean) => void,
  *   autoFollowEnabled: boolean,
  *   onAutoFollowEnabledChange: (v: boolean) => void,
+ *   connectionLinesEnabled: boolean,
+ *   onConnectionLinesEnabledChange: (v: boolean) => void,
  * }} props
  */
 export function PointsFilterPanel({
@@ -77,6 +79,8 @@ export function PointsFilterPanel({
   onRealtimeEnabledChange,
   autoFollowEnabled,
   onAutoFollowEnabledChange,
+  connectionLinesEnabled,
+  onConnectionLinesEnabledChange,
 }) {
   const [open, setOpen] = useState(false);
 
@@ -202,6 +206,25 @@ export function PointsFilterPanel({
         {user && contributor !== "me" && (
           <SourceTypeFilter value={sourceType} onChange={onSourceTypeChange} />
         )}
+
+        <div className="border-t border-slate-200 pt-2.5 space-y-1.5">
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={connectionLinesEnabled}
+              onChange={(e) => onConnectionLinesEnabledChange(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">
+                {t.connectionLines.toggleLabel}
+              </span>
+              <span className="block text-xs text-slate-500">
+                {t.connectionLines.toggleHint}
+              </span>
+            </span>
+          </label>
+        </div>
 
         <div className="border-t border-slate-200 pt-2.5 space-y-2.5">
           <SortFilter value={sortConfig} onChange={onSortConfigChange} />
