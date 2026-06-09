@@ -82,3 +82,7 @@ logs/
 u-work/
 core-logic/
 r-dt/
+
+# ── ML model artifacts (build từ training scripts, không version) ──
+*.joblib
+*.pkl

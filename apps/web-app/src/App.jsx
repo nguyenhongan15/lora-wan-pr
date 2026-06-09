@@ -313,7 +313,10 @@ export function App() {
         )}
         {tab === "adminPanel" && user?.is_admin && (
           <div className="h-full overflow-y-auto">
-            <AdminPage currentUserId={user.id} />
+            <AdminPage
+              currentUserId={user.id}
+              currentUserIsSuperAdmin={user.is_super_admin ?? false}
+            />
           </div>
         )}
       </main>

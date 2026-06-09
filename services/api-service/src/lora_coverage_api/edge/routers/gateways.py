@@ -9,10 +9,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from ...application.gateway_state import GatewayState, GatewayStateService
 from ...application.identity import User
 from ...application.repositories import GatewayDirectory
 from ...domain.coverage import Gateway, GatewayId
-from ..deps import _engine, current_user_optional, gateway_directory
+from ..deps import (
+    _engine,
+    current_user_optional,
+    gateway_directory,
+    gateway_state_service,
+    require_admin,
+)
 from ..filters import resolve_contributor
 from ..schemas import (
     GatewayCreateRequest,
@@ -24,7 +31,8 @@ from ..schemas import (
 router = APIRouter(prefix="/api/v1/gateways", tags=["gateways"])
 
 
-def _to_response(g: Gateway) -> GatewayResponse:
+def _to_response(g: Gateway, state_map: dict[str, GatewayState] | None = None) -> GatewayResponse:
+    live = state_map.get(g.code.lower()) if state_map else None
     return GatewayResponse(
         id=g.id,
         code=g.code,
@@ -39,6 +47,8 @@ def _to_response(g: Gateway) -> GatewayResponse:
         rx_antenna_gain_dbi=g.rx_antenna_gain_dbi,
         rx_sensitivity_dbm=g.rx_sensitivity_dbm,
         noise_floor_dbm=g.noise_floor_dbm,
+        state=live.state if live else "unknown",
+        last_seen_at=live.last_seen_at if live else None,
     )
 
 
@@ -75,6 +85,7 @@ def _etag_for(g: Gateway) -> str:
 async def list_gateways(
     user: Annotated[User | None, Depends(current_user_optional)],
     directory: GatewayDirectory = Depends(gateway_directory),
+    state_service: GatewayStateService = Depends(gateway_state_service),
     contributor: Annotated[
         str | None,
         Query(
@@ -123,8 +134,9 @@ async def list_gateways(
         limit=limit,
         contributor=spec,
     )
+    state_map = state_service.get_state_map()
     return GatewayListResponse(
-        items=[_to_response(g) for g in items],
+        items=[_to_response(g, state_map) for g in items],
         total=len(items),
     )
 
@@ -139,6 +151,7 @@ async def get_gateway(
     request: Request,
     response: Response,
     directory: GatewayDirectory = Depends(gateway_directory),
+    state_service: GatewayStateService = Depends(gateway_state_service),
 ) -> GatewayResponse | JSONResponse:
     g = directory.get_by_id(GatewayId(gateway_id))
     if g is None:
@@ -155,7 +168,7 @@ async def get_gateway(
             },
         )
     response.headers["ETag"] = _etag_for(g)
-    return _to_response(g)
+    return _to_response(g, state_service.get_state_map())
 
 
 @router.post(
@@ -167,6 +180,7 @@ async def create_gateway(
     payload: GatewayCreateRequest,
     request: Request,
     directory: GatewayDirectory = Depends(gateway_directory),
+    _admin: User = Depends(require_admin),
 ) -> GatewayResponse | JSONResponse:
     candidate = Gateway(
         id=GatewayId(UUID(int=0)),  # placeholder, DB sẽ gen
@@ -218,6 +232,7 @@ async def patch_gateway(
     response: Response,
     directory: GatewayDirectory = Depends(gateway_directory),
     if_match: str | None = Header(default=None, alias="If-Match"),
+    _admin: User = Depends(require_admin),
 ) -> GatewayResponse | JSONResponse:
     if if_match is None:
         return JSONResponse(

@@ -62,6 +62,15 @@ _GATEWAY_UPSERT_SQL = text("""
     ON CONFLICT (code) DO UPDATE SET
         location            = EXCLUDED.location,
         altitude_m          = EXCLUDED.altitude_m,
+        -- Cho phép sync sau "nâng cấp" name khi row cũ vẫn là placeholder
+        -- (= code). Adapter set name=code khi source không trả friendly name
+        -- (xem upsert_gateway: "name": rec.label or rec.external_id). Khi
+        -- source khác về sau có tên thật → cập nhật. Khi user đã có tên thật
+        -- rồi → giữ, tránh swing nếu source xoá tên.
+        name                = CASE
+            WHEN geo.gateways.name = geo.gateways.code THEN EXCLUDED.name
+            ELSE geo.gateways.name
+        END,
         -- First-writer-wins (plan-auth §3.3 fix): existing trước EXCLUDED →
         -- giữ contributor đầu tiên, không cho user link sau ghi đè data
         -- của user link trước. NULL legacy → fall back EXCLUDED tag dần.

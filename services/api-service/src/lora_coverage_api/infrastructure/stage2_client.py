@@ -39,8 +39,14 @@ class Stage2Client:
         self._token = bearer_token
         self._client = client
 
-    async def predict_residual(self, target: Target, gateway: Gateway) -> Stage2Result | None:
+    async def predict_residual(
+        self, target: Target, gateway: Gateway, stage1_rssi_dbm: float
+    ) -> Stage2Result | None:
         """1 (target, serving_gateway) → residual_db + model_version.
+
+        `stage1_rssi_dbm`: caller-computed Stage 1 RSSI; ET ml-service trừ
+        absolute RSSI prediction để return residual cho parity với XGBoost
+        contract.
 
         Return None khi:
           - 503: ml-service chưa có active model.
@@ -54,6 +60,7 @@ class Stage2Client:
                 "longitude": target.longitude,
                 "spreading_factor": target.spreading_factor,
                 "frequency_mhz": target.frequency_mhz,
+                "stage1_rssi_dbm": stage1_rssi_dbm,
             },
             "serving_gateway": {
                 "id": str(gateway.id),

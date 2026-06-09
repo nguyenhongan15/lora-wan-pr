@@ -3,6 +3,7 @@
 Usage:
     uv run python scripts/train_extra_trees.py
 """
+
 import json
 from pathlib import Path
 
@@ -16,7 +17,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_PATH = REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
+DATA_PATH = (
+    REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
+)
 MODEL_DIR = REPO_ROOT / "services/ml-service/data"
 MODEL_PATH = MODEL_DIR / "extra_trees_model.joblib"
 
@@ -60,18 +63,24 @@ ET_PARAMS = {
 
 
 def build_pipeline():
-    numeric_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-    ])
-    categorical_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore")),
-    ])
-    preprocessor = ColumnTransformer(transformers=[
-        ("num", numeric_transformer, NUMERIC_FEATURES),
-        ("cat", categorical_transformer, CATEGORICAL_FEATURES),
-    ])
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, NUMERIC_FEATURES),
+            ("cat", categorical_transformer, CATEGORICAL_FEATURES),
+        ]
+    )
     model = ExtraTreesRegressor(**ET_PARAMS)
     return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
@@ -86,7 +95,9 @@ def main():
     y = df[TARGET]
 
     print(f"Features shape: {X.shape}")
-    print(f"Target stats: mean={y.mean():.2f}, std={y.std():.2f}, min={y.min():.2f}, max={y.max():.2f}")
+    print(
+        f"Target stats: mean={y.mean():.2f}, std={y.std():.2f}, min={y.min():.2f}, max={y.max():.2f}"
+    )
 
     terrain_fallback = {col: float(df[col].mean()) for col in NUMERIC_FEATURES}
 
@@ -96,10 +107,10 @@ def main():
 
     y_pred = pipeline.predict(X)
     residuals = y - y_pred
-    rmse = float(np.sqrt(np.mean(residuals ** 2)))
+    rmse = float(np.sqrt(np.mean(residuals**2)))
     mae = float(np.mean(np.abs(residuals)))
-    r2 = float(1 - np.sum(residuals ** 2) / np.sum((y - y.mean()) ** 2))
-    print(f"\nTraining metrics:")
+    r2 = float(1 - np.sum(residuals**2) / np.sum((y - y.mean()) ** 2))
+    print("\nTraining metrics:")
     print(f"  RMSE: {rmse:.2f} dBm")
     print(f"  MAE:  {mae:.2f} dBm")
     print(f"  R²:   {r2:.4f}")
@@ -109,7 +120,7 @@ def main():
     print(f"\nModel saved to {MODEL_PATH} ({MODEL_PATH.stat().st_size / 1024:.1f} KB)")
 
     fallback_path = MODEL_DIR / "terrain_fallback.json"
-    with open(fallback_path, "w") as f:
+    with fallback_path.open("w") as f:
         json.dump(terrain_fallback, f, indent=2)
     print(f"Terrain fallback saved to {fallback_path}")
 

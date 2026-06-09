@@ -75,7 +75,9 @@ class PredictionOrchestrator:
             )
             return result
 
-        stage2_out = await self._stage2.predict_residual(target, gateway)
+        stage2_out = await self._stage2.predict_residual(
+            target, gateway, stage1_rssi_dbm=pred.uplink_rssi_dbm
+        )
         if stage2_out is None:
             # Expected during bootstrap (no active model) hoặc transient failure.
             return result

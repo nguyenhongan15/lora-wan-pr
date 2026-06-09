@@ -61,6 +61,17 @@ dependencies = [
     # Error tracking — env-gated qua SENTRY_DSN. Khi DSN rỗng (dev), init no-op
     # nên không phát sinh traffic. Pre-deploy checklist §8 (logging+monitoring).
     "sentry-sdk[fastapi]>=2.18",
+    # Celery broker + result backend cho admin "Rebuild bản đồ ước lượng" task.
+    # Heavy job (precompute_rssi_heatmap.py mất vài phút) → async qua celery-worker
+    # service. Dùng Valkey hiện có (redis-compatible) làm broker + backend.
+    "celery[redis]>=5.4",
+    # scripts/precompute_rssi_heatmap.py dùng rasterio cho 2 mục đích:
+    #   - sea mask DEM read (_build_sea_mask_dem)
+    #   - polygonize binary mask → GeoJSON (_polygonize_mask, rasterio.features.shapes)
+    # Trước đây script được chạy từ ml-service container (có rasterio); sau khi
+    # admin trigger rebuild qua Celery worker (image api-service), cần thêm vào
+    # đây để worker subprocess không crash.
+    "rasterio>=1.4",
 ]
 
 [tool.uv.sources]

@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     def linking_fernet_keys_list(self) -> list[bytes]:
         return [k.strip().encode("ascii") for k in self.linking_fernet_keys.split(",") if k.strip()]
 
+    # ── Super admin (single account) ──────────────────────────────────────
+    # Tài khoản admin cấp cao nhất — duy nhất được phép cấp/thu hồi quyền
+    # admin + khoá tài khoản. Khi rename email, đổi env var rồi restart.
+    super_admin_email: str = Field(
+        default="anngh2004@gmail.com",
+        description="Email của tài khoản super admin.",
+    )
+
     ml_model_version: str = Field(default="stage1-itu-p1812-v0.1.0")
 
     # ── Stage 1 path-loss profile (12F III) ──────────────────────────────
@@ -337,6 +345,34 @@ class Settings(BaseSettings):
             )
         return self
 
+    # ── Gateway state cache (online/offline từ ChirpStack) ───────────────
+    # Service GatewayStateService gọi ChirpStack ListGateways mỗi request
+    # /api/v1/gateways sẽ slow + tải ChirpStack. Cache state map vào Valkey
+    # với TTL ngắn. Rỗng = disable cache (mỗi request gọi thẳng — fine ở dev).
+    # Default trỏ vào Valkey db=3 (db 0 rate-limit, 1 celery broker, 2 celery
+    # backend — db 3 dedicated cho gateway state).
+    gateway_state_cache_url: str = Field(
+        default="redis://cache:6379/3",
+        description="Redis URL cache gateway state. Rỗng = disable cache.",
+    )
+    gateway_state_cache_ttl_s: int = Field(
+        default=60,
+        description="TTL (giây) cho gateway state cache. Default 60.",
+    )
+
+    # ── Celery (admin rebuild coverage map task) ─────────────────────────
+    # Broker + result backend đều trỏ vào Valkey (cache service) — DB khác
+    # với rate-limit (/0) để né collision LRU. KHÔNG dùng /0 vì rate-limit
+    # counter eviction có thể kick state Celery (allkeys-lru policy).
+    celery_broker_url: str = Field(
+        default="redis://cache:6379/1",
+        description="Celery broker (Redis-compatible). Default trỏ vào Valkey cache db=1.",
+    )
+    celery_result_backend: str = Field(
+        default="redis://cache:6379/2",
+        description="Celery result backend (Redis-compatible). Valkey cache db=2.",
+    )
+
     # ── Sentry error tracking (pre-deploy checklist §8) ──────────────────
     # Rỗng = init no-op (dev / chưa cấu hình); structlog stdout vẫn ghi
     # errors. Production set DSN để long-tail single-user crash không lọt
@@ -402,10 +438,12 @@ class Settings(BaseSettings):
         description="Bearer token gửi tới ml-service. Phải khớp LORA_STAGE2_AUTH_TOKEN bên ml-service.",
     )
     stage2_timeout_seconds: float = Field(
-        default=0.5,
+        default=3.0,
         ge=0.05,
         le=5.0,
-        description="Per-request timeout. Quá thời gian → fallback Stage1.",
+        description="Per-request timeout. Quá thời gian → fallback Stage1. "
+        "ET model (v0.7) làm DEM + OSM lookup + 30m step Fresnel — chậm hơn "
+        "XGBoost v0.6 nhiều, default 3s để có headroom.",
     )
 
     # ── F2 SLO ────────────────────────────────────────────────────────────

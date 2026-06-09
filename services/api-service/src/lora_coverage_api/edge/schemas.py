@@ -7,7 +7,7 @@ rule-design-restfulapi.md §6).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -121,6 +121,11 @@ class GatewayResponse(BaseModel):
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
     noise_floor_dbm: float | None = None
+    # Live state từ ChirpStack (linked source đầu tiên). Cache TTL 60s
+    # (config gateway_state_cache_*). "unknown" = ChirpStack down hoặc gw
+    # không tồn tại trong tenant LNS.
+    state: Literal["online", "offline", "never_seen", "unknown"] = "unknown"
+    last_seen_at: datetime | None = None
 
 
 class GatewayListResponse(BaseModel):
@@ -398,6 +403,7 @@ class UserResponse(BaseModel):
     id: UUID
     email: str
     is_admin: bool
+    is_super_admin: bool = False
     email_verified: bool
     created_at: datetime
 
@@ -590,6 +596,7 @@ class UserAdminResponse(BaseModel):
     id: UUID
     email: str
     is_admin: bool
+    is_super_admin: bool = False
     disabled: bool
     created_at: datetime
     contribution_count: int = Field(..., ge=0)
@@ -717,3 +724,38 @@ class BatchReviewResponse(BaseModel):
     uploaded_at: datetime
     approved_count: int = Field(default=0, ge=0)
     rejected_count: int = Field(default=0, ge=0)
+
+
+# ── Coverage map rebuild (admin) ────────────────────────────────────────
+
+
+class CoverageRebuildEnqueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID
+    status: Literal["queued"]
+
+
+class CoverageRebuildJobResponse(BaseModel):
+    """1 lần admin trigger rebuild RSSI heatmap. per_gw_log JSONB raw từ DB."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    status: Literal["queued", "running", "succeeded", "failed"]
+    triggered_by: UUID | None
+    triggered_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    gateways_total: int | None
+    gateways_rebuilt: int
+    gateways_skipped: int
+    per_gw_log: dict[str, Any]
+    error_text: str | None
+    celery_task_id: str | None
+
+
+class CoverageRebuildJobListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CoverageRebuildJobResponse]

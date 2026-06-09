@@ -1,5 +1,4 @@
 import logging
-import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -11,18 +10,34 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# CRITICAL: phải khớp với scripts/train_residual_model.py:TRAINING_FEATURE_COLS.
-# Đổi feature set yêu cầu retrain model + cập nhật cả hai nơi.
-TRAINING_FEATURE_COLS = [
-    "lat",
-    "lon",
-    "sf",
-    "gw_lat",
-    "gw_lon",
-    "distance_km",
-    "log_distance_km",
-    "delta_alt_m",
+from .processing import compute_link_features
+
+# Extra Trees feature set — phải khớp scripts/train_extra_trees.py.
+# Pipeline (ColumnTransformer + ExtraTreesRegressor) đã encode `gateway`
+# bằng OneHotEncoder nên list này feed thẳng vào model.predict.
+_NUMERIC_FEATURES = [
+    "frequency",
+    "spreading_factor",
+    "log_distance",
+    "log_distance_3d",
+    "delta_lat",
+    "delta_lon",
+    "angle",
+    "gw_elevation",
+    "delta_elevation",
+    "elevation_angle",
+    "slope",
+    "roughness",
+    "terrain_mean",
+    "terrain_std",
+    "terrain_min",
+    "terrain_max",
+    "fresnel_obstruction_ratio",
+    "min_fresnel_clearance",
+    "mean_fresnel_clearance",
+    "residential_ratio",
 ]
+_ALL_FEATURES = [*_NUMERIC_FEATURES, "gateway"]
 
 # --- Config ---
 
@@ -32,7 +47,7 @@ class Settings(BaseSettings):
     db_url: str = Field(alias="LORA_DB_URL")
     port: int = 8001
     host: str = "0.0.0.0"
-    model_version: str = "stage2-xgb-v0.6.0"
+    model_version: str = "stage2-et-v0.7.0"
     model_path: str = Field(alias="LORA_ML_MODEL_PATH")
 
     # OOD Constraints (Vietnam, AS923-2)
@@ -85,6 +100,10 @@ class TargetSchema(BaseModel):
     longitude: float
     spreading_factor: int
     frequency_mhz: float
+    # ET dự đoán RSSI tuyệt đối; endpoint vẫn trả `residual_db` (giữ contract
+    # XGBoost) bằng cách trừ stage1_rssi_dbm caller gửi sang. None → endpoint
+    # không thể tính residual, trả None + ood=False để caller fallback Stage1.
+    stage1_rssi_dbm: float | None = None
 
 
 class BatchTargetSchema(TargetSchema):
@@ -159,28 +178,26 @@ def is_ood(lat: float, lon: float, sf: int, freq: float) -> bool:
     )
 
 
-def extract_features_dict(t: TargetSchema, gw: GatewaySchema) -> dict:
-    """Build 8-feature row khớp TRAINING_FEATURE_COLS (v0.5+).
+def extract_features_dict(t: TargetSchema, gw: GatewaySchema) -> dict | None:
+    """Build 20-numeric + gateway feature row khớp ExtraTreesRegressor pipeline.
 
-    Derived columns (distance_km, log_distance_km, delta_alt_m) tính tại đây
-    để model.predict nhận đúng schema. Công thức phải khớp
-    scripts/train_residual_model.py:_add_derived.
+    Gọi `compute_link_features` (port của reference_wireless/src/processing)
+    để DEM + OSM lookup + Fresnel/landuse stats. Return None khi DEM lookup
+    fail ở cả 2 endpoint (compute_link_features filter row out).
+
+    Antenna heights lấy từ DB (gateway.antenna_height_m); device_ant_h_m mặc
+    định 1.5m khớp training.
     """
-    lat1, lon1 = math.radians(t.latitude), math.radians(t.longitude)
-    lat2, lon2 = math.radians(gw.latitude), math.radians(gw.longitude)
-    dlat, dlon = lat2 - lat1, lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    distance_km = 2 * 6371.0088 * math.asin(math.sqrt(min(a, 1.0)))
-    return {
-        "lat": t.latitude,
-        "lon": t.longitude,
-        "sf": float(t.spreading_factor),
-        "gw_lat": gw.latitude,
-        "gw_lon": gw.longitude,
-        "distance_km": distance_km,
-        "log_distance_km": math.log1p(distance_km),
-        "delta_alt_m": gw.altitude_m + gw.antenna_height_m,
-    }
+    return compute_link_features(
+        lat=t.latitude,
+        lon=t.longitude,
+        gw_lat=gw.latitude,
+        gw_lon=gw.longitude,
+        gw_ant_h_m=gw.antenna_height_m,
+        freq_hz=gw.frequency_mhz * 1e6,
+        sf=t.spreading_factor,
+        gateway_code=gw.code,
+    )
 
 
 # --- API Endpoints ---
@@ -202,12 +219,23 @@ async def predict_residual(
     if is_ood(t.latitude, t.longitude, t.spreading_factor, t.frequency_mhz):
         return PredictionResponse(residual_db=None, model_version=settings.model_version, ood=True)
 
-    features = pd.DataFrame([extract_features_dict(t, payload.serving_gateway)])[
-        TRAINING_FEATURE_COLS
-    ]
+    if t.stage1_rssi_dbm is None:
+        logger.warning(
+            "/residual called without stage1_rssi_dbm; cannot convert ET output to residual"
+        )
+        return PredictionResponse(residual_db=None, model_version=settings.model_version, ood=False)
 
+    feats = extract_features_dict(t, payload.serving_gateway)
+    if feats is None:
+        logger.warning(
+            "Feature extraction failed (DEM lookup) for (%s, %s)", t.latitude, t.longitude
+        )
+        return PredictionResponse(residual_db=None, model_version=settings.model_version, ood=False)
+
+    features = pd.DataFrame([feats])[_ALL_FEATURES]
     try:
-        residual = float(request.app.state.model.predict(features)[0])
+        rssi_et = float(request.app.state.model.predict(features)[0])
+        residual = rssi_et - t.stage1_rssi_dbm
         return PredictionResponse(
             residual_db=residual, model_version=settings.model_version, ood=False
         )
@@ -229,24 +257,34 @@ async def predict_residuals_batch(
     if len(targets) > 5000:
         logger.warning(f"Batch request size ({len(targets)}) exceeds recommended limit.")
 
-    results = []
-    rows_to_predict = []
-    map_indices = []
+    results: list[BatchResidualItem | None] = []
+    rows_to_predict: list[dict] = []
+    stage1_rssi_per_row: list[float] = []
+    map_indices: list[int] = []
 
     for idx, t in enumerate(targets):
         if is_ood(t.latitude, t.longitude, t.spreading_factor, t.frequency_mhz):
             results.append(BatchResidualItem(residual_db=None, ood=True))
-        else:
-            results.append(None)
-            rows_to_predict.append(extract_features_dict(t, gw))
-            map_indices.append(idx)
+            continue
+        if t.stage1_rssi_dbm is None:
+            results.append(BatchResidualItem(residual_db=None, ood=False))
+            continue
+        feats = extract_features_dict(t, gw)
+        if feats is None:
+            results.append(BatchResidualItem(residual_db=None, ood=False))
+            continue
+        results.append(None)
+        rows_to_predict.append(feats)
+        stage1_rssi_per_row.append(t.stage1_rssi_dbm)
+        map_indices.append(idx)
 
     if rows_to_predict:
         try:
-            df_batch = pd.DataFrame(rows_to_predict)[TRAINING_FEATURE_COLS]
+            df_batch = pd.DataFrame(rows_to_predict)[_ALL_FEATURES]
             preds = request.app.state.model.predict(df_batch)
-            for i, pred in enumerate(preds):
-                results[map_indices[i]] = BatchResidualItem(residual_db=float(pred), ood=False)
+            for i, rssi_et in enumerate(preds):
+                residual = float(rssi_et) - stage1_rssi_per_row[i]
+                results[map_indices[i]] = BatchResidualItem(residual_db=residual, ood=False)
         except Exception as e:
             logger.error(f"Batch inference error: {e}")
             raise HTTPException(status_code=500, detail="Internal batch inference error") from e

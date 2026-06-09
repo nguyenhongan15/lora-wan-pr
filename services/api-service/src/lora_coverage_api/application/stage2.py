@@ -25,6 +25,11 @@ class Stage2Predictor(Protocol):
 
     Return None khi không có active model hoặc transient failure — caller
     fallback Stage 1 nguyên trạng.
+
+    `stage1_rssi_dbm`: Stage 1 RSSI (dBm) caller đã tính. ml-service ET-based
+    cần để convert absolute RSSI → residual.
     """
 
-    async def predict_residual(self, target: Target, gateway: Gateway) -> Stage2Result | None: ...
+    async def predict_residual(
+        self, target: Target, gateway: Gateway, stage1_rssi_dbm: float
+    ) -> Stage2Result | None: ...

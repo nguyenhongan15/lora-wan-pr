@@ -1,0 +1,14 @@
+{
+  "gateway_code": "7276ff002e0507da",
+  "n_samples": 606,
+  "model_version": "stage1-itu-p1812-p2108-landcover",
+  "generated_at": "2026-05-27T22:47:55Z",
+  "bins": [
+    {
+      "d_min_km": 0.0,
+      "d_max_km": 2.0,
+      "mean_residual_db": 4.839,
+      "n": 606
+    }
+  ]
+}

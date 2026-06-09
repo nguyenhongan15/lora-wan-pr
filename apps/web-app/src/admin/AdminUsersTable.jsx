@@ -1,18 +1,21 @@
 // @ts-check
-// AdminUsersTable — list user + 2 toggle (is_admin, disabled) + confirm
-// dialog cho cả hai.
+// AdminUsersTable — list user + 3 action: toggle is_admin, toggle disabled,
+// hard-delete. Mỗi action confirm dialog.
 //
-// Self-protection (plan §3.5): backend trả 400 admin_self_modification nếu
-// admin sửa chính mình. UI chặn sớm hơn — ẩn nút trên row của self thay vì
-// dựa vào error recovery (UX > error message).
+// Self-protection (plan §3.5): backend trả 400 admin_self_modification cho
+// patch + delete khi admin sửa chính mình. UI chặn sớm — ẩn mọi nút trên row
+// của self (UX > error message).
 //
-// Disabled = ẩn data thay vì xoá (plan §13 risk #11). UI dùng từ "Khoá" /
-// "Mở khoá", KHÔNG dùng "Xoá".
+// "Khoá" (disable) vs "Xoá" (delete):
+//   * Khoá = soft, ẩn data khỏi map, reversible. Default cho ban user.
+//   * Xoá = hard, DELETE auth.users; CASCADE xoá tokens/linked_sources, SET
+//     NULL giữ contribution rows (data còn trên map nhưng mất link tới user).
+//     Irreversible. Chỉ super admin gọi được.
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
-import { listUsers, patchUser } from "./client.js";
+import { deleteUser, listUsers, patchUser } from "./client.js";
 import { strings } from "../strings.js";
 
 const t = strings.admin.users;
@@ -21,17 +24,20 @@ const tErr = strings.admin.errors;
 /** @typedef {import("./client.js").UserAdminT} UserAdminT */
 
 /**
+ * Field "delete" → hard-delete, nextValue ignore. Tách khỏi patch field để
+ * confirm modal hiển thị message cảnh báo riêng + button đỏ destructive.
+ *
  * @typedef {{
  *   user: UserAdminT,
- *   field: "disabled" | "is_admin",
+ *   field: "disabled" | "is_admin" | "delete",
  *   nextValue: boolean,
  * }} PendingAction
  */
 
 /**
- * @param {{ currentUserId: string }} props
+ * @param {{ currentUserId: string, canManageAdmin?: boolean }} props
  */
-export function AdminUsersTable({ currentUserId }) {
+export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["admin", "users"],
@@ -51,18 +57,36 @@ export function AdminUsersTable({ currentUserId }) {
     },
   });
 
+  // Delete dùng mutation riêng — response 204 (void), không reuse shape của
+  // patchM. Tách ra cũng tránh lẫn error state giữa 2 thao tác khác nature.
+  const deleteM = useMutation({
+    mutationFn: (/** @type {string} */ userId) => deleteUser(userId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "stats"] });
+      setPending(null);
+    },
+  });
+
+  const activeM = pending?.field === "delete" ? deleteM : patchM;
+
   function onConfirm() {
     if (!pending) return;
-    patchM.mutate({
-      userId: pending.user.id,
-      body: { [pending.field]: pending.nextValue },
-    });
+    if (pending.field === "delete") {
+      deleteM.mutate(pending.user.id);
+    } else {
+      patchM.mutate({
+        userId: pending.user.id,
+        body: { [pending.field]: pending.nextValue },
+      });
+    }
   }
 
   function onCancel() {
-    if (patchM.isPending) return;
+    if (activeM.isPending) return;
     setPending(null);
     patchM.reset();
+    deleteM.reset();
   }
 
   if (q.isPending) {
@@ -101,6 +125,7 @@ export function AdminUsersTable({ currentUserId }) {
                 key={u.id}
                 user={u}
                 isSelf={u.id === currentUserId}
+                canManageAdmin={canManageAdmin}
                 onAction={(field, nextValue) =>
                   setPending({ user: u, field, nextValue })
                 }
@@ -113,8 +138,8 @@ export function AdminUsersTable({ currentUserId }) {
       {pending && (
         <ConfirmModal
           pending={pending}
-          isPending={patchM.isPending}
-          error={patchM.error}
+          isPending={activeM.isPending}
+          error={activeM.error}
           onConfirm={onConfirm}
           onCancel={onCancel}
         />
@@ -127,10 +152,14 @@ export function AdminUsersTable({ currentUserId }) {
  * @param {{
  *   user: UserAdminT,
  *   isSelf: boolean,
- *   onAction: (field: "disabled" | "is_admin", nextValue: boolean) => void,
+ *   canManageAdmin: boolean,
+ *   onAction: (field: "disabled" | "is_admin" | "delete", nextValue: boolean) => void,
  * }} props
  */
-function UserRow({ user, isSelf, onAction }) {
+function UserRow({ user, isSelf, canManageAdmin, onAction }) {
+  // Admin thường (không phải super admin) chỉ xem được — mọi nút mutation
+  // chỉ super admin có quyền (cấp/thu hồi admin + khoá tài khoản).
+  const showActions = !isSelf && canManageAdmin;
   return (
     <tr className={user.disabled ? "bg-slate-50" : undefined}>
       <td className="px-3 py-2">
@@ -158,7 +187,7 @@ function UserRow({ user, isSelf, onAction }) {
       <td className="px-3 py-2 text-right">
         {isSelf ? (
           <span className="text-xs text-slate-400">{t.actionsSelfNote}</span>
-        ) : (
+        ) : showActions ? (
           <div className="flex justify-end gap-1.5">
             <button
               type="button"
@@ -179,7 +208,16 @@ function UserRow({ user, isSelf, onAction }) {
             >
               {user.disabled ? t.btnEnable : t.btnDisable}
             </button>
+            <button
+              type="button"
+              onClick={() => onAction("delete", true)}
+              className="rounded-md border border-red-400 bg-red-50 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+            >
+              {t.btnDelete}
+            </button>
           </div>
+        ) : (
+          <span className="text-xs text-slate-400">—</span>
         )}
       </td>
     </tr>
@@ -221,26 +259,25 @@ function DisabledBadge() {
  */
 function ConfirmModal({ pending, isPending, error, onConfirm, onCancel }) {
   const { user, field, nextValue } = pending;
-  const message =
-    field === "disabled"
-      ? nextValue
-        ? t.confirm.disable(user.email)
-        : t.confirm.enable(user.email)
-      : nextValue
-        ? t.confirm.promote(user.email)
-        : t.confirm.demote(user.email);
-
-  const confirmLabel =
-    field === "disabled"
-      ? nextValue
-        ? t.btnDisable
-        : t.btnEnable
-      : nextValue
-        ? t.btnPromote
-        : t.btnDemote;
+  /** @type {string} */
+  let message;
+  /** @type {string} */
+  let confirmLabel;
+  if (field === "delete") {
+    message = t.confirm.delete(user.email);
+    confirmLabel = t.btnDelete;
+  } else if (field === "disabled") {
+    message = nextValue ? t.confirm.disable(user.email) : t.confirm.enable(user.email);
+    confirmLabel = nextValue ? t.btnDisable : t.btnEnable;
+  } else {
+    message = nextValue ? t.confirm.promote(user.email) : t.confirm.demote(user.email);
+    confirmLabel = nextValue ? t.btnPromote : t.btnDemote;
+  }
 
   const isDestructive =
-    (field === "disabled" && nextValue) || (field === "is_admin" && nextValue);
+    field === "delete" ||
+    (field === "disabled" && nextValue) ||
+    (field === "is_admin" && nextValue);
 
   return (
     <div

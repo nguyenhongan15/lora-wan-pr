@@ -31,7 +31,7 @@ from ...application.identity import (
     User,
 )
 from ...config import get_settings
-from ..deps import _engine, current_user, identity_service
+from ..deps import _engine, current_user, identity_service, is_super_admin
 from ..rate_limit import limiter
 from ..schemas import (
     EmailVerifyConfirmRequest,
@@ -58,6 +58,7 @@ def _user_to_response(u: User) -> UserResponse:
         id=u.id,
         email=u.email,
         is_admin=u.is_admin,
+        is_super_admin=is_super_admin(u),
         email_verified=u.email_verified,
         created_at=u.created_at,
     )

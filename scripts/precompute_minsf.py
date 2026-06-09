@@ -149,6 +149,9 @@ class GatewayJob:
     # Per-gateway UL noise floor (dBm). None = fallback DEFAULT_NOISE_FLOOR_DBM
     # ở app layer. DL vẫn dùng NOISE_FLOOR_DBM_125KHZ thermal (~-117).
     noise_floor_dbm: float | None = None
+    # Thư mục dump GeoTIFF raster min_sf (uint8, EPSG:4326). Rỗng = skip.
+    # Song song với GeoJSON contour — không thay thế.
+    raster_dir: str = ""
 
 
 def _compute_pl_grid(
@@ -161,7 +164,13 @@ def _compute_pl_grid(
     step_dlon: float,
     skip_mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Sample P.1812 path-loss + P.2108 clutter trên grid nx×ny.
+    """Sample P.1812 path-loss (+ P.2108 clutter khi DTM-only) trên grid nx×ny.
+
+    Clutter source phụ thuộc surface mode:
+      * `job.surface_dem_dir` rỗng (DTM-only): P.1812 + P.2108 statistic.
+      * `job.surface_dem_dir` set (DSM): chỉ P.1812 — building heights đã có
+        trong surface elevation; cộng P.2108 nữa = double-count (xem fix
+        crc_covlib_backend.py:151 + verify 2026-05-31).
 
     Simulation lifecycle: build **1 Simulation per gateway** (không phải per
     cell). TX coord, antenna height, freq, DEM dirs, landcover wiring đều
@@ -224,6 +233,11 @@ def _compute_pl_grid(
     n_errors = 0
     n_total = nx * ny
     freq_ghz = job.frequency_mhz / 1000.0
+    # P.2108 statistical clutter chỉ áp khi KHÔNG có DSM. Có DSM → P.1812 đã
+    # model nhiễu xạ qua building/canopy bằng surface elevation thật → cộng
+    # P.2108 = double-count (verify n=500 Đà Nẵng 2026-05-31: WITH P.2108+DSM
+    # bias +26.27 dB; WITHOUT +2.66 dB). Mirror logic crc_covlib_backend.py.
+    apply_p2108 = not job.surface_dem_dir
 
     for iy in range(ny):
         lat = lat_min + iy * step_dlat
@@ -235,12 +249,13 @@ def _compute_pl_grid(
             try:
                 pl = sim.GenerateReceptionPointResult(lat, lon)
                 if math.isfinite(pl):
-                    d_km = _haversine_km(job.lat, job.lon, lat, lon)
-                    if d_km >= _P2108_MIN_DISTANCE_KM:
-                        clutter = itur_p2108.TerrestrialPathClutterLoss(
-                            freq_ghz, d_km, job.location_percent
-                        )
-                        pl = pl + clutter
+                    if apply_p2108:
+                        d_km = _haversine_km(job.lat, job.lon, lat, lon)
+                        if d_km >= _P2108_MIN_DISTANCE_KM:
+                            clutter = itur_p2108.TerrestrialPathClutterLoss(
+                                freq_ghz, d_km, job.location_percent
+                            )
+                            pl = pl + clutter
                     pl_grid[iy, ix] = pl
                     n_finite += 1
             except (RuntimeError, ValueError) as exc:
@@ -592,6 +607,43 @@ def _assemble_polygons_with_holes(
     return polygons
 
 
+def _dump_raster(
+    min_sf: np.ndarray,
+    job: GatewayJob,
+    lon_min: float,
+    lat_min: float,
+    step_dlon: float,
+    step_dlat: float,
+) -> None:
+    """Dump min_sf grid → GeoTIFF uint8 EPSG:4326. North-up (flip row order)."""
+    import rasterio  # type: ignore[import-untyped]
+    from rasterio.transform import from_origin  # type: ignore[import-untyped]
+
+    out = Path(job.raster_dir) / f"{job.code}.tif"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # min_sf rows: row 0 = lat_min (south). GeoTIFF north-up → flipud.
+    data = np.flipud(min_sf).astype(np.uint8)
+    ny, nx = data.shape
+    lat_max = lat_min + step_dlat * (ny - 1)
+    transform = from_origin(lon_min, lat_max, step_dlon, step_dlat)
+    with rasterio.open(
+        out,
+        "w",
+        driver="GTiff",
+        height=ny,
+        width=nx,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=transform,
+        compress="deflate",
+        predictor=2,
+        nodata=0,
+    ) as dst:
+        dst.write(data, 1)
+    log.info("[%s] raster → %s (%d×%d uint8)", job.code, out, nx, ny)
+
+
 def _compute_one(job: GatewayJob) -> dict[str, Any]:
     """Worker: tính toàn bộ pipeline cho 1 gateway, dump GeoJSON."""
     logging.basicConfig(
@@ -614,6 +666,8 @@ def _compute_one(job: GatewayJob) -> dict[str, Any]:
         pl_grid = _smooth_pl_grid(pl_grid, job.smooth_px)
         log.info("[%s] PL smoothed (median kernel %dpx)", job.code, job.smooth_px)
     min_sf = _derive_min_sf(pl_grid, job)
+    if job.raster_dir:
+        _dump_raster(min_sf, job, lon_min, lat_min, step_dlon, step_dlat)
     features = _build_features(min_sf, lon_min, lat_min, step_dlon, step_dlat)
 
     # Sanity check — fail-fast thay vì dump file rỗng/vô nghĩa. 3 case
@@ -848,6 +902,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--raster-dir",
+        default=None,
+        help=(
+            "Dump min_sf grid → GeoTIFF uint8 EPSG:4326 vào folder này "
+            "(<code>.tif). Song song GeoJSON contour, không thay thế. "
+            "0 = no-coverage, 7..12 = min SF."
+        ),
+    )
+    parser.add_argument(
         "--environment",
         choices=("outdoor", "indoor", "indoor_deep"),
         default="outdoor",
@@ -989,6 +1052,7 @@ def main() -> int:
                 noise_floor_dbm=(
                     float(r["noise_floor_dbm"]) if r.get("noise_floor_dbm") is not None else None
                 ),
+                raster_dir=str(args.raster_dir) if args.raster_dir else "",
             )
         )
 

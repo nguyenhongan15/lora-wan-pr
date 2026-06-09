@@ -17,12 +17,14 @@ import { strings } from "../strings.js";
 
 const t = strings.adminGateways;
 
-// Tạm ẩn create/edit-gateway flow — DB seed/migration đảm nhiệm.
+// Tạm ẩn create-gateway flow — DB seed/migration đảm nhiệm.
 // Bật lại bằng cách set true; modal + mutation vẫn còn nguyên.
 const ENABLE_CREATE_GATEWAY = false;
-const ENABLE_EDIT_GATEWAY = false;
 
-export function AdminGateways() {
+/**
+ * @param {{ editable?: boolean }} props
+ */
+export function AdminGateways({ editable = false }) {
   const qc = useQueryClient();
   const listQ = useQuery({
     queryKey: ["gateways", "admin"],
@@ -65,7 +67,7 @@ export function AdminGateways() {
             <thead className="bg-slate-50">
               <tr>
                 {t.tableHeaders
-                  .filter((_, i) => ENABLE_EDIT_GATEWAY || i < t.tableHeaders.length - 1)
+                  .filter((_, i) => editable || i < t.tableHeaders.length - 1)
                   .map((h, i) => (
                     <th
                       key={h || `col-${i}`}
@@ -92,7 +94,10 @@ export function AdminGateways() {
                   <td className="px-3 py-2">{g.antenna_gain_dbi}</td>
                   <td className="px-3 py-2">{g.tx_power_dbm}</td>
                   <td className="px-3 py-2">{g.frequency_mhz}</td>
-                  {ENABLE_EDIT_GATEWAY && (
+                  <td className="px-3 py-2">
+                    <StateBadge state={g.state} lastSeenAt={g.last_seen_at ?? null} />
+                  </td>
+                  {editable && (
                     <td className="px-3 py-2 text-right">
                       <button
                         onClick={() => setEditing(g.id)}
@@ -107,7 +112,7 @@ export function AdminGateways() {
               {listQ.data.items.length === 0 && (
                 <tr>
                   <td
-                    colSpan={ENABLE_EDIT_GATEWAY ? 10 : 9}
+                    colSpan={editable ? 11 : 10}
                     className="px-3 py-6 text-center text-slate-500"
                   >
                     {t.emptyState}
@@ -119,7 +124,7 @@ export function AdminGateways() {
         </div>
       )}
 
-      {ENABLE_EDIT_GATEWAY && editing && (
+      {editable && editing && (
         <EditGatewayModal
           gatewayId={editing}
           onClose={() => setEditing(null)}
@@ -140,6 +145,44 @@ export function AdminGateways() {
         />
       )}
     </div>
+  );
+}
+
+const STATE_BADGE_STYLE = {
+  online: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  offline: "bg-rose-50 text-rose-700 ring-rose-200",
+  never_seen: "bg-slate-100 text-slate-600 ring-slate-200",
+  unknown: "bg-slate-50 text-slate-500 ring-slate-200",
+};
+
+/**
+ * @param {{ state: "online" | "offline" | "never_seen" | "unknown", lastSeenAt: string | null }} props
+ */
+function StateBadge({ state, lastSeenAt }) {
+  const label = t.state[state] ?? t.state.unknown;
+  const tooltip =
+    t.state.lastSeenPrefix +
+    (lastSeenAt ? new Date(lastSeenAt).toLocaleString("vi-VN") : t.state.lastSeenNever);
+  return (
+    <span
+      title={tooltip}
+      className={
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset " +
+        (STATE_BADGE_STYLE[state] ?? STATE_BADGE_STYLE.unknown)
+      }
+    >
+      <span
+        className={
+          "h-1.5 w-1.5 rounded-full " +
+          (state === "online"
+            ? "bg-emerald-500"
+            : state === "offline"
+              ? "bg-rose-500"
+              : "bg-slate-400")
+        }
+      />
+      {label}
+    </span>
   );
 }
 

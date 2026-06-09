@@ -127,6 +127,10 @@ export const Gateway = z.object({
   antenna_gain_dbi: z.number(),
   tx_power_dbm: z.number(),
   frequency_mhz: z.number(),
+  // Live state từ ChirpStack — backend trả "unknown" nếu gw không có trong
+  // tenant LNS hoặc ChirpStack down (cache TTL 60s ở api-service).
+  state: z.enum(["online", "offline", "never_seen", "unknown"]).default("unknown"),
+  last_seen_at: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 export const GatewayList = z.object({

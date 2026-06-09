@@ -792,12 +792,18 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     /** @type {string | null} */ (null),
   );
   // Composite RSSI heatmap (viewMode "estimate"): load error state. Fetch
-  // GeoJSON khi vào estimate mode lần đầu, cache trong source data (không
-  // re-fetch khi switch qua lại minsf ↔ estimate).
+  // GeoJSON khi vào estimate mode lần đầu hoặc khi gateway picker đổi giá trị.
+  // estimateLoadedRef cache theo "key": "composite" cho all-gw, code cho per-gw
+  // — switch lại key đã load thì skip re-fetch.
   const [estimateLoadError, setEstimateLoadError] = useState(
     /** @type {string | null} */ (null),
   );
-  const estimateLoadedRef = useRef(false);
+  const estimateLoadedRef = useRef(/** @type {string | null} */ (null));
+  // null = "Tất cả gateway" (load composite.geojson). Khác null = load
+  // per_gw/{code}.geojson.
+  const [estimateGatewayCode, setEstimateGatewayCode] = useState(
+    /** @type {string | null} */ (null),
+  );
 
   const [contributor, setContributor] = useState(
     () => initialFilterRef.current.contributor,
@@ -1515,35 +1521,41 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     );
   }, [coverageViewMode, mode, mapLoaded]);
 
-  // Fetch composite GeoJSON khi vào estimate mode lần đầu. Cache qua
-  // estimateLoadedRef — không re-fetch khi switch qua lại.
+  // Fetch RSSI GeoJSON khi vào estimate mode hoặc khi gateway picker đổi.
+  // Key = "composite" cho all-gw, hoặc code cho per-gw. estimateLoadedRef cache
+  // key đã load để né re-fetch khi switch minsf ↔ estimate (giữ data đã load).
   useEffect(() => {
     if (mode !== "heatmap") return;
     if (coverageViewMode !== "estimate") return;
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    if (estimateLoadedRef.current) return;
     if (!map.getSource(RSSI_COMPOSITE_SOURCE_ID)) return;
+
+    const key = estimateGatewayCode ?? "composite";
+    if (estimateLoadedRef.current === key) return;
 
     const controller = new AbortController();
     const base = import.meta.env.BASE_URL ?? "/";
-    const compUrl = `${base}coverage/rssi/composite.geojson`;
+    const url =
+      estimateGatewayCode == null
+        ? `${base}coverage/rssi/composite.geojson`
+        : `${base}coverage/rssi/per_gw/${encodeURIComponent(estimateGatewayCode)}.geojson`;
     setEstimateLoadError(null);
 
-    fetch(compUrl, { signal: controller.signal })
+    fetch(url, { signal: controller.signal })
       .then((r) => {
-        if (!r.ok) throw new Error(`composite HTTP ${r.status}`);
+        if (!r.ok) throw new Error(`RSSI HTTP ${r.status}`);
         return r.json();
       })
-      .then((compFc) => {
-        if (!compFc || !Array.isArray(compFc.features)) {
-          throw new Error("invalid composite geojson");
+      .then((fc) => {
+        if (!fc || !Array.isArray(fc.features)) {
+          throw new Error("invalid RSSI geojson");
         }
-        const compSrc = map.getSource(RSSI_COMPOSITE_SOURCE_ID);
-        if (compSrc && "setData" in compSrc) {
-          /** @type {maplibregl.GeoJSONSource} */ (compSrc).setData(compFc);
+        const src = map.getSource(RSSI_COMPOSITE_SOURCE_ID);
+        if (src && "setData" in src) {
+          /** @type {maplibregl.GeoJSONSource} */ (src).setData(fc);
         }
-        estimateLoadedRef.current = true;
+        estimateLoadedRef.current = key;
       })
       .catch((err) => {
         if (err.name === "AbortError") return;
@@ -1552,7 +1564,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
       });
 
     return () => controller.abort();
-  }, [coverageViewMode, mode, mapLoaded]);
+  }, [coverageViewMode, mode, mapLoaded, estimateGatewayCode]);
 
   // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
   // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
@@ -2234,7 +2246,12 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
                 loadingError={minsfLoadError}
               />
             ) : (
-              <EstimatePanel loadingError={estimateLoadError} />
+              <EstimatePanel
+                gateways={gatewaysQ.data?.items ?? []}
+                selectedCode={estimateGatewayCode}
+                onChange={setEstimateGatewayCode}
+                loadingError={estimateLoadError}
+              />
             )
           ) : null}
 

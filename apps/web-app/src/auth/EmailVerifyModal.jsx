@@ -8,7 +8,7 @@
 // "Đóng góp" mà chưa verify (App layer pass `initialNotice` để hiển thị lý
 // do mở modal).
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, requestEmailVerification } from "./client.js";
 import { strings } from "../strings.js";
@@ -28,18 +28,26 @@ export function EmailVerifyModal({ isOpen, email, onClose, notice }) {
   const tHeader = strings.auth.header;
   const m = useMutation({ mutationFn: requestEmailVerification });
 
+  // Stable ref cho onClose: parent App re-render (vd bootstrap setSession qua
+  // useSyncExternalStore) tạo arrow function `() => setVerifyOpen(false)` mới
+  // mỗi render. Nếu bỏ `onClose` vào deps useEffect → effect re-run giữa lúc
+  // SMTP đang gửi (~1.8s) → m.reset() xoá pending state → UI nhảy về form →
+  // user tưởng chưa gửi, click lần 2.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   // Esc → close. Reset mutation khi mở (để successHint không persist từ lần trước).
   useEffect(() => {
     if (!isOpen) return undefined;
     m.reset();
     /** @param {KeyboardEvent} e */
     const onKey = (e) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

@@ -18,6 +18,7 @@ from ..application.address_service import (
     GeocodingClient,
 )
 from ..application.coverage_service import CoverageQueryService
+from ..application.gateway_state import GatewayStateService
 from ..application.identity import (
     AdminRequiredError,
     IdentityService,
@@ -274,6 +275,19 @@ def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
     return user
 
 
+def require_super_admin(user: Annotated[User, Depends(current_user)]) -> User:
+    """Gate cho route chỉ super admin được dùng (cấp/thu hồi quyền admin,
+    khoá tài khoản). So sánh email với `settings.super_admin_email`."""
+    if user.email.lower() != _settings().super_admin_email.lower():
+        raise AdminRequiredError("Endpoint chỉ super admin được phép thao tác")
+    return user
+
+
+def is_super_admin(user: User) -> bool:
+    """Helper cho route handler cần flag is_super_admin trong response."""
+    return user.email.lower() == _settings().super_admin_email.lower()
+
+
 # ── Linking (plan-auth-v1 §3.3) ───────────────────────────────────────────
 
 
@@ -284,6 +298,24 @@ def _credential_cipher() -> CredentialCipher:
     cross-module sharing qua DI hợp lệ.
     """
     return CredentialCipher(keys=_settings().linking_fernet_keys_list)
+
+
+# ── Gateway state service (ChirpStack ListGateways → cache Valkey) ────────
+
+
+@lru_cache(maxsize=1)
+def _gateway_state_service() -> GatewayStateService:
+    s = _settings()
+    return GatewayStateService(
+        engine=_engine(),
+        cipher=_credential_cipher(),
+        cache_url=s.gateway_state_cache_url,
+        ttl_s=s.gateway_state_cache_ttl_s,
+    )
+
+
+def gateway_state_service() -> GatewayStateService:
+    return _gateway_state_service()
 
 
 # ── Trust validator (plan community-data-contribution §3.4) ───────────────

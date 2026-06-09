@@ -10,9 +10,14 @@
 //   * 400 email_verification_expired: quá 60 phút.
 //   * 400 email_verification_used:    đã consume single-use.
 //   * 403 user_disabled:              admin disable user sau khi request.
+//
+// KHÔNG dùng useMutation ở đây: trong React 18 StrictMode dev, observer
+// subscription cycle có thể làm state chuyển sang isSuccess/isError không
+// propagate được vào UI → kẹt mãi "Đang xác thực…". Giải pháp: useState +
+// module-level cache keyed theo token. Cache dedupe StrictMode double-effect
+// đồng thời bảo toàn result qua cleanup/re-mount.
 
-import { useEffect, useRef } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { ApiError, confirmEmailVerification, fetchMe } from "./client.js";
 import { getToken, setSession } from "./store.js";
 import { strings } from "../strings.js";
@@ -21,30 +26,73 @@ const t = strings.auth.verifyEmail;
 const tErr = strings.auth.errors;
 
 /**
+ * @typedef {{ status: "pending" } | { status: "success" } | { status: "error", error: unknown }} VerifyState
+ */
+
+/**
+ * Module-level cache: 1 token → 1 promise/result. Survive StrictMode
+ * unmount-remount; reset chỉ khi full page reload.
+ *
+ * @type {Map<string, Promise<void> | { ok: true } | { ok: false, error: unknown }>}
+ */
+const _verifyCache = new Map();
+
+/**
+ * @param {string} token
+ * @returns {Promise<void>}
+ */
+function _runVerify(token) {
+  const cached = _verifyCache.get(token);
+  if (cached instanceof Promise) return cached;
+  if (cached && "ok" in cached) {
+    if (cached.ok) return Promise.resolve();
+    if ("error" in cached) return Promise.reject(cached.error);
+  }
+  const p = confirmEmailVerification({ token }).then(
+    () => {
+      _verifyCache.set(token, { ok: true });
+    },
+    (err) => {
+      _verifyCache.set(token, { ok: false, error: err });
+      throw err;
+    },
+  );
+  _verifyCache.set(token, p);
+  return p;
+}
+
+/**
  * @param {{ token: string | null, onDone: () => void }} props
  *   token = null → URL có `?verify_email=` nhưng giá trị rỗng → fallback.
  */
 export function EmailVerifyConfirmPage({ token, onDone }) {
-  const m = useMutation({ mutationFn: confirmEmailVerification });
-  // useRef gate để StrictMode double-mount không gọi mutate 2 lần — server
-  // backend đã single-use enforce, nhưng client tránh gọi thừa cho UX sạch.
-  const triggered = useRef(false);
+  const [state, setState] = useState(
+    /** @type {VerifyState} */ ({ status: "pending" }),
+  );
 
   useEffect(() => {
-    if (!token) return;
-    if (triggered.current) return;
-    triggered.current = true;
-    m.mutate({ token });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!token) return undefined;
+    let cancelled = false;
+    _runVerify(token).then(
+      () => {
+        if (!cancelled) setState({ status: "success" });
+      },
+      (err) => {
+        if (!cancelled) setState({ status: "error", error: err });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   // Sau khi backend xác thực thành công, refresh user payload (nếu đang đăng
   // nhập) để dropdown trên header pick up email_verified=true. Tách ra effect
-  // riêng — KHÔNG block mutation success state — để UI hiện "Đã xác thực
-  // thành công" ngay sau POST 204, không chờ /auth/me round-trip.
+  // riêng — KHÔNG block success UI — để hiển thị "Đã xác thực thành công" ngay
+  // sau POST 204, không chờ /auth/me round-trip.
   useEffect(() => {
-    if (!m.isSuccess) return;
-    if (!getToken()) return;
+    if (state.status !== "success") return undefined;
+    if (!getToken()) return undefined;
     let cancelled = false;
     fetchMe()
       .then((u) => {
@@ -56,7 +104,7 @@ export function EmailVerifyConfirmPage({ token, onDone }) {
     return () => {
       cancelled = true;
     };
-  }, [m.isSuccess]);
+  }, [state.status]);
 
   return (
     <div className="mx-auto mt-16 max-w-sm rounded-lg bg-white p-6 shadow-xl">
@@ -73,14 +121,14 @@ export function EmailVerifyConfirmPage({ token, onDone }) {
             <div className="font-semibold">{t.missingTokenTitle}</div>
             <div className="mt-1 text-red-700">{t.missingTokenDetail}</div>
           </div>
-        ) : m.isPending || m.isIdle ? (
+        ) : state.status === "pending" ? (
           <div
             role="status"
             className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700"
           >
             {t.confirmPending}
           </div>
-        ) : m.isSuccess ? (
+        ) : state.status === "success" ? (
           <>
             <div
               role="status"
@@ -96,29 +144,27 @@ export function EmailVerifyConfirmPage({ token, onDone }) {
               {t.confirmGoHome}
             </button>
           </>
-        ) : null}
-
-        {m.isError && (
+        ) : (
           <div
             role="alert"
             className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800"
           >
-            {m.error instanceof ApiError ? (
+            {state.error instanceof ApiError ? (
               <>
-                <div className="font-semibold">{m.error.problem.title}</div>
-                {m.error.problem.detail && (
+                <div className="font-semibold">{state.error.problem.title}</div>
+                {state.error.problem.detail && (
                   <div className="mt-1 text-red-700">
-                    {m.error.problem.detail}
+                    {state.error.problem.detail}
                   </div>
                 )}
-                {m.error.problem.code && (
+                {state.error.problem.code && (
                   <div className="mt-1 text-xs text-red-600">
-                    {tErr.errorCodeLabel}: {m.error.problem.code}
+                    {tErr.errorCodeLabel}: {state.error.problem.code}
                   </div>
                 )}
               </>
             ) : (
-              <div>{String(m.error)}</div>
+              <div>{String(state.error)}</div>
             )}
             <button
               type="button"

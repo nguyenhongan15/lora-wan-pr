@@ -29,6 +29,7 @@ export const UserAdmin = z.object({
   id: z.string().uuid(),
   email: z.string(),
   is_admin: z.boolean(),
+  is_super_admin: z.boolean().default(false),
   disabled: z.boolean(),
   created_at: z.string(),
   contribution_count: z.number().int().nonnegative(),
@@ -115,6 +116,30 @@ export const BatchReviewResponse = z.object({
   rejected_count: z.number().int().nonnegative().default(0),
 });
 
+export const CoverageRebuildEnqueue = z.object({
+  job_id: z.string().uuid(),
+  status: z.literal("queued"),
+});
+
+export const CoverageRebuildJob = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["queued", "running", "succeeded", "failed"]),
+  triggered_by: z.string().uuid().nullable(),
+  triggered_at: z.string(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  gateways_total: z.number().int().nullable(),
+  gateways_rebuilt: z.number().int().nonnegative(),
+  gateways_skipped: z.number().int().nonnegative(),
+  per_gw_log: z.record(z.any()),
+  error_text: z.string().nullable(),
+  celery_task_id: z.string().nullable(),
+});
+
+export const CoverageRebuildJobList = z.object({
+  items: z.array(CoverageRebuildJob),
+});
+
 /**
  * @typedef {z.infer<typeof UserAdmin>} UserAdminT
  * @typedef {z.infer<typeof UserListAdmin>} UserListAdminT
@@ -127,6 +152,9 @@ export const BatchReviewResponse = z.object({
  * @typedef {z.infer<typeof PendingReviewBatch>} PendingReviewBatchT
  * @typedef {z.infer<typeof PendingReviewBatchList>} PendingReviewBatchListT
  * @typedef {z.infer<typeof BatchReviewResponse>} BatchReviewResponseT
+ * @typedef {z.infer<typeof CoverageRebuildEnqueue>} CoverageRebuildEnqueueT
+ * @typedef {z.infer<typeof CoverageRebuildJob>} CoverageRebuildJobT
+ * @typedef {z.infer<typeof CoverageRebuildJobList>} CoverageRebuildJobListT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -178,6 +206,25 @@ export async function patchUser(userId, patch) {
   });
   if (!res.ok) await _throwProblem(res);
   return UserAdmin.parse(await res.json());
+}
+
+/**
+ * DELETE /api/v1/admin/users/{id} — xoá hard user. CHỈ super admin (backend
+ * `require_super_admin` gate). 204 thành công, 400 self-modification, 404
+ * không tồn tại, 403 admin thường thử gọi.
+ *
+ * Destructive: CASCADE token rows; SET NULL contribution rows (data giữ
+ * trên map cộng đồng với contributor_user_id = NULL). Reuse `Xoá tài khoản
+ * vĩnh viễn` cảnh báo ở UI confirm.
+ *
+ * @param {string} userId UUID
+ * @returns {Promise<void>}
+ */
+export async function deleteUser(userId) {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/admin/users/${userId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) await _throwProblem(res);
 }
 
 /**
@@ -337,4 +384,41 @@ export async function rejectBatch(uploaderId, uploadedAt, note = null) {
   );
   if (!res.ok) await _throwProblem(res);
   return BatchReviewResponse.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/coverage/rebuild — enqueue Celery task, response 202.
+ * @returns {Promise<CoverageRebuildEnqueueT>}
+ */
+export async function enqueueCoverageRebuild() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/admin/coverage/rebuild`, {
+    method: "POST",
+  });
+  if (!res.ok) await _throwProblem(res);
+  return CoverageRebuildEnqueue.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/coverage/rebuild/{job_id} — poll status.
+ * @param {string} jobId UUID
+ * @returns {Promise<CoverageRebuildJobT>}
+ */
+export async function getCoverageRebuildJob(jobId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/coverage/rebuild/${jobId}`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return CoverageRebuildJob.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/coverage/rebuild/latest — 5 lần rebuild gần nhất.
+ * @returns {Promise<CoverageRebuildJobListT>}
+ */
+export async function listRecentCoverageRebuilds() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/coverage/rebuild/latest`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return CoverageRebuildJobList.parse(await res.json());
 }

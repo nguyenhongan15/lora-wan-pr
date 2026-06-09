@@ -1,0 +1,284 @@
+{
+  "generated_at": "2026-06-09T00:20:52Z",
+  "grid_m": 10.0,
+  "bbox": {
+    "lat_min": 15.8,
+    "lon_min": 107.9,
+    "lat_max": 16.3,
+    "lon_max": 108.5
+  },
+  "grid_size": {
+    "nx": 6420,
+    "ny": 5567
+  },
+  "model": "ITU-R P.1812 + DTM-only + per-gw NF + survey overlay",
+  "stage2_model_version": null,
+  "heatmap_sf": 10,
+  "location_percent": 10.0,
+  "redundancy_threshold_dbm": -130.0,
+  "smooth_sigma_cell": null,
+  "opening_size_cell": null,
+  "max_radius_km": 10.0,
+  "sea_mask": {
+    "method": "dem",
+    "dem_path": "E:\\DATN\\lora-data\\dem\\copernicus_glo30_danang.tif",
+    "elev_threshold_m": 0.5,
+    "n_cells_masked": 12769070
+  },
+  "survey_overlay": {
+    "enabled": true,
+    "max_link_km": 50.0,
+    "n_points": 9553,
+    "n_points_in_grid": 9553,
+    "n_cells_overlaid": 2310
+  },
+  "rssi_bins": [
+    {
+      "bin": 1,
+      "rssi_low_dbm": -100.0,
+      "rssi_high_dbm": null,
+      "label": "> -100 dBm"
+    },
+    {
+      "bin": 2,
+      "rssi_low_dbm": -105.0,
+      "rssi_high_dbm": -100.0,
+      "label": "-105 .. -100 dBm"
+    },
+    {
+      "bin": 3,
+      "rssi_low_dbm": -110.0,
+      "rssi_high_dbm": -105.0,
+      "label": "-110 .. -105 dBm"
+    },
+    {
+      "bin": 4,
+      "rssi_low_dbm": -115.0,
+      "rssi_high_dbm": -110.0,
+      "label": "-115 .. -110 dBm"
+    },
+    {
+      "bin": 5,
+      "rssi_low_dbm": -120.0,
+      "rssi_high_dbm": -115.0,
+      "label": "-120 .. -115 dBm"
+    },
+    {
+      "bin": 6,
+      "rssi_low_dbm": -130.0,
+      "rssi_high_dbm": -120.0,
+      "label": "< -120 dBm"
+    }
+  ],
+  "gw_count_bins": [
+    {
+      "gw_count_min": 1,
+      "gw_count_max": 1,
+      "label": "1 gateway"
+    },
+    {
+      "gw_count_min": 2,
+      "gw_count_max": 2,
+      "label": "2 gateways"
+    },
+    {
+      "gw_count_min": 3,
+      "gw_count_max": 99,
+      "label": ">= 3 gateways"
+    }
+  ],
+  "gateways": [
+    {
+      "code": "7276ff000b031aec",
+      "name": "7276ff000b031aec",
+      "lat": 16.0732364654541,
+      "lon": 108.1514663696289,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 2041,
+        "ix_start": 1690,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 40.7,
+      "n_finite": 561957,
+      "n_total": 4008004
+    },
+    {
+      "code": "7276ff002e0507da",
+      "name": "DNIIT GW 0507da",
+      "lat": 16.0740935,
+      "lon": 108.1524913,
+      "noise_floor_dbm": -105.0,
+      "sub_grid": {
+        "iy_start": 2051,
+        "ix_start": 1701,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 26.6,
+      "n_finite": 325887,
+      "n_total": 4008004
+    },
+    {
+      "code": "7276ff002e06029f",
+      "name": "DNIIT GW 06029f",
+      "lat": 16.0659959,
+      "lon": 108.1532551,
+      "noise_floor_dbm": -103.0,
+      "sub_grid": {
+        "iy_start": 1961,
+        "ix_start": 1709,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 30.9,
+      "n_finite": 358671,
+      "n_total": 4008004
+    },
+    {
+      "code": "7276ff002e061f5b",
+      "name": "DNIIT GW 061f5b",
+      "lat": 16.075590133666992,
+      "lon": 108.22207641601562,
+      "noise_floor_dbm": -100.0,
+      "sub_grid": {
+        "iy_start": 2067,
+        "ix_start": 2445,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 5.8,
+      "n_finite": 62671,
+      "n_total": 4008004
+    },
+    {
+      "code": "7276ff002e062cf2",
+      "name": "DNIIT GW 062cf2",
+      "lat": 16.11829376220703,
+      "lon": 108.27363586425781,
+      "noise_floor_dbm": -105.0,
+      "sub_grid": {
+        "iy_start": 2543,
+        "ix_start": 2996,
+        "sub_ny": 2002,
+        "sub_nx": 2003
+      },
+      "elapsed_s": 24.1,
+      "n_finite": 283869,
+      "n_total": 4010006
+    },
+    {
+      "code": "a840411eebb44150",
+      "name": "DNIIT GW b44150",
+      "lat": 16.0740984,
+      "lon": 108.15253,
+      "noise_floor_dbm": -102.80000305175781,
+      "sub_grid": {
+        "iy_start": 2051,
+        "ix_start": 1701,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 2.2,
+      "n_finite": 24081,
+      "n_total": 4008004
+    },
+    {
+      "code": "a84041ffff1ec39f",
+      "name": "DNIIT GW 1ec39f",
+      "lat": 16.0741086,
+      "lon": 108.1525171,
+      "noise_floor_dbm": -97.5,
+      "sub_grid": {
+        "iy_start": 2051,
+        "ix_start": 1701,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 13.9,
+      "n_finite": 156629,
+      "n_total": 4008004
+    },
+    {
+      "code": "a84041ffff1ee248",
+      "name": "Gateway Indoor2 S04.10",
+      "lat": 16.074187,
+      "lon": 108.149817,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 2052,
+        "ix_start": 1672,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 96.5,
+      "n_finite": 1343017,
+      "n_total": 4008004
+    },
+    {
+      "code": "ac1f09fffe00ab20",
+      "name": "DNIIT GW 00ab20",
+      "lat": 16.05469,
+      "lon": 108.22009,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 1835,
+        "ix_start": 2424,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 29.9,
+      "n_finite": 480175,
+      "n_total": 4008004
+    },
+    {
+      "code": "ac1f09fffe00ab25",
+      "name": "DNIIT GW 00ab25",
+      "lat": 16.11073,
+      "lon": 108.12857,
+      "noise_floor_dbm": -111.69999694824219,
+      "sub_grid": {
+        "iy_start": 2459,
+        "ix_start": 1444,
+        "sub_ny": 2002,
+        "sub_nx": 2003
+      },
+      "elapsed_s": 12.3,
+      "n_finite": 147363,
+      "n_total": 4010006
+    },
+    {
+      "code": "ac1f09fffe06fcf2",
+      "name": "DNIIT GW 06fcf2",
+      "lat": 16.054765682623003,
+      "lon": 108.21985626414313,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 1836,
+        "ix_start": 2421,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 89.4,
+      "n_finite": 1146152,
+      "n_total": 4008004
+    },
+    {
+      "code": "ac1f09fffe0fd629",
+      "name": "DNIIT GW 0fd629",
+      "lat": 16.06815,
+      "lon": 108.15448,
+      "noise_floor_dbm": -109.19999694824219,
+      "sub_grid": {
+        "iy_start": 1985,
+        "ix_start": 1722,
+        "sub_ny": 2002,
+        "sub_nx": 2002
+      },
+      "elapsed_s": 0.9,
+      "n_finite": 3930,
+      "n_total": 4008004
+    }
+  ]
+}

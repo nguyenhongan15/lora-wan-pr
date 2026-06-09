@@ -64,6 +64,12 @@ allowed-confusables = ["σ", "²", "·", "→", "×"]
 # Experiment scripts dùng ML convention: X/Y là feature matrix / label;
 # Xtr/Xte/Xv = train/test/val splits — uppercase chuẩn ngành, không snake_case.
 "scripts/experiments/*.py" = ["N803", "N806"]
+"scripts/train_extra_trees.py" = ["N803", "N806"]
+"scripts/eval_extra_trees.py" = ["N803", "N806"]
+"scripts/eval_extra_trees_holdout.py" = ["N803", "N806"]
+"scripts/test_predictor.py" = ["N803", "N806"]
+# Surgical port từ reference_wireless: giữ R = Earth radius (physics convention).
+"services/ml-service/src/lora_ml_predict/processing/features.py" = ["N806"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -80,7 +86,7 @@ plugins = ["pydantic.mypy"]
 # chirpstack_api + google.protobuf: stubs (types-protobuf) cover phần protobuf
 # nhưng chirpstack_api generated protobuf không có py.typed — coverage cục bộ,
 # bỏ qua cho đỡ noise.
-module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*", "chirpstack_api", "chirpstack_api.*", "google.protobuf", "google.protobuf.*", "sentry_sdk", "sentry_sdk.*"]
+module = ["rasterio", "rasterio.*", "sklearn", "sklearn.*", "pandas", "lightgbm", "optuna", "optuna.*", "joblib", "osmium", "shapely", "shapely.*", "scipy", "scipy.*", "chirpstack_api", "chirpstack_api.*", "google.protobuf", "google.protobuf.*", "sentry_sdk", "sentry_sdk.*", "celery", "celery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

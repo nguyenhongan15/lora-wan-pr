@@ -23,6 +23,7 @@ export const User = z.object({
   id: z.string().uuid(),
   email: z.string(),
   is_admin: z.boolean(),
+  is_super_admin: z.boolean().default(false),
   email_verified: z.boolean(),
   created_at: z.string(),
 });

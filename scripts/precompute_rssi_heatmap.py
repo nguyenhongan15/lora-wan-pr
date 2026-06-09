@@ -1,30 +1,25 @@
-"""Precompute composite RSSI heatmap cho Đà Nẵng (mode='estimate').
+"""Precompute composite RSSI heatmap cho Đà Nẵng — phiên bản cuối cùng.
 
-Cho mỗi cell 50m × 50m trong bbox Đà Nẵng, tính UL RSSI ước lượng tại mỗi
-gateway (Stage 1 ITU P.1812 + DSM + per-gw noise floor + Stage 2 XGBoost
-residual clip ±15 dB). Composite = max(RSSI) toàn 11 gw; overlay gw_count =
-số gateway nghe được tín hiệu ≥ -130 dBm.
+Công thức "Bản đồ ước lượng" (RSSI heatmap):
+  * Gateway có điểm đo: P.1812 + DTM + per-gw NF + điểm đo (survey overlay).
+  * Gateway chưa có điểm đo: P.1812 + DTM + per-gw NF.
+
+Grid chốt 50m × 50m. KHÔNG dùng Stage 2 ML, KHÔNG dùng DSM. Survey overlay
+luôn bật: per-gw, override cell có điểm đo bằng max RSSI thực đo (filter
+ST_DistanceSphere < 50 km để né ETL corruption Hải Phòng↔Đà Nẵng). Gw không có
+điểm đo → no-op tự nhiên (pure physics).
 
 Output:
-  - composite.geojson   : 7 dải RSSI 10-dB step (≥-80, -90..-80, ..., -140..-130)
+  - composite.geojson   : 6 dải RSSI (> -100, -105..-100, ..., < -120 dBm)
   - redundancy.geojson  : 3 dải gw_count (1, 2, ≥3)
+  - per_gw/<code>.geojson: lớp riêng từng gateway
   - manifest.json       : generated_at, model, bbox, gateway list
 
-Tái sử dụng helper từ precompute_minsf.py (Stage 1 setup, contour assembly,
-gateway loader). Khác min-SF:
-  - Common bbox toàn Đà Nẵng (1 grid chung). Per-gw chỉ compute trong sub-bbox
-    snapped vào common grid (tiết kiệm compute, stitch chính xác).
-  - Apply Stage 2 XGBoost residual (joblib load 1 lần per worker, cache module).
-  - Composite max + gw_count overlay.
+Tái sử dụng helper từ precompute_minsf.py (Stage 1 setup, gateway loader).
+Composite = max(RSSI) toàn gateway; gw_count = số gw nghe được ≥ -130 dBm.
 
-Usage (chạy trong api-service container, đã có crc-covlib + DEM + xgboost):
-    docker exec lora-wan-api bash -c "PYTHONPATH=/install/lib/python3.12/site-packages \\
-        python /tmp/precompute_rssi_heatmap.py"
-
-    # disable Stage 2 (pure physics):
-    python scripts/precompute_rssi_heatmap.py --no-stage2
-
-    # bbox custom:
+Usage:
+    python scripts/precompute_rssi_heatmap.py --force
     python scripts/precompute_rssi_heatmap.py --bbox 15.9,108.0,16.1,108.3
 """
 
@@ -63,21 +58,11 @@ from precompute_minsf import (  # noqa: E402
 log = logging.getLogger("precompute_rssi")
 
 OUTPUT_DIR = REPO_ROOT / "apps" / "web-app" / "public" / "coverage" / "rssi"
-DEFAULT_STAGE2_MODEL = REPO_ROOT / "services" / "ml-service" / "data" / "stage2_xgb.joblib"
-STAGE2_MODEL_VERSION = "stage2-xgb-v0.6.0"
 
 # Đà Nẵng bbox: lat 15.80..16.30, lon 107.90..108.50 (~55km × 65km).
 BBOX_DANANG = (15.80, 107.90, 16.30, 108.50)
 
 GRID_METERS_DEFAULT = 50.0
-# SF cố định cho Stage 2 feature (heatmap không lặp SF). SF7..SF12 sensitivity
-# chênh ~3 dB, không đổi bin RSSI 10 dB. Chọn SF10 = median khoảng.
-HEATMAP_SF_DEFAULT = 10
-# Empirical eval (n=1500 Đà Nẵng survey, 2026-05-31): clip ±15 dB ngắt cụt
-# ~7 dB residual cần thiết ở 5–10 km → bias map −4 dB tổng, 73% diện tích "weak".
-# Bỏ clip giảm RMSE 6.54→5.47 (B0) hoặc 5.22→4.02 (B0+loc%=10). Không gây spike
-# vì XGBoost residual đã bounded bởi distribution training data.
-RESIDUAL_CLIP_DB = float("inf")
 # Ngưỡng "gateway có nghe được" cho overlay gw_count. -130 = SF12 limit + margin.
 REDUNDANCY_THRESHOLD_DBM = -130.0
 
@@ -129,36 +114,13 @@ class RssiJob:
     step_dlon: float
     grid_m: float
     dem_dir: str
-    surface_dem_dir: str
     location_percent: float
     smooth_px: int
-    stage2_model_path: str
-    heatmap_sf: int
     skip_mask: Any = None
 
 
-# Worker-process cache: joblib model load 1 lần, reuse cho tất cả gw trên cùng
-# worker. Multiprocessing fork → child process kế thừa global, nhưng joblib có
-# thể không pickle clean → lazy-load trong worker rồi cache.
-_WORKER_MODEL: Any = None
-_WORKER_MODEL_PATH: str = ""
-
-
-def _get_worker_model(path: str) -> Any:
-    global _WORKER_MODEL, _WORKER_MODEL_PATH
-    if not path:
-        return None
-    if _WORKER_MODEL is None or _WORKER_MODEL_PATH != path:
-        import joblib
-
-        _WORKER_MODEL = joblib.load(path)
-        _WORKER_MODEL_PATH = path
-        log.info("worker pid=%d loaded Stage 2 model from %s", os.getpid(), path)
-    return _WORKER_MODEL
-
-
 def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
-    """Worker: tính UL RSSI sub-grid cho 1 gateway, áp Stage 2 residual nếu có."""
+    """Worker: tính UL RSSI sub-grid cho 1 gateway (P.1812 + DTM + per-gw NF)."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
@@ -178,7 +140,7 @@ def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
         radius_km=0.0,
         grid_m=job.grid_m,
         dem_dir=job.dem_dir,
-        surface_dem_dir=job.surface_dem_dir,
+        surface_dem_dir="",
         output_path="",
         location_percent=job.location_percent,
         environment_prob_pct=0.0,
@@ -211,61 +173,6 @@ def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
 
     device_eirp = AS923_DEVICE_TX_POWER_CAP_DBM + DEVICE_DEFAULT_TX_GAIN_DBI
     rssi_grid = (device_eirp + job.antenna_gain_dbi - pl_grid).astype(np.float32)
-
-    model = _get_worker_model(job.stage2_model_path)
-    if model is not None:
-        import pandas as pd
-
-        iy_arr = np.arange(job.sub_ny, dtype=np.float64).reshape(-1, 1)
-        ix_arr = np.arange(job.sub_nx, dtype=np.float64).reshape(1, -1)
-        lat_grid = job.sub_lat_min + iy_arr * job.step_dlat
-        lon_grid = job.sub_lon_min + ix_arr * job.step_dlon
-        lat_grid_b = np.broadcast_to(lat_grid, (job.sub_ny, job.sub_nx))
-        lon_grid_b = np.broadcast_to(lon_grid, (job.sub_ny, job.sub_nx))
-
-        p1 = math.radians(job.lat)
-        p2 = np.radians(lat_grid_b)
-        dp = np.radians(lat_grid_b - job.lat)
-        dl = np.radians(lon_grid_b - job.lon)
-        a = np.sin(dp / 2.0) ** 2 + math.cos(p1) * np.cos(p2) * np.sin(dl / 2.0) ** 2
-        d_km = 2.0 * 6371.0088 * np.arcsin(np.sqrt(a))
-
-        finite_mask = np.isfinite(rssi_grid)
-        n_finite = int(finite_mask.sum())
-        if n_finite > 0:
-            df = pd.DataFrame(
-                {
-                    "lat": lat_grid_b[finite_mask].astype(np.float32),
-                    "lon": lon_grid_b[finite_mask].astype(np.float32),
-                    "sf": np.full(n_finite, float(job.heatmap_sf), dtype=np.float32),
-                    "gw_lat": np.full(n_finite, job.lat, dtype=np.float32),
-                    "gw_lon": np.full(n_finite, job.lon, dtype=np.float32),
-                    "distance_km": d_km[finite_mask].astype(np.float32),
-                    "log_distance_km": np.log1p(d_km[finite_mask]).astype(np.float32),
-                    "delta_alt_m": np.full(
-                        n_finite,
-                        job.altitude_m + job.antenna_height_m,
-                        dtype=np.float32,
-                    ),
-                }
-            )
-            residual = model.predict(df).astype(np.float32)
-            if math.isfinite(RESIDUAL_CLIP_DB):
-                residual = np.clip(residual, -RESIDUAL_CLIP_DB, RESIDUAL_CLIP_DB)
-                clip_str = f"clip +/-{RESIDUAL_CLIP_DB:.0f} dB"
-            else:
-                clip_str = "no clip"
-            tmp = rssi_grid.copy()
-            tmp[finite_mask] = tmp[finite_mask] + residual
-            rssi_grid = tmp
-            log.info(
-                "[%s] Stage 2 applied: %d cell, residual range [%.2f, %.2f] dB (%s)",
-                job.code,
-                n_finite,
-                float(residual.min()),
-                float(residual.max()),
-                clip_str,
-            )
 
     elapsed = time.time() - t0
     n_finite = int(np.isfinite(rssi_grid).sum())
@@ -445,6 +352,44 @@ def _smooth_nan_safe(
     return out
 
 
+def _polygonize_rssi_grid(
+    rssi_grid: np.ndarray,
+    lon_origin: float,
+    lat_origin: float,
+    step_dlon: float,
+    step_dlat: float,
+    opening_struct: np.ndarray | None,
+) -> list[dict[str, Any]]:
+    """RSSI grid → list GeoJSON Feature (1 per RSSI bin). Reused cho composite
+    và per-gateway output."""
+    features: list[dict[str, Any]] = []
+    for low, high, bin_id, label in RSSI_BINS:
+        if math.isinf(high):
+            mask = np.isfinite(rssi_grid) & (rssi_grid >= low)
+        else:
+            mask = np.isfinite(rssi_grid) & (rssi_grid >= low) & (rssi_grid < high)
+        if opening_struct is not None:
+            from scipy.ndimage import binary_opening
+
+            mask = binary_opening(mask, structure=opening_struct)
+        polys = _polygonize_mask(mask, lon_origin, lat_origin, step_dlon, step_dlat)
+        if not polys:
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "bin": bin_id,
+                    "rssi_low_dbm": (low if not math.isinf(low) else None),
+                    "rssi_high_dbm": (high if not math.isinf(high) else None),
+                    "label": label,
+                },
+                "geometry": {"type": "MultiPolygon", "coordinates": polys},
+            }
+        )
+    return features
+
+
 def _polygonize_mask(
     mask: np.ndarray,
     lon0: float,
@@ -490,11 +435,8 @@ def _build_jobs(
     grid_m: float,
     per_gw_radius_km: float,
     dem_dir: str,
-    surface_dem_dir: str,
     location_percent: float,
     smooth_px: int,
-    stage2_path: str,
-    heatmap_sf: int,
     skip_masks: dict[str, np.ndarray] | None = None,
 ) -> list[RssiJob]:
     """Build RssiJob list. If `skip_masks` given (Phase B), skip mỗi gw không có
@@ -560,11 +502,8 @@ def _build_jobs(
                 step_dlon=step_dlon,
                 grid_m=grid_m,
                 dem_dir=dem_dir,
-                surface_dem_dir=surface_dem_dir,
                 location_percent=location_percent,
                 smooth_px=smooth_px,
-                stage2_model_path=stage2_path,
-                heatmap_sf=heatmap_sf,
                 skip_mask=gw_skip_mask,
             )
         )
@@ -699,6 +638,106 @@ def _upsample_coarse_to_fine(
     return coarse[iy_c[:, None], ix_c[None, :]]
 
 
+def _load_survey_overlay_points(
+    db_url: str,
+    lat_min: float,
+    lon_min: float,
+    lat_max: float,
+    lon_max: float,
+    max_link_km: float,
+) -> dict[str, list[tuple[float, float, float]]]:
+    """Load survey points group theo gw code: {code: [(lat, lon, rssi_dbm), ...]}.
+
+    Per-gw overlay yêu cầu mỗi gw chỉ nhận điểm đo của serving_gateway của mình.
+    Filter ST_DistanceSphere < max_link_km để né ETL corruption (Hải Phòng row
+    gắn gw Đà Nẵng, ~554 km — xem memory project_survey_etl_corruption_2026_05_27).
+    """
+    import psycopg
+
+    # Strip SQLAlchemy driver suffix (postgresql+psycopg:// → postgresql://)
+    # vì psycopg.connect() raw không parse được "+driver" prefix.
+    if "://" in db_url:
+        scheme, rest = db_url.split("://", 1)
+        if "+" in scheme:
+            db_url = scheme.split("+", 1)[0] + "://" + rest
+
+    sql = """
+        SELECT gw.code,
+               ST_Y(t.location::geometry) AS lat,
+               ST_X(t.location::geometry) AS lon,
+               t.rssi_dbm
+        FROM ts.survey_training t
+        JOIN geo.gateways gw ON gw.id = t.serving_gateway_id
+        WHERE ST_Y(t.location::geometry) BETWEEN %s AND %s
+          AND ST_X(t.location::geometry) BETWEEN %s AND %s
+          AND t.rssi_dbm IS NOT NULL
+          AND t.serving_gateway_id IS NOT NULL
+          AND ST_DistanceSphere(t.location::geometry, gw.location::geometry) < %s
+    """
+    pts_by_gw: dict[str, list[tuple[float, float, float]]] = {}
+    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, (lat_min, lat_max, lon_min, lon_max, max_link_km * 1000.0))
+        for code, lat, lon, rssi in cur.fetchall():
+            pts_by_gw.setdefault(str(code), []).append((float(lat), float(lon), float(rssi)))
+    return pts_by_gw
+
+
+def _apply_survey_overlay(
+    grid: np.ndarray,
+    survey_pts: list[tuple[float, float, float]],
+    lat_origin: float,
+    lon_origin: float,
+    step_dlat: float,
+    step_dlon: float,
+    ny: int,
+    nx: int,
+) -> dict[str, Any]:
+    """Override grid[iy,ix] với max RSSI survey point rơi vào cell đó.
+
+    "Chỉ chèn đúng cell" — không buffer/spread, không weighted blend. Survey
+    luôn thắng nếu cell có ≥1 điểm đo. Caller cung cấp (lat_origin, lon_origin)
+    là góc dưới-trái của `grid` để function dùng cho cả composite full grid lẫn
+    per-gw sub-grid.
+    """
+    if not survey_pts:
+        return {"n_points": 0, "n_points_in_grid": 0, "n_cells_overlaid": 0}
+    lats = np.fromiter((p[0] for p in survey_pts), dtype=np.float64, count=len(survey_pts))
+    lons = np.fromiter((p[1] for p in survey_pts), dtype=np.float64, count=len(survey_pts))
+    rssi = np.fromiter((p[2] for p in survey_pts), dtype=np.float32, count=len(survey_pts))
+    iy = np.floor((lats - lat_origin) / step_dlat).astype(np.int64)
+    ix = np.floor((lons - lon_origin) / step_dlon).astype(np.int64)
+    in_grid = (iy >= 0) & (iy < ny) & (ix >= 0) & (ix < nx)
+    iy = iy[in_grid]
+    ix = ix[in_grid]
+    rssi = rssi[in_grid]
+    n_in_grid = int(in_grid.sum())
+    if n_in_grid == 0:
+        return {
+            "n_points": len(survey_pts),
+            "n_points_in_grid": 0,
+            "n_cells_overlaid": 0,
+        }
+    # Per-cell max across all survey points landing there.
+    flat_idx = iy * nx + ix
+    cell_max: dict[int, float] = {}
+    for k in range(n_in_grid):
+        f = int(flat_idx[k])
+        v = float(rssi[k])
+        cur = cell_max.get(f)
+        if cur is None or v > cur:
+            cell_max[f] = v
+    for f, v in cell_max.items():
+        cy, cx = divmod(f, nx)
+        cur_val = grid[cy, cx]
+        if math.isnan(cur_val) or v > cur_val:
+            grid[cy, cx] = v
+    return {
+        "n_points": len(survey_pts),
+        "n_points_in_grid": n_in_grid,
+        "n_cells_overlaid": len(cell_max),
+    }
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -757,22 +796,6 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", default=str(OUTPUT_DIR))
     parser.add_argument("--force", action="store_true")
-    parser.add_argument(
-        "--no-stage2",
-        action="store_true",
-        help="Disable Stage 2 XGBoost (pure physics RSSI from Stage 1)",
-    )
-    parser.add_argument(
-        "--stage2-model",
-        default=str(DEFAULT_STAGE2_MODEL),
-        help=f"Path to joblib. Default: {DEFAULT_STAGE2_MODEL}",
-    )
-    parser.add_argument(
-        "--heatmap-sf",
-        type=int,
-        default=HEATMAP_SF_DEFAULT,
-        help=f"Fixed SF for Stage 2 feature (default {HEATMAP_SF_DEFAULT})",
-    )
     parser.add_argument(
         "--smooth-px",
         type=int,
@@ -834,6 +857,15 @@ def main() -> int:
         default="",
         help="GeoTIFF DEM cho --sea-mask=dem. Default = {LORA_DEM_DIRECTORY}/copernicus_glo30_danang.tif.",
     )
+    parser.add_argument(
+        "--survey-max-link-km",
+        type=float,
+        default=50.0,
+        help=(
+            "Max link distance (km) để filter survey corrupt (ETL mix-up Hải"
+            " Phòng↔Đà Nẵng ~554 km). Default 50."
+        ),
+    )
     args = parser.parse_args()
 
     if args.bbox == "danang":
@@ -853,28 +885,7 @@ def main() -> int:
     if not dem_dir or not Path(dem_dir).is_dir():
         log.error("LORA_DEM_DIRECTORY env không set hoặc không phải directory: %r", dem_dir)
         return 2
-    surface_dem_dir = os.environ.get("LORA_SURFACE_DEM_DIRECTORY", "")
-    if surface_dem_dir and not Path(surface_dem_dir).is_dir():
-        log.error("LORA_SURFACE_DEM_DIRECTORY set nhưng không phải directory: %r", surface_dem_dir)
-        return 2
-    if not surface_dem_dir:
-        log.warning(
-            "LORA_SURFACE_DEM_DIRECTORY chưa set — Stage 1 sẽ optimistic ~5-10 dB ở đô thị "
-            "(không có DSM buildings). Set env để dùng DSM."
-        )
-
-    stage2_path = ""
-    if not args.no_stage2:
-        stage2_path = args.stage2_model
-        if not Path(stage2_path).is_file():
-            log.error("Stage 2 model không tồn tại: %s (dùng --no-stage2 để skip)", stage2_path)
-            return 2
-        clip_str = (
-            "no clip"
-            if not math.isfinite(RESIDUAL_CLIP_DB)
-            else f"clip +/-{RESIDUAL_CLIP_DB:.0f} dB"
-        )
-        log.info("Stage 2 model: %s (%s)", stage2_path, clip_str)
+    # FINAL version: KHÔNG dùng DSM (DTM only) — bỏ qua LORA_SURFACE_DEM_DIRECTORY.
 
     center_lat = (lat_min + lat_max) / 2.0
     step_dlon, step_dlat = meters_to_degrees(center_lat, args.grid_m, args.grid_m)
@@ -939,11 +950,8 @@ def main() -> int:
             args.coarse_grid_m,
             args.per_gw_radius_km,
             dem_dir,
-            surface_dem_dir,
             args.location_percent,
             args.smooth_px,
-            stage2_path,
-            args.heatmap_sf,
         )
         if not coarse_jobs:
             log.error("Phase A: không có job")
@@ -1001,11 +1009,8 @@ def main() -> int:
             args.grid_m,
             args.per_gw_radius_km,
             dem_dir,
-            surface_dem_dir,
             args.location_percent,
             args.smooth_px,
-            stage2_path,
-            args.heatmap_sf,
             skip_masks=skip_masks,
         )
         if not fine_jobs:
@@ -1054,11 +1059,8 @@ def main() -> int:
             args.grid_m,
             args.per_gw_radius_km,
             dem_dir,
-            surface_dem_dir,
             args.location_percent,
             args.smooth_px,
-            stage2_path,
-            args.heatmap_sf,
         )
         if not jobs:
             log.error("Không có job để chạy")
@@ -1071,8 +1073,66 @@ def main() -> int:
             avg_cells,
         )
         results = _run_jobs(jobs, args.workers)
-        log.info("Compositing onto common grid %d×%d...", ny, nx)
-        composite, gw_count, _ = _composite_results(results, ny, nx)
+
+    # FINAL version: survey overlay LUÔN BẬT. Per-gw: gw có điểm đo → override
+    # cell bằng max RSSI thực đo (filter serving_gateway_id = gw.id, d<50km
+    # tránh ETL corruption). Gw không có điểm đo → no-op tự nhiên.
+    log.info(
+        "Loading survey points từ ts.survey_training (bbox + d<%.0fkm) để overlay per-gw...",
+        args.survey_max_link_km,
+    )
+    pts_by_gw = _load_survey_overlay_points(
+        db_url, lat_min, lon_min, lat_max, lon_max, args.survey_max_link_km
+    )
+    total_pts = sum(len(v) for v in pts_by_gw.values())
+    log.info("Survey points loaded: %d (gw có data: %d)", total_pts, len(pts_by_gw))
+    n_gw_with_data = 0
+    n_gw_overlaid = 0
+    sum_in_grid = 0
+    sum_cells_overlaid = 0
+    for r in results:
+        code = str(r["code"])
+        pts = pts_by_gw.get(code, [])
+        if not pts:
+            continue
+        n_gw_with_data += 1
+        iy0, ix0 = r["iy_start"], r["ix_start"]
+        sub_lat_origin = lat_min + iy0 * step_dlat
+        sub_lon_origin = lon_min + ix0 * step_dlon
+        stats = _apply_survey_overlay(
+            r["rssi_grid"],
+            pts,
+            sub_lat_origin,
+            sub_lon_origin,
+            step_dlat,
+            step_dlon,
+            r["sub_ny"],
+            r["sub_nx"],
+        )
+        if stats["n_cells_overlaid"] > 0:
+            n_gw_overlaid += 1
+        sum_in_grid += stats["n_points_in_grid"]
+        sum_cells_overlaid += stats["n_cells_overlaid"]
+        log.info(
+            "  [%s]: %d pts (%d in sub-grid) → %d cell override",
+            code,
+            len(pts),
+            stats["n_points_in_grid"],
+            stats["n_cells_overlaid"],
+        )
+    survey_overlay_meta: dict[str, Any] = {
+        "enabled": True,
+        "scope": "per_gw",
+        "max_link_km": args.survey_max_link_km,
+        "n_points": total_pts,
+        "n_points_in_grid": sum_in_grid,
+        "n_cells_overlaid": sum_cells_overlaid,
+        "n_gw_with_data": n_gw_with_data,
+        "n_gw_overlaid": n_gw_overlaid,
+    }
+
+    log.info("Compositing onto common grid %d×%d...", ny, nx)
+    composite, gw_count, _ = _composite_results(results, ny, nx)
 
     n_covered = int(np.isfinite(composite).sum())
     log.info(
@@ -1249,14 +1309,44 @@ def main() -> int:
         len(redundancy_features),
     )
 
-    model_parts = ["ITU-R P.1812", "DSM" if surface_dem_dir else "DTM-only", "per-gw NF"]
-    if stage2_path:
-        s2_part = "Stage2 XGBoost"
-        if math.isfinite(RESIDUAL_CLIP_DB):
-            s2_part += f" clip+/-{int(RESIDUAL_CLIP_DB)}dB"
-        else:
-            s2_part += " (no clip)"
-        model_parts.append(s2_part)
+    per_gw_dir = out_dir / "per_gw"
+    per_gw_dir.mkdir(parents=True, exist_ok=True)
+    per_gw_paths: dict[str, str] = {}
+    log.info("Polygonizing per-gateway grids (%d gw)...", len(results))
+    for r in results:
+        code = str(r["code"])
+        sub = r["rssi_grid"].astype(np.float32, copy=True)
+        iy0, ix0 = r["iy_start"], r["ix_start"]
+        iy1, ix1 = iy0 + r["sub_ny"], ix0 + r["sub_nx"]
+        if sea_mask is not None:
+            sub[sea_mask[iy0:iy1, ix0:ix1]] = np.nan
+        if args.smooth_sigma > 0:
+            sub = _smooth_nan_safe(sub, args.smooth_sigma)
+        sub_lat_origin = lat_min + iy0 * step_dlat
+        sub_lon_origin = lon_min + ix0 * step_dlon
+        per_gw_features = _polygonize_rssi_grid(
+            sub, sub_lon_origin, sub_lat_origin, step_dlon, step_dlat, opening_struct
+        )
+        per_gw_path = per_gw_dir / f"{code}.geojson"
+        per_gw_path.write_text(
+            json.dumps({"type": "FeatureCollection", "features": per_gw_features}),
+            encoding="utf-8",
+        )
+        per_gw_paths[code] = f"per_gw/{code}.geojson"
+        log.info(
+            "  [%s]: %d feature → %s (%d KB)",
+            code,
+            len(per_gw_features),
+            per_gw_path.name,
+            per_gw_path.stat().st_size // 1024,
+        )
+
+    model_parts = [
+        "ITU-R P.1812",
+        "DTM",
+        "per-gw NF",
+        "survey overlay (per-gw)",
+    ]
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
@@ -1268,14 +1358,13 @@ def main() -> int:
         },
         "grid_size": {"nx": nx, "ny": ny},
         "model": " + ".join(model_parts),
-        "stage2_model_version": STAGE2_MODEL_VERSION if stage2_path else None,
-        "heatmap_sf": args.heatmap_sf,
         "location_percent": args.location_percent,
         "redundancy_threshold_dbm": REDUNDANCY_THRESHOLD_DBM,
         "smooth_sigma_cell": args.smooth_sigma if args.smooth_sigma > 0 else None,
         "opening_size_cell": args.opening_size if args.opening_size > 0 else None,
         "max_radius_km": args.max_radius_km if args.max_radius_km > 0 else None,
         "sea_mask": sea_mask_meta,
+        "survey_overlay": survey_overlay_meta,
         "rssi_bins": [
             {
                 "bin": bid,
@@ -1304,6 +1393,7 @@ def main() -> int:
                 "elapsed_s": r["elapsed_s"],
                 "n_finite": r["n_finite"],
                 "n_total": r["n_total"],
+                "per_gw_geojson": per_gw_paths.get(str(r["code"])),
             }
             for r in sorted(results, key=lambda x: x["code"])
         ],

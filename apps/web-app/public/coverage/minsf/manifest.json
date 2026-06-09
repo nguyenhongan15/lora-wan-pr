@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-05-30T09:56:08Z",
-  "grid_m": 50.0,
+  "generated_at": "2026-06-09T00:15:14Z",
+  "grid_m": 30.0,
   "radius_km": "auto",
-  "model": "ITU-R P.1812 + P.2108",
+  "model": "ITU-R P.1812 + P.2108 + LandCover",
   "location_percent": 50.0,
   "environment": "outdoor",
   "gateways": [
@@ -33,9 +33,9 @@
       "name": "DNIIT GW 0507da",
       "lat": 16.0740935,
       "lon": 108.1524913,
-      "elapsed_s": 535.1,
-      "cells": 2137444,
-      "covered_cells": 53805,
+      "elapsed_s": 1405.2,
+      "cells": 5929225,
+      "covered_cells": 13453,
       "location_percent": 50.0,
       "environment": "outdoor"
     },

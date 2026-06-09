@@ -3,11 +3,11 @@
 Usage:
     python scripts/eval_extra_trees.py
 """
+
 from __future__ import annotations
 
 import json
 import logging
-import sys
 from pathlib import Path
 
 import joblib
@@ -16,7 +16,7 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import KFold, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -27,9 +27,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
-DATA_PATH = REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
-REPORT_DIR = REPO_ROOT / "reports" / "extra-trees-comparison"
-
+DATA_PATH = (
+    REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
+)
+REPORT_DIR = REPO_ROOT / "reports" / "seven-train"
 
 
 # ---------------------------------------------------------------------------
@@ -87,19 +88,26 @@ _DIST_LABELS = ["<2km", "2-5km", "5-10km", "10-50km"]
 # Building the pipeline
 # ---------------------------------------------------------------------------
 
+
 def build_et_pipeline() -> Pipeline:
-    numeric_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-    ])
-    categorical_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore")),
-    ])
-    preprocessor = ColumnTransformer(transformers=[
-        ("num", numeric_transformer, NUMERIC_FEATURES),
-        ("cat", categorical_transformer, CATEGORICAL_FEATURES),
-    ])
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, NUMERIC_FEATURES),
+            ("cat", categorical_transformer, CATEGORICAL_FEATURES),
+        ]
+    )
     model = ExtraTreesRegressor(**ET_PARAMS)
     return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
@@ -108,6 +116,7 @@ def build_et_pipeline() -> Pipeline:
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 def stats(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     err = y_true - y_pred
     return {
@@ -115,13 +124,14 @@ def stats(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         "rmse_db": float(np.sqrt(np.mean(err**2))),
         "mae_db": float(np.mean(np.abs(err))),
         "bias_db": float(np.mean(err)),
-        "r2": float(1 - np.sum(err**2) / np.sum((y_true - y_true.mean())**2)),
+        "r2": float(1 - np.sum(err**2) / np.sum((y_true - y_true.mean()) ** 2)),
     }
 
 
 # ---------------------------------------------------------------------------
 # Plots (mirroring train_residual_model.py's _plot_eval)
 # ---------------------------------------------------------------------------
+
 
 def plot_evaluation(
     pipeline,
@@ -147,6 +157,7 @@ def plot_evaluation(
       05_feature_importance.png — Feature importance bar chart
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -161,9 +172,7 @@ def plot_evaluation(
     # ── Plot 1: Learning curve — RMSE vs n_estimators ──
     # Evaluate the pipeline with subsets of trees to show RMSE convergence
     et_model = pipeline.named_steps["model"]
-    n_estimators_vals = sorted(set(
-        [1, 2, 5, 10, 20, 50, 100, 200, 500, 750, 1000, 1500]
-    ))
+    n_estimators_vals = sorted({1, 2, 5, 10, 20, 50, 100, 200, 500, 750, 1000, 1500})
     # Keep only values <= the actual number of trees
     n_estimators_vals = [n for n in n_estimators_vals if n <= et_model.n_estimators]
 
@@ -171,6 +180,7 @@ def plot_evaluation(
     for n in n_estimators_vals:
         # Create a model with the same params but fewer trees
         from sklearn.ensemble import ExtraTreesRegressor
+
         sub_model = ExtraTreesRegressor(
             n_estimators=n,
             max_depth=et_model.max_depth,
@@ -181,10 +191,12 @@ def plot_evaluation(
             n_jobs=-1,
         )
         # Build a pipeline with the existing preprocessor + sub-model
-        sub_pipeline = Pipeline([
-            ("preprocessor", pipeline.named_steps["preprocessor"]),
-            ("model", sub_model),
-        ])
+        sub_pipeline = Pipeline(
+            [
+                ("preprocessor", pipeline.named_steps["preprocessor"]),
+                ("model", sub_model),
+            ]
+        )
         sub_pipeline.fit(X_train, y_train)
         train_pred_sub = sub_pipeline.predict(X_train)
         test_pred_sub = sub_pipeline.predict(X_test)
@@ -202,8 +214,12 @@ def plot_evaluation(
     fig.tight_layout()
     fig.savefig(plot_dir / "01_learning_curve.png", dpi=120)
     plt.close(fig)
-    log.info("Learning curve: %d evaluations [%d → %d trees]",
-             len(n_estimators_vals), n_estimators_vals[0], n_estimators_vals[-1])
+    log.info(
+        "Learning curve: %d evaluations [%d → %d trees]",
+        len(n_estimators_vals),
+        n_estimators_vals[0],
+        n_estimators_vals[-1],
+    )
 
     # ── Plot 2: Predicted vs measured (test) ──
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -293,13 +309,18 @@ def plot_evaluation(
     test_rmse = float(np.sqrt(np.mean((y_test - test_pred) ** 2)))
     log.info(
         "%s — Saved 5 plots → %s | train RMSE=%.2f vs test RMSE=%.2f (gap=%.2f dB)",
-        model_label, plot_dir, train_rmse, test_rmse, test_rmse - train_rmse,
+        model_label,
+        plot_dir,
+        train_rmse,
+        test_rmse,
+        test_rmse - train_rmse,
     )
 
 
 # ---------------------------------------------------------------------------
 # XGBoost training (fair comparison — train on same data/target)
 # ---------------------------------------------------------------------------
+
 
 def train_xgb(X_train: pd.DataFrame, y_train: np.ndarray) -> object | None:
     """Train an XGBoost model on the SAME features as the ET pipeline for
@@ -320,14 +341,14 @@ def train_xgb(X_train: pd.DataFrame, y_train: np.ndarray) -> object | None:
         return None
 
     log.info("Training XGBoost on same features/target for fair comparison...")
-    
+
     # One-hot encode the 'gateway' categorical column
     X_train_enc = X_train.copy()
     if "gateway" in X_train_enc.columns:
         X_train_enc = pd.get_dummies(X_train_enc, columns=["gateway"], prefix="gw")
-    
+
     log.info("XGBoost input shape: %s", X_train_enc.shape)
-    
+
     model = xgb.XGBRegressor(
         tree_method="hist",
         n_estimators=500,
@@ -349,6 +370,7 @@ def train_xgb(X_train: pd.DataFrame, y_train: np.ndarray) -> object | None:
 # ---------------------------------------------------------------------------
 # Main evaluation
 # ---------------------------------------------------------------------------
+
 
 def main() -> int:
     logging.basicConfig(
@@ -382,6 +404,7 @@ def main() -> int:
 
     # Use Stratified split by gateway to ensure test set covers all gateways
     from sklearn.model_selection import StratifiedShuffleSplit
+
     gw_labels = df["gateway"].astype("category").cat.codes.to_numpy()
     sss = StratifiedShuffleSplit(n_splits=1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
     train_idx, test_idx = next(sss.split(X, gw_labels))
@@ -394,7 +417,7 @@ def main() -> int:
 
     # 4. Further split train into train/val for early stopping visualization
     # (Even though ET doesn't use early stopping, we still use a val set for error analysis)
-    X_train_inner, X_val, y_train_inner, y_val = train_test_split(
+    X_train_inner, X_val, _y_train_inner, _y_val = train_test_split(
         X_train, y_train, test_size=0.1, random_state=RANDOM_STATE
     )
     log.info("Inner split: train=%d, val=%d", len(X_train_inner), len(X_val))
@@ -419,14 +442,25 @@ def main() -> int:
     log.info("─" * 50)
     log.info("  EXTRA TREES RESULTS")
     log.info("─" * 50)
-    log.info("  Train fit:     RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
-             train_stats["rmse_db"], train_stats["mae_db"],
-             train_stats["bias_db"], train_stats["r2"], train_stats["n"])
-    log.info("  Hold-out test: RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
-             test_stats["rmse_db"], test_stats["mae_db"],
-             test_stats["bias_db"], test_stats["r2"], test_stats["n"])
-    log.info("  Null baseline:  test RMSE=%.2f  MAE=%.2f",
-             null_test["rmse_db"], null_test["mae_db"])
+    log.info(
+        "  Train fit:     RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
+        train_stats["rmse_db"],
+        train_stats["mae_db"],
+        train_stats["bias_db"],
+        train_stats["r2"],
+        train_stats["n"],
+    )
+    log.info(
+        "  Hold-out test: RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
+        test_stats["rmse_db"],
+        test_stats["mae_db"],
+        test_stats["bias_db"],
+        test_stats["r2"],
+        test_stats["n"],
+    )
+    log.info(
+        "  Null baseline:  test RMSE=%.2f  MAE=%.2f", null_test["rmse_db"], null_test["mae_db"]
+    )
     log.info("─" * 50)
 
     # 8. Train XGBoost on same data for fair comparison
@@ -435,7 +469,7 @@ def main() -> int:
     xgb_result = train_xgb(X_train, y_train)
     if xgb_result is not None:
         xgb_model, xgb_columns = xgb_result
-        
+
         # One-hot encode test data using same columns
         X_test_enc = X_test.copy()
         if "gateway" in X_test_enc.columns:
@@ -445,10 +479,10 @@ def main() -> int:
             if col not in X_test_enc.columns:
                 X_test_enc[col] = 0
         X_test_enc = X_test_enc[xgb_columns]
-        
+
         X_train_enc = pd.get_dummies(X_train.copy(), columns=["gateway"], prefix="gw")
         X_train_enc = X_train_enc[xgb_columns]
-        
+
         xgb_train_pred = xgb_model.predict(X_train_enc)
         xgb_test_pred = xgb_model.predict(X_test_enc)
         xgb_train_stats = stats(y_train, xgb_train_pred)
@@ -456,15 +490,28 @@ def main() -> int:
         log.info("─" * 50)
         log.info("  XGBOOST (same 21 features, same RSSI target) — TEST")
         log.info("─" * 50)
-        log.info("  Train: RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
-                 xgb_train_stats["rmse_db"], xgb_train_stats["mae_db"],
-                 xgb_train_stats["bias_db"], xgb_train_stats["r2"], xgb_train_stats["n"])
-        log.info("  Test:  RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
-                 xgb_test_stats["rmse_db"], xgb_test_stats["mae_db"],
-                 xgb_test_stats["bias_db"], xgb_test_stats["r2"], xgb_test_stats["n"])
-        log.info("  ET vs XGBoost (test): RMSE %.2f vs %.2f (diff=%.2f dB)",
-                 test_stats["rmse_db"], xgb_test_stats["rmse_db"],
-                 xgb_test_stats["rmse_db"] - test_stats["rmse_db"])
+        log.info(
+            "  Train: RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
+            xgb_train_stats["rmse_db"],
+            xgb_train_stats["mae_db"],
+            xgb_train_stats["bias_db"],
+            xgb_train_stats["r2"],
+            xgb_train_stats["n"],
+        )
+        log.info(
+            "  Test:  RMSE=%.2f  MAE=%.2f  bias=%.2f  R²=%.4f  n=%d",
+            xgb_test_stats["rmse_db"],
+            xgb_test_stats["mae_db"],
+            xgb_test_stats["bias_db"],
+            xgb_test_stats["r2"],
+            xgb_test_stats["n"],
+        )
+        log.info(
+            "  ET vs XGBoost (test): RMSE %.2f vs %.2f (diff=%.2f dB)",
+            test_stats["rmse_db"],
+            xgb_test_stats["rmse_db"],
+            xgb_test_stats["rmse_db"] - test_stats["rmse_db"],
+        )
     else:
         xgb_test_pred = None
         xgb_train_stats = None
@@ -482,8 +529,8 @@ def main() -> int:
         "model": "ExtraTreesRegressor",
         "params": ET_PARAMS,
         "n_features": len(NUMERIC_FEATURES) + len(CATEGORICAL_FEATURES),
-        "n_train": int(len(X_train)),
-        "n_test": int(len(X_test)),
+        "n_train": len(X_train),
+        "n_test": len(X_test),
         "train": train_stats,
         "test": test_stats,
         "null_baseline": null_test,
@@ -497,7 +544,7 @@ def main() -> int:
         }
 
     summary_path = REPORT_DIR / "summary.json"
-    with open(summary_path, "w") as f:
+    with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
     log.info("Summary saved -> %s", summary_path)
 
@@ -532,6 +579,7 @@ def main() -> int:
     # 12. Combined comparison plot (ET vs XGBoost)
     if xgb_test_pred is not None:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
@@ -540,12 +588,16 @@ def main() -> int:
         dist_km = df_test.get("distance_km", df_test.get("distance", 0)) / 1000
 
         # ET error vs distance
-        axes[0].scatter(dist_km, y_test - test_pred, alpha=0.3, s=8, c="steelblue", label="Extra Trees")
+        axes[0].scatter(
+            dist_km, y_test - test_pred, alpha=0.3, s=8, c="steelblue", label="Extra Trees"
+        )
         axes[0].scatter(dist_km, y_test - xgb_test_pred, alpha=0.3, s=8, c="coral", label="XGBoost")
         axes[0].axhline(0, color="black", linestyle="--", linewidth=0.8)
         axes[0].set_xlabel("Distance (km)")
         axes[0].set_ylabel("Error = measured - predicted (dB)")
-        axes[0].set_title("Extra Trees vs XGBoost — Error vs Distance\n(same 21 features, same RSSI target)")
+        axes[0].set_title(
+            "Extra Trees vs XGBoost — Error vs Distance\n(same 21 features, same RSSI target)"
+        )
         axes[0].legend()
         axes[0].grid(True, alpha=0.3)
 
@@ -564,11 +616,11 @@ def main() -> int:
                 et_rmse_per.append(0.0)
                 xgb_rmse_per.append(0.0)
             else:
-                et_rmse_per.append(float(np.sqrt(np.mean(et_err[mask]**2))))
-                xgb_rmse_per.append(float(np.sqrt(np.mean(xgb_err[mask]**2))))
+                et_rmse_per.append(float(np.sqrt(np.mean(et_err[mask] ** 2))))
+                xgb_rmse_per.append(float(np.sqrt(np.mean(xgb_err[mask] ** 2))))
 
-        axes[1].bar(x - width/2, et_rmse_per, width, label="Extra Trees", color="steelblue")
-        axes[1].bar(x + width/2, xgb_rmse_per, width, label="XGBoost", color="coral")
+        axes[1].bar(x - width / 2, et_rmse_per, width, label="Extra Trees", color="steelblue")
+        axes[1].bar(x + width / 2, xgb_rmse_per, width, label="XGBoost", color="coral")
         axes[1].set_xticks(x)
         axes[1].set_xticklabels(labels)
         axes[1].set_ylabel("RMSE (dB)")
@@ -583,11 +635,15 @@ def main() -> int:
 
     # 13. Save a text summary
     summary_txt = REPORT_DIR / "summary.txt"
-    with open(summary_txt, "w", encoding="utf-8") as f:
+    with summary_txt.open("w", encoding="utf-8") as f:
         f.write("Extra Trees evaluation report\n")
         f.write("=" * 60 + "\n\n")
-        f.write(f"Model: ExtraTreesRegressor (n_estimators={ET_PARAMS['n_estimators']}, max_depth={ET_PARAMS['max_depth']})\n")
-        f.write(f"Features: {len(NUMERIC_FEATURES)} numeric + {len(CATEGORICAL_FEATURES)} categorical = {len(ALL_FEATURES)} total\n\n")
+        f.write(
+            f"Model: ExtraTreesRegressor (n_estimators={ET_PARAMS['n_estimators']}, max_depth={ET_PARAMS['max_depth']})\n"
+        )
+        f.write(
+            f"Features: {len(NUMERIC_FEATURES)} numeric + {len(CATEGORICAL_FEATURES)} categorical = {len(ALL_FEATURES)} total\n\n"
+        )
         f.write("Metrics\n")
         f.write(f"  Train RMSE : {train_stats['rmse_db']:.2f} dBm\n")
         f.write(f"  Train MAE  : {train_stats['mae_db']:.2f} dBm\n")
@@ -597,7 +653,7 @@ def main() -> int:
         f.write(f"  Test  R2   : {test_stats['r2']:.4f}\n")
         f.write(f"  Test  bias : {test_stats['bias_db']:+.2f} dB\n")
         f.write(f"  Train/Test gap : {test_stats['rmse_db'] - train_stats['rmse_db']:.2f} dB\n\n")
-        f.write(f"Null baseline (predict mean)\n")
+        f.write("Null baseline (predict mean)\n")
         f.write(f"  Test RMSE : {null_test['rmse_db']:.2f} dBm\n")
         f.write(f"  Test MAE  : {null_test['mae_db']:.2f} dBm\n\n")
         if xgb_test_pred is not None:
@@ -611,16 +667,16 @@ def main() -> int:
             f.write(f"  Test  R2   : {xgb_s['r2']:.4f}\n")
             f.write(f"  ET  Test RMSE: {test_stats['rmse_db']:.2f} dBm\n")
             f.write(f"  XGB Test RMSE: {xgb_s['rmse_db']:.2f} dBm\n")
-            diff = xgb_s['rmse_db'] - test_stats['rmse_db']
+            diff = xgb_s["rmse_db"] - test_stats["rmse_db"]
             f.write(f"  Difference (ET - XGBoost): {diff:+.2f} dB\n")
             if diff < 0:
                 f.write(f"  => Extra Trees is {abs(diff):.2f} dB BETTER than XGBoost\n")
             else:
                 f.write(f"  => XGBoost is {abs(diff):.2f} dB better than Extra Trees\n")
-            f.write(f"\n  NOTE: This XGBoost was trained from scratch on the SAME 21 features\n")
-            f.write(f"  and SAME target (RSSI) as the Extra Trees model for a fair\n")
-            f.write(f"  comparison. The old sixth-train XGBoost predicted residuals on\n")
-            f.write(f"  8 basic features and is NOT directly comparable.\n\n")
+            f.write("\n  NOTE: This XGBoost was trained from scratch on the SAME 21 features\n")
+            f.write("  and SAME target (RSSI) as the Extra Trees model for a fair\n")
+            f.write("  comparison. The old sixth-train XGBoost predicted residuals on\n")
+            f.write("  8 basic features and is NOT directly comparable.\n\n")
         f.write("Plots\n")
         f.write("  01_learning_curve.png        - Learning curve (RMSE vs n_estimators)\n")
         f.write("  02_pred_vs_meas.png          - Predicted vs measured (test)\n")

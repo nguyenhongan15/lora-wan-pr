@@ -216,6 +216,11 @@ export const strings = {
     },
     estimate: {
       panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
+      selector: {
+        label: "Hiển thị theo gateway",
+        placeholder: "Tất cả gateway (tổng hợp)",
+        empty: "Chưa có gateway nào.",
+      },
       legendTitle: "Cường độ tín hiệu mạnh nhất (dBm)",
       bins: {
         1: "> -100 dBm",
@@ -228,7 +233,7 @@ export const strings = {
       notCovered: "< -130 (không phủ)",
       
       loadError:
-        "Không tải được dữ liệu RSSI tổng hợp. Chạy `precompute_rssi_heatmap.py` để tạo.",
+        "Không tải được dữ liệu RSSI tổng hợp.",
       model:
         "Mô hình: ITU-R P.1812 + DSM + per-gw NF + Stage 2 XGBoost (clip ±15 dB)",
     },
@@ -421,8 +426,17 @@ export const strings = {
       "Gain (dBi)",
       "TX (dBm)",
       "Freq (MHz)",
+      "Trạng thái",
       "",
     ],
+    state: {
+      online: "Online",
+      offline: "Offline",
+      never_seen: "Chưa từng kết nối",
+      unknown: "Không rõ",
+      lastSeenPrefix: "Lần cuối: ",
+      lastSeenNever: "Chưa từng",
+    },
     editButton: "Sửa",
     editTitle: "Sửa gateway",
     createTitle: "Thêm gateway",
@@ -619,6 +633,16 @@ export const strings = {
       usersHeading: "Người dùng",
       reviewHeading: "Duyệt đóng góp cộng đồng",
       syncHeading: "Đồng bộ toàn cục",
+      rebuildHeading: "Bản đồ ước lượng",
+      gatewaysHeading: "Quản lý gateway",
+      sidebar: {
+        stats: "Tổng quan",
+        review: "Phê duyệt",
+        users: "Người dùng",
+        gateways: "Gateway",
+        sync: "Đồng bộ nguồn",
+        rebuild: "Bản đồ ước lượng",
+      },
     },
     stats: {
       loading: "Đang tải thống kê…",
@@ -723,6 +747,7 @@ export const strings = {
       btnDemote: "Bỏ admin",
       btnDisable: "Khoá",
       btnEnable: "Mở khoá",
+      btnDelete: "Xoá",
       actionsSelfNote: "Không thể tự sửa",
       confirm: {
         title: "Xác nhận thao tác",
@@ -736,6 +761,9 @@ export const strings = {
           `Cấp quyền admin cho ${email}? User này sẽ truy cập được tab Quản trị.`,
         /** @param {string} email */
         demote: (email) => `Thu hồi quyền admin của ${email}?`,
+        /** @param {string} email */
+        delete: (email) =>
+          `XOÁ VĨNH VIỄN tài khoản ${email}? Mọi token đăng nhập, link nguồn sẽ bị xoá. Dữ liệu đóng góp trên bản đồ cộng đồng GIỮ NGUYÊN nhưng mất liên kết tới user. Thao tác KHÔNG thể hoàn tác.`,
         cancel: "Huỷ",
         pending: "Đang xử lý…",
         errorGeneric: "Thao tác thất bại.",
@@ -752,6 +780,38 @@ export const strings = {
       /** @param {number} n */
       failuresTitle: (n) => `Chi tiết ${n} nguồn lỗi`,
       errorRequest: "Yêu cầu đồng bộ thất bại.",
+    },
+    rebuild: {
+      title: "Rebuild bản đồ ước lượng",
+      subtitle:
+        "Chạy lại composite + per-gateway map. Config: P.1812 (lý thuyết) + DTM (địa hình) + per-gateway noise floor + survey overlay per-gw (gateway có điểm đo nhận overlay riêng, gateway không có điểm đo giữ pure physics). KHÔNG dùng Stage 2 ML. Grid 50m × 50m. Chỉ rebuild khi có gói tin mới.",
+      btn: "Rebuild ngay",
+      btnPending: "Đang chạy…",
+      statusQueued: "Đang chờ worker",
+      statusRunning: "Đang chạy",
+      statusSucceeded: "Hoàn tất",
+      statusFailed: "Thất bại",
+      /** @param {number} rebuilt @param {number} skipped */
+      summary: (rebuilt, skipped) =>
+        `${rebuilt} gateway rebuilt, ${skipped} gateway skipped (no new data).`,
+      noNewData:
+        "Không gateway nào có gói tin mới — toàn bộ skipped, map giữ nguyên.",
+      historyHeading: "5 lần rebuild gần nhất",
+      historyEmpty: "Chưa có lần rebuild nào.",
+      historyHeaders: ["Thời điểm", "Trạng thái", "Rebuilt", "Skipped", "Lỗi"],
+      perGwHeading: "Chi tiết theo gateway",
+      perGwHeaders: ["Gateway", "Trạng thái", "Ghi chú"],
+      perGwStatus: {
+        rebuilt: "Đã rebuild",
+        pending: "Đang chờ",
+        skipped: "Skipped",
+        failed: "Lỗi",
+      },
+      perGwReason: {
+        no_data: "Chưa có điểm đo",
+        no_new_data: "Không có gói tin mới",
+      },
+      errorRequest: "Không tạo được job rebuild.",
     },
     errors: {
       errorCodeLabel: "Mã lỗi",

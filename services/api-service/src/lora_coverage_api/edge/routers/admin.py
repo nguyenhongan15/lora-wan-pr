@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 
 from ...application.identity import (
@@ -47,13 +47,24 @@ from ...application.trust.promotion import (
     reject_pending_contribution,
     reject_pending_review_batch,
 )
-from ..deps import _engine, mailer_dep, require_admin, sync_service, trust_validator
+from ...config import get_settings
+from ..deps import (
+    _engine,
+    mailer_dep,
+    require_admin,
+    require_super_admin,
+    sync_service,
+    trust_validator,
+)
 from ..schemas import (
     AdminStatsResponse,
     BatchReviewRequest,
     BatchReviewResponse,
     ContributionRejectRequest,
     ContributionReviewResponse,
+    CoverageRebuildEnqueueResponse,
+    CoverageRebuildJobListResponse,
+    CoverageRebuildJobResponse,
     PendingContributionListResponse,
     PendingContributionResponse,
     PendingReviewBatchListResponse,
@@ -98,6 +109,15 @@ _SELECT_USER_BEFORE = text("""
 
 _COUNT_CONTRIBUTIONS = text("""
     SELECT COUNT(*) AS c FROM auth.linked_sources WHERE user_id = :id
+""")
+
+# DELETE auth.users — CASCADE auto-clean refresh_tokens, password_reset_tokens,
+# email_verification_tokens, linked_sources. SET NULL preserves
+# survey_training, survey_quarantine, devices, gateways, coverage_rebuild_jobs,
+# ml.active_models.promoted_by (migration 0023) → contribution data + audit
+# trail giu nguyen, chi mat link toi user.
+_DELETE_USER = text("""
+    DELETE FROM auth.users WHERE id = :id
 """)
 
 # Stats — 1 query/aggregate. Acceptable cho v1 (gateway/measurement bảng
@@ -146,19 +166,27 @@ def _sync_to_response(r: SyncResult) -> SyncResultResponse:
 def list_users(
     admin: Annotated[User, Depends(require_admin)],
 ) -> UserListResponse:
+    super_admin_email = get_settings().super_admin_email.lower()
+    caller_is_super = admin.email.lower() == super_admin_email
     with _engine().begin() as conn:
         rows = conn.execute(_LIST_USERS).all()
-    items = [
-        UserAdminResponse(
-            id=r.id,
-            email=r.email,
-            is_admin=r.is_admin,
-            disabled=r.disabled,
-            created_at=r.created_at,
-            contribution_count=int(r.contribution_count),
+    items: list[UserAdminResponse] = []
+    for r in rows:
+        row_is_super = (r.email or "").lower() == super_admin_email
+        # Caller admin thường KHÔNG được thấy super admin trong list.
+        if row_is_super and not caller_is_super:
+            continue
+        items.append(
+            UserAdminResponse(
+                id=r.id,
+                email=r.email,
+                is_admin=r.is_admin,
+                is_super_admin=row_is_super,
+                disabled=r.disabled,
+                created_at=r.created_at,
+                contribution_count=int(r.contribution_count),
+            )
         )
-        for r in rows
-    ]
     return UserListResponse(items=items, total=len(items))
 
 
@@ -166,7 +194,7 @@ def list_users(
 def patch_user(
     user_id: UUID,
     body: UserPatchRequest,
-    admin: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_super_admin)],
 ) -> UserAdminResponse:
     if user_id == admin.id:
         # Self-protection: chặn cả flip is_admin và flip disabled. Lý do
@@ -198,14 +226,46 @@ def patch_user(
         log_payload["disabled_after"] = body.disabled
     logger.info("admin_user_patched", **log_payload)
 
+    super_admin_email = get_settings().super_admin_email.lower()
     return UserAdminResponse(
         id=row.id,
         email=row.email,
         is_admin=row.is_admin,
+        is_super_admin=(row.email or "").lower() == super_admin_email,
         disabled=row.disabled,
         created_at=row.created_at,
         contribution_count=contribution_count,
     )
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: UUID,
+    admin: Annotated[User, Depends(require_super_admin)],
+) -> Response:
+    """Xoa hard 1 user khoi DB. CHI super admin co quyen — destructive.
+
+    Self-protection: super admin khong xoa duoc chinh minh (tranh khoa cua).
+    CASCADE FK xu ly tokens + linked_sources; SET NULL FK giu lai contribution
+    data (survey rows, gateways, devices) voi contributor_user_id = NULL.
+    """
+    if user_id == admin.id:
+        raise AdminSelfModificationError("Admin khong the xoa chinh minh")
+
+    with _engine().begin() as conn:
+        before = conn.execute(_SELECT_USER_BEFORE, {"id": user_id}).one_or_none()
+        if before is None:
+            raise UserNotFoundError(f"User {user_id} khong ton tai")
+        conn.execute(_DELETE_USER, {"id": user_id})
+
+    logger.info(
+        "admin_user_deleted",
+        admin_id=str(admin.id),
+        target_user_id=str(user_id),
+        was_admin=before.is_admin,
+        was_disabled=before.disabled,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/sync", response_model=SyncReportResponse)
@@ -542,6 +602,113 @@ def approve_contribution(
             )
 
     return ContributionReviewResponse(id=contribution_id, review_status="approved")
+
+
+# ── Coverage map rebuild (admin "Rebuild bản đồ ước lượng") ─────────────
+# Producer: enqueue Celery task, INSERT row vào audit.coverage_rebuild_jobs.
+# Worker: lora-wan-celery xử lý task incremental (xem tasks/rebuild_coverage.py).
+# Frontend poll `GET /admin/coverage/rebuild/{job_id}` mỗi 5s tới khi
+# status ∈ {succeeded, failed}.
+
+
+_INSERT_REBUILD_JOB = text("""
+    INSERT INTO audit.coverage_rebuild_jobs (status, triggered_by)
+    VALUES ('queued', :uid)
+    RETURNING id
+""")
+
+_SELECT_REBUILD_JOB = text("""
+    SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
+           gateways_total, gateways_rebuilt, gateways_skipped,
+           per_gw_log, error_text, celery_task_id
+    FROM audit.coverage_rebuild_jobs
+    WHERE id = :id
+""")
+
+_LIST_REBUILD_JOBS = text("""
+    SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
+           gateways_total, gateways_rebuilt, gateways_skipped,
+           per_gw_log, error_text, celery_task_id
+    FROM audit.coverage_rebuild_jobs
+    ORDER BY triggered_at DESC
+    LIMIT 5
+""")
+
+
+def _row_to_rebuild_response(r: Any) -> CoverageRebuildJobResponse:
+    return CoverageRebuildJobResponse(
+        id=r.id,
+        status=r.status,
+        triggered_by=r.triggered_by,
+        triggered_at=r.triggered_at,
+        started_at=r.started_at,
+        finished_at=r.finished_at,
+        gateways_total=r.gateways_total,
+        gateways_rebuilt=int(r.gateways_rebuilt),
+        gateways_skipped=int(r.gateways_skipped),
+        per_gw_log=dict(r.per_gw_log or {}),
+        error_text=r.error_text,
+        celery_task_id=r.celery_task_id,
+    )
+
+
+@router.post(
+    "/coverage/rebuild",
+    response_model=CoverageRebuildEnqueueResponse,
+    status_code=202,
+)
+def enqueue_coverage_rebuild(
+    admin: Annotated[User, Depends(require_admin)],
+) -> CoverageRebuildEnqueueResponse:
+    """Tạo job + enqueue task rebuild composite/per-gw RSSI heatmap.
+
+    Idempotency: KHÔNG dedupe — admin có thể bấm liên tục (worker concurrency=1
+    nên job mới chờ job cũ xong; nếu không có data mới, mỗi job ~vài giây skip).
+    """
+    # Import trễ — celery_app khởi tạo Settings + redis client tốn ~50ms,
+    # cộng với việc Celery broker (Valkey) phải sẵn sàng. Lazy giữ FastAPI
+    # startup nhẹ.
+    from ...tasks.rebuild_coverage import rebuild_coverage_map
+
+    with _engine().begin() as conn:
+        job_id = conn.execute(_INSERT_REBUILD_JOB, {"uid": admin.id}).scalar_one()
+
+    rebuild_coverage_map.delay(str(job_id))
+    logger.info(
+        "admin_coverage_rebuild_enqueued",
+        admin_id=str(admin.id),
+        job_id=str(job_id),
+    )
+    return CoverageRebuildEnqueueResponse(job_id=job_id, status="queued")
+
+
+@router.get(
+    "/coverage/rebuild/latest",
+    response_model=CoverageRebuildJobListResponse,
+)
+def list_recent_coverage_rebuilds(
+    admin: Annotated[User, Depends(require_admin)],
+) -> CoverageRebuildJobListResponse:
+    """5 lần rebuild gần nhất — frontend hiển thị lịch sử."""
+    with _engine().begin() as conn:
+        rows = conn.execute(_LIST_REBUILD_JOBS).all()
+    return CoverageRebuildJobListResponse(items=[_row_to_rebuild_response(r) for r in rows])
+
+
+@router.get(
+    "/coverage/rebuild/{job_id}",
+    response_model=CoverageRebuildJobResponse,
+)
+def get_coverage_rebuild(
+    job_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> CoverageRebuildJobResponse:
+    """Poll status 1 job — frontend gọi mỗi 5s tới khi succeeded/failed."""
+    with _engine().begin() as conn:
+        row = conn.execute(_SELECT_REBUILD_JOB, {"id": job_id}).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} không tồn tại.")
+    return _row_to_rebuild_response(row)
 
 
 @router.post(

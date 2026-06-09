@@ -144,7 +144,7 @@ services:
       # (STAGE2_PREDICT_BASE_URL=http://ml-service:8001) khi dev mới có model.
       STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-}
       STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
-      STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-0.5}
+      STAGE2_TIMEOUT_SECONDS: ${STAGE2_TIMEOUT_SECONDS:-3.0}
       # ChirpStack per-user webhook ingest (plan ChirpStack per-user webhook).
       # Production: WEBHOOK_BASE_URL phải là origin public-facing (vd
       # https://api.example.com); empty trong production → startup fail-fast.
@@ -158,6 +158,10 @@ services:
       # Empty = in-memory (dev / single-worker). Compose mặc định trỏ tới
       # service `cache` để 2 workers đếm chung counter, không bị divergence.
       RATE_LIMIT_STORAGE_URI: ${RATE_LIMIT_STORAGE_URI:-redis://cache:6379/0}
+      # Celery broker + result backend (admin rebuild coverage map task).
+      # DB tách (/1, /2) khỏi rate-limit (/0) để LRU eviction không kick state.
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://cache:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://cache:6379/2}
       # Password reset (pre-deploy checklist §2). SMTP_HOST empty = NoOpMailer
       # (dev console log); production validator fail-fast nếu empty.
       PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
@@ -215,6 +219,12 @@ services:
       LORA_DB_URL: postgresql://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}@db:5432/${POSTGRES_DB:-lora_coverage}
       LORA_DEM_DIRECTORY: /data/dem
       LORA_SURFACE_DEM_DIRECTORY: /data/dem-surface
+      # Extra Trees model (v0.7) yêu cầu DEM + OSM landuse lookup
+      # khớp training-time. Trỏ vào cùng /data/dem mount của api-service.
+      LORA_REFERENCE_DEM_DIRECTORY: /data/dem
+      # OSM landuse polygons (vector GeoJSON) — built bởi
+      # scripts/fetch_osm_landuse.py, không nằm trong lora-data drive.
+      LORA_OSM_LANDUSE_DIRECTORY: /app/osm
       # Path tới model artifact trong container. Dummy stub đến từ git
       # (services/ml-service/data/dummy_model.txt → mount /app/data).
       # Empty / non-existent → ml-service trả 503 → api-service Stage1 fallback.
@@ -225,6 +235,8 @@ services:
       # Model artifact stub. ML dev sẽ thay bằng real model qua volume mount
       # hoặc bake vào Dockerfile.
       - ./services/ml-service/data:/app/data:ro
+      # OSM landuse polygons (GeoJSON) cho ET feature extraction.
+      - ./data/osm:/app/osm:ro
     ports:
       - "127.0.0.1:8001:8001"
     healthcheck:
@@ -233,6 +245,62 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  # ── Celery worker (admin rebuild coverage map) ───────────────────────
+  # Reuse image lora-wan-api (đã có crc-covlib + xgboost + DEM access). Mount
+  # ./scripts + ./apps/web-app/public/coverage để worker subprocess
+  # precompute_rssi_heatmap.py và ghi geojson output về repo (FE pick up qua
+  # static serve). concurrency=1: script tự dùng multiprocessing.Pool bên
+  # trong, double-nest sẽ fork-bomb container.
+  celery-worker:
+    image: lora-wan-api:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/api-service/Dockerfile
+    container_name: lora-wan-celery
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      cache:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}@db:5432/${POSTGRES_DB:-lora_coverage}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://cache:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://cache:6379/2}
+      # Precompute script đọc DEM + Surface DEM, output về repo path.
+      LORA_DEM_DIRECTORY: /data/dem
+      LORA_SURFACE_DEM_DIRECTORY: /data/dem-surface
+      LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
+      LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
+      # JWT_SECRET + LINKING_FERNET_KEYS required bởi Settings validators dù
+      # worker không serve HTTP — Settings() vẫn instantiate khi import celery_app.
+      JWT_SECRET: ${JWT_SECRET}
+      LINKING_FERNET_KEYS: ${LINKING_FERNET_KEYS}
+      STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
+    volumes:
+      - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
+      # Bind-mount script + output dir (precompute_rssi_heatmap.py qua subprocess).
+      - ./scripts:/app/scripts:ro
+      - ./apps/web-app/public/coverage:/app/apps/web-app/public/coverage:rw
+      # Stage 2 XGBoost model artifact (joblib) — script load qua --stage2-model.
+      - ./services/ml-service/data:/app/services/ml-service/data:ro
+    working_dir: /app
+    entrypoint: ["/usr/bin/tini", "--"]
+    command:
+      - "python"
+      - "-m"
+      - "celery"
+      - "-A"
+      - "lora_coverage_api.celery_app"
+      - "worker"
+      - "--loglevel=info"
+      - "--concurrency=1"
 
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
   # Production: build static rồi serve qua Nginx.
