@@ -111,7 +111,7 @@ export function PointsFilterPanel({
   }
 
   return (
-    <div className="flex max-h-full min-h-0 w-64 flex-col overflow-y-auto rounded-md border border-slate-200 bg-white text-xs text-slate-700 shadow-sm">
+    <div className="flex max-h-full min-h-0 w-full flex-col overflow-y-auto rounded-md border border-slate-200 bg-white text-xs text-slate-700 shadow-sm md:w-64">
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
         <span className="text-sm font-semibold text-slate-900">
           {t.toggle.title}

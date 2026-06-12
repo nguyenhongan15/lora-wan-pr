@@ -21,7 +21,10 @@ def _build_app() -> Celery:
         "lora_coverage",
         broker=s.celery_broker_url,
         backend=s.celery_result_backend,
-        include=["lora_coverage_api.tasks.rebuild_coverage"],
+        include=[
+            "lora_coverage_api.tasks.rebuild_coverage",
+            "lora_coverage_api.tasks.retrain_ml",
+        ],
     )
     app.conf.update(
         task_serializer="json",

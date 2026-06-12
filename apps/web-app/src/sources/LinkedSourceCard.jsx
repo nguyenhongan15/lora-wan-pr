@@ -1,30 +1,16 @@
 // @ts-check
 // LinkedSourceCard — 1 card per linked source.
 //
-// 2 toggle ĐỘC LẬP (plan §3.3):
-//   - status (active/paused) — kỹ thuật, có pull data về DB hay không
-//   - contribute_to_community — chính sách, data có lên bản đồ cộng đồng
+// Refactor 2026-06-11: contribute_to_community bỏ hẳn. Sync luôn vào batch
+// private; user opt-in cộng đồng từ bảng "Quản lý dữ liệu" cho từng batch.
 //
-// Mặc định sau link: status='active', contribute=false (privacy opt-in).
-// Nút "Đóng góp cộng đồng" highlight (indigo) để hướng user opt-in.
-//
-// Auto-sync sau bật contribute (option (a), confirmed):
-//   plan §5 Flow B step 8 yêu cầu BE trigger sync khi set_contribution(true).
-//   BE giờ đã backfill quarantine→training transactionally trong PATCH
-//   set_contribution → data CŨ đã có sẵn trên map ngay sau toggle. FE vẫn
-//   gọi /sync để pull data MỚI (push from provider) end-to-end. Sync error
-//   không revert toggle (toggle là chính sách, sync là kỹ thuật — 2 việc
-//   tách biệt).
-//
-// Invalidate ["surveys"] sau cả 2 mutation: contribute (backfill có thể đã
-// move historical rows lên training) + sync (data mới vào training nếu cờ
-// đang on). Map dùng key ["surveys"] → invalidation kích re-fetch.
+// Toggle còn lại: status (active/paused) — kỹ thuật, có pull data về DB không.
+// Invalidate ["surveys"] sau sync vì batch mới có thể đã được pre-submit từ
+// trước (admin-approved → public) → map cần refresh.
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
-import { EmailVerifyModal } from "../auth/EmailVerifyModal.jsx";
-import { getUser, subscribe } from "../auth/store.js";
 import {
   patchSource,
   rotateWebhook,
@@ -33,51 +19,71 @@ import {
 } from "./client.js";
 import { DevicesPanel } from "./DevicesPanel.jsx";
 import { WebhookSetupInstructions } from "./WebhookSetupInstructions.jsx";
+import { AlertModal, ConfirmModal } from "../components/Modal.jsx";
 import { strings } from "../strings.js";
 
 const tCard = strings.sources.card;
 const tErr = strings.sources.errors;
 
+// Mirror của `_CONFLICTING_SOURCE_PAIRS` ở backend
+// (services/api-service/.../linking/service.py). ChirpStack ↔ LPWANMapper
+// chung 1 uplink physic, mở song song = double-insert quarantine.
+// Thêm pair mới ở đây phải sync cả hai phía.
+/** @type {Record<string, ReadonlyArray<string>>} */
+const SYNC_CONFLICT_PAIRS = {
+  chirpstack: ["lpwanmapper"],
+  lpwanmapper: ["chirpstack"],
+};
+
 /**
- * @param {{ source: import("./client.js").LinkedSourceT }} props
+ * Tìm nguồn khác đang active mà conflict với `source`. Trả null nếu không có.
+ * @param {import("./client.js").LinkedSourceT} source
+ * @param {ReadonlyArray<import("./client.js").LinkedSourceT>} allSources
  */
-export function LinkedSourceCard({ source }) {
+function findActiveConflict(source, allSources) {
+  const conflicts = SYNC_CONFLICT_PAIRS[source.source_type];
+  if (!conflicts || conflicts.length === 0) return null;
+  for (const other of allSources) {
+    if (other.id === source.id) continue;
+    if (other.status !== "active") continue;
+    if (conflicts.includes(other.source_type)) return other;
+  }
+  return null;
+}
+
+/**
+ * @param {{
+ *   source: import("./client.js").LinkedSourceT,
+ *   allSources?: ReadonlyArray<import("./client.js").LinkedSourceT>,
+ * }} props
+ */
+export function LinkedSourceCard({ source, allSources = [] }) {
   const qc = useQueryClient();
-  const user = useSyncExternalStore(subscribe, getUser);
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ["sources"] });
   const invalidateSurveys = () =>
     qc.invalidateQueries({ queryKey: ["surveys"] });
   const invalidateDevices = () =>
     qc.invalidateQueries({ queryKey: ["devices", source.id] });
+  const invalidateBatches = () =>
+    qc.invalidateQueries({ queryKey: ["upload-batches"] });
 
   const [showDevices, setShowDevices] = useState(false);
-  const [verifyOpen, setVerifyOpen] = useState(false);
   // Plaintext webhook token sau rotate — show-once. State scope = card,
   // dismiss → biến mất, không persist.
   const [rotatedSecret, setRotatedSecret] = useState(
     /** @type {{ url: string, token: string } | null} */ (null),
   );
+  // Modal warning khi user bấm "Tải dữ liệu" mà có conflict pair active.
+  // Lưu label + type của nguồn đối thủ để hiển thị trong nội dung modal.
+  const [conflictModal, setConflictModal] = useState(
+    /** @type {{ label: string, type: string } | null} */ (null),
+  );
+  // Confirm modals (thay window.confirm).
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmRotateOpen, setConfirmRotateOpen] = useState(false);
 
   const isChirpstack = source.source_type === "chirpstack";
-
-  const contributeM = useMutation({
-    mutationFn: async (/** @type {boolean} */ enabled) => {
-      const updated = await patchSource(source.id, {
-        contribute_to_community: enabled,
-      });
-      // Option (a): vừa bật contribute → tự sync để pull data MỚI. Data CŨ
-      // đã được BE backfill (quarantine→training) trong cùng PATCH
-      // transaction → invalidate ["surveys"] ngay đây để map hiện historical
-      // rows mà không phải đợi sync xong.
-      return { updated, autoSync: enabled };
-    },
-    onSuccess: ({ autoSync }) => {
-      invalidate();
-      invalidateSurveys();
-      if (autoSync) syncM.mutate();
-    },
-  });
 
   const statusM = useMutation({
     mutationFn: (/** @type {"active" | "paused"} */ status) =>
@@ -91,6 +97,7 @@ export function LinkedSourceCard({ source }) {
       invalidate();
       invalidateSurveys();
       invalidateDevices();
+      invalidateBatches();
     },
   });
 
@@ -108,16 +115,24 @@ export function LinkedSourceCard({ source }) {
   });
 
   function onDelete() {
-    if (window.confirm(tCard.confirmDelete)) deleteM.mutate();
+    setConfirmDeleteOpen(true);
   }
 
   function onRotate() {
-    if (window.confirm(tCard.confirmRotateWebhook)) rotateM.mutate();
+    setConfirmRotateOpen(true);
+  }
+
+  function onSync() {
+    const other = findActiveConflict(source, allSources);
+    if (other) {
+      setConflictModal({ label: other.label, type: other.source_type });
+      return;
+    }
+    syncM.mutate();
   }
 
   const lastSyncErr = source.last_sync_error;
   const anyPending =
-    contributeM.isPending ||
     statusM.isPending ||
     syncM.isPending ||
     deleteM.isPending ||
@@ -132,10 +147,7 @@ export function LinkedSourceCard({ source }) {
           </h3>
           <p className="text-xs text-slate-500">{source.source_type}</p>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          <StatusBadge status={source.status} />
-          <ContributeBadge on={source.contribute_to_community} />
-        </div>
+        <StatusBadge status={source.status} />
       </header>
 
       <dl className="mt-3 text-sm text-slate-600">
@@ -162,30 +174,6 @@ export function LinkedSourceCard({ source }) {
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => {
-            // Gate verify chỉ khi BẬT contribute (off→on). Tắt thì free.
-            const wantEnable = !source.contribute_to_community;
-            if (wantEnable && user && !user.email_verified) {
-              setVerifyOpen(true);
-              return;
-            }
-            contributeM.mutate(wantEnable);
-          }}
-          disabled={anyPending}
-          className={
-            "rounded-md px-3 py-1.5 text-xs font-medium shadow-sm disabled:opacity-50 " +
-            (source.contribute_to_community
-              ? "border border-slate-300 text-slate-700 hover:bg-slate-100"
-              : "bg-indigo-600 text-white hover:bg-indigo-500")
-          }
-        >
-          {source.contribute_to_community
-            ? tCard.btnContributeOff
-            : tCard.btnContributeOn}
-        </button>
-
-        <button
-          type="button"
           onClick={() =>
             statusM.mutate(source.status === "active" ? "paused" : "active")
           }
@@ -197,9 +185,16 @@ export function LinkedSourceCard({ source }) {
 
         <button
           type="button"
-          onClick={() => syncM.mutate()}
-          disabled={anyPending}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+          onClick={onSync}
+          disabled={anyPending || source.status !== "active"}
+          title={
+            source.status === "paused"
+              ? tCard.btnSyncDisabledPaused
+              : source.status === "failed"
+                ? tCard.btnSyncDisabledFailed
+                : undefined
+          }
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {syncM.isPending ? tCard.btnSyncPending : tCard.btnSyncNow}
         </button>
@@ -254,26 +249,43 @@ export function LinkedSourceCard({ source }) {
       )}
 
       <CardError
-        error={
-          contributeM.error ||
-          statusM.error ||
-          deleteM.error ||
-          rotateM.error
-        }
-        onVerifyClick={
-          contributeM.error instanceof ApiError &&
-          contributeM.error.problem.code === "email_not_verified"
-            ? () => setVerifyOpen(true)
-            : undefined
-        }
+        error={statusM.error || deleteM.error || rotateM.error}
       />
 
-      {user && (
-        <EmailVerifyModal
-          isOpen={verifyOpen}
-          email={user.email}
-          onClose={() => setVerifyOpen(false)}
-          notice={strings.auth.errors.byCode("email_not_verified")}
+      {conflictModal && (
+        <AlertModal
+          title={tCard.syncConflictTitle}
+          body={tCard.syncConflictBody(conflictModal.label, conflictModal.type)}
+          dismissLabel={tCard.syncConflictDismiss}
+          onClose={() => setConflictModal(null)}
+        />
+      )}
+
+      {confirmDeleteOpen && (
+        <ConfirmModal
+          title={tCard.btnDelete}
+          body={tCard.confirmDelete}
+          confirmLabel={tCard.btnDelete}
+          danger
+          onConfirm={() => {
+            setConfirmDeleteOpen(false);
+            deleteM.mutate();
+          }}
+          onCancel={() => setConfirmDeleteOpen(false)}
+        />
+      )}
+
+      {confirmRotateOpen && (
+        <ConfirmModal
+          title={tCard.btnRotateWebhook}
+          body={tCard.confirmRotateWebhook}
+          confirmLabel={tCard.btnRotateWebhook}
+          danger
+          onConfirm={() => {
+            setConfirmRotateOpen(false);
+            rotateM.mutate();
+          }}
+          onCancel={() => setConfirmRotateOpen(false)}
         />
       )}
     </article>
@@ -291,22 +303,6 @@ function StatusBadge({ status }) {
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
       {label}
-    </span>
-  );
-}
-
-/** @param {{ on: boolean }} props */
-function ContributeBadge({ on }) {
-  return (
-    <span
-      className={
-        "rounded-full px-2 py-0.5 text-xs font-medium " +
-        (on
-          ? "bg-indigo-100 text-indigo-800"
-          : "bg-amber-100 text-amber-800")
-      }
-    >
-      {on ? tCard.contributeOn : tCard.contributeOff}
     </span>
   );
 }
@@ -330,8 +326,8 @@ function SyncMeta({ lastSyncAt, lastSyncError }) {
   );
 }
 
-/** @param {{ error: unknown, onVerifyClick?: () => void }} props */
-function CardError({ error, onVerifyClick }) {
+/** @param {{ error: unknown }} props */
+function CardError({ error }) {
   if (!error) return null;
   if (error instanceof ApiError) {
     const code = error.problem.code ?? "";
@@ -345,15 +341,6 @@ function CardError({ error, onVerifyClick }) {
       >
         {msg}
         {code && <span className="ml-2 text-red-600">({code})</span>}
-        {onVerifyClick && (
-          <button
-            type="button"
-            onClick={onVerifyClick}
-            className="ml-3 rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-100"
-          >
-            {strings.auth.header.verifyEmailButton}
-          </button>
-        )}
       </div>
     );
   }

@@ -283,13 +283,19 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       LINKING_FERNET_KEYS: ${LINKING_FERNET_KEYS}
       STAGE2_AUTH_TOKEN: ${LORA_STAGE2_AUTH_TOKEN:?LORA_STAGE2_AUTH_TOKEN required in .env}
+      # Worker gọi ml-service /admin/reload sau khi retrain_ml_model atomic-swap
+      # joblib xong. Default trỏ vào service ml-service trong docker network.
+      STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-http://ml-service:8001}
     volumes:
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
       # Bind-mount script + output dir (precompute_rssi_heatmap.py qua subprocess).
       - ./scripts:/app/scripts:ro
       - ./apps/web-app/public/coverage:/app/apps/web-app/public/coverage:rw
       # Stage 2 XGBoost model artifact (joblib) — script load qua --stage2-model.
-      - ./services/ml-service/data:/app/services/ml-service/data:ro
+      # RW vì admin retrain_ml task ghi extra_trees_model.joblib.new + rename.
+      - ./services/ml-service/data:/app/services/ml-service/data:rw
+      # CSV preprocessed dùng để train_extra_trees.py (retrain_ml Celery task).
+      - ./services/ml-service/reference_wireless:/app/services/ml-service/reference_wireless:ro
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
     command:

@@ -53,7 +53,30 @@ export function CoverageRebuildPanel() {
   const historyQ = useQuery({
     queryKey: ["admin", "coverage", "rebuild", "history"],
     queryFn: listRecentCoverageRebuilds,
+    // Khi chưa có activeJobId (vừa reload trang), nếu lịch sử top-row đang
+    // queued/running thì poll history 5s để badge tự refresh trước khi
+    // pickup effect dưới kịp setActiveJobId. Sau pickup, jobQ poll riêng.
+    refetchInterval: (q) => {
+      const top = q.state.data?.items?.[0];
+      const live = top && (top.status === "queued" || top.status === "running");
+      return live ? 5000 : false;
+    },
   });
+
+  // Reload trang sau khi enqueue job → activeJobId mất theo component state.
+  // Nếu top-row của history đang queued/running → tự pickup làm activeJobId,
+  // jobQ resume poll. Chỉ chạy khi chưa có activeJobId để không override khi
+  // user enqueue job mới (top-row mới còn chưa kịp xuất hiện ở history).
+  const topJob = historyQ.data?.items?.[0];
+  const topId = topJob?.id ?? null;
+  const topStatus = topJob?.status;
+  useEffect(() => {
+    if (activeJobId) return;
+    if (!topId) return;
+    if (topStatus === "queued" || topStatus === "running") {
+      setActiveJobId(topId);
+    }
+  }, [activeJobId, topId, topStatus]);
 
   // Khi job vừa kết thúc → invalidate history + composite geojson cache.
   const status = jobQ.data?.status;
@@ -73,7 +96,15 @@ export function CoverageRebuildPanel() {
         <button
           type="button"
           onClick={() => enqueueM.mutate()}
-          disabled={enqueueM.isPending || jobQ.data?.status === "running" || jobQ.data?.status === "queued"}
+          disabled={
+            enqueueM.isPending ||
+            jobQ.data?.status === "running" ||
+            jobQ.data?.status === "queued" ||
+            // Bịt cửa sổ ngắn sau reload: history đã báo có job queued/running
+            // nhưng pickup effect chưa kịp mount jobQ — vẫn block enqueue.
+            topStatus === "running" ||
+            topStatus === "queued"
+          }
           className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
           {enqueueM.isPending ? t.btnPending : t.btn}
@@ -135,22 +166,24 @@ function JobStatusView({ job }) {
       {isDone && Object.keys(job.per_gw_log).length > 0 && (
         <details className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <summary className="cursor-pointer font-medium text-slate-700">{t.perGwHeading}</summary>
-          <table className="mt-2 w-full text-[11px]">
-            <thead className="text-left text-slate-500">
-              <tr>
-                {t.perGwHeaders.map((h) => (
-                  <th key={h} className="py-1 pr-2">
-                    {h}
-                  </th>
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full min-w-[320px] text-[11px]">
+              <thead className="text-left text-slate-500">
+                <tr>
+                  {t.perGwHeaders.map((h) => (
+                    <th key={h} className="py-1 pr-2">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(job.per_gw_log).map(([code, info]) => (
+                  <PerGwRow key={code} code={code} info={info} />
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(job.per_gw_log).map(([code, info]) => (
-                <PerGwRow key={code} code={code} info={info} />
-              ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </details>
       )}
     </div>
@@ -186,34 +219,36 @@ function HistoryView({ query }) {
   return (
     <div className="mt-4 text-xs">
       <div className="mb-1 font-medium text-slate-700">{t.historyHeading}</div>
-      <table className="w-full">
-        <thead className="text-left text-[11px] text-slate-500">
-          <tr>
-            {t.historyHeaders.map((h) => (
-              <th key={h} className="py-1 pr-2 font-normal">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {query.data.items.map((j) => (
-            <tr key={j.id} className="border-t border-slate-200">
-              <td className="py-1 pr-2 text-slate-600">
-                {new Date(j.triggered_at).toLocaleString("vi-VN")}
-              </td>
-              <td className="py-1 pr-2">
-                <StatusBadge status={j.status} />
-              </td>
-              <td className="py-1 pr-2 text-slate-700">{j.gateways_rebuilt}</td>
-              <td className="py-1 pr-2 text-slate-700">{j.gateways_skipped}</td>
-              <td className="py-1 pr-2 text-red-700">
-                {j.error_text ? j.error_text.split("\n")[0].slice(0, 80) : ""}
-              </td>
+      <div className="max-h-72 overflow-auto">
+        <table className="w-full min-w-[480px]">
+          <thead className="text-left text-[11px] text-slate-500">
+            <tr>
+              {t.historyHeaders.map((h) => (
+                <th key={h} className="py-1 pr-2 font-normal">
+                  {h}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {query.data.items.map((j) => (
+              <tr key={j.id} className="border-t border-slate-200">
+                <td className="py-1 pr-2 text-slate-600">
+                  {new Date(j.triggered_at).toLocaleString("vi-VN")}
+                </td>
+                <td className="py-1 pr-2">
+                  <StatusBadge status={j.status} />
+                </td>
+                <td className="py-1 pr-2 text-slate-700">{j.gateways_rebuilt}</td>
+                <td className="py-1 pr-2 text-slate-700">{j.gateways_skipped}</td>
+                <td className="py-1 pr-2 text-red-700">
+                  {j.error_text ? j.error_text.split("\n")[0].slice(0, 80) : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

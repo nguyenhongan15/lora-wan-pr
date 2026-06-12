@@ -9,16 +9,20 @@
 
 export const strings = {
   app: {
-    title: "LoRa MAP",
+    title: "LPWAN MAP",
     subtitle: "v2 — Đà Nẵng pilot. Stage 1 + 200 survey points.",
     tabs: {
+      home: "Trang chủ",
       map: "Bản đồ điểm đo",
       heatmap: "Bản đồ phủ sóng",
-      predict: "Dự đoán điểm",
-      bulk: "Tra cứu hàng loạt",
-      admin: "Gateway list",
-      sources: "Nguồn dữ liệu",
+      predict: "Dự đoán",
+      admin: "Gateway",
+      sources: "Dữ liệu của tôi",
       adminPanel: "Quản trị",
+    },
+    navMenu: {
+      open: "Mở menu",
+      close: "Đóng menu",
     },
     errorBoundary: {
       title: "Ứng dụng gặp lỗi không mong muốn",
@@ -28,7 +32,190 @@ export const strings = {
     notFound: {
       title: "Không tìm thấy trang",
       hint: "Tab này không tồn tại hoặc bạn không có quyền truy cập.",
-      backHome: "Về Bản đồ điểm đo",
+      backHome: "Về Trang chủ",
+    },
+  },
+
+  landing: {
+    hero: {
+      eyebrow: "Bản đồ ước lượng phủ sóng · Đà Nẵng",
+      titleStart: "Bản đồ ",
+      titleEm: "ước lượng",
+      titleEnd: " chất lượng tín hiệu cho mạng không dây LPWAN",
+      lede:
+        "Tổng hợp dữ liệu khảo sát thực địa, ước lượng RSSI/SNR bằng mô hình ITU-R P.1812, hiệu chỉnh từ khảo sát, dự đoán chất lượng tín hiệu trong khu vực Đà Nẵng.",
+      ctaPrimary: "Mở bản đồ ngay",
+      ctaSecondary: "Cách hoạt động",
+      stats: [
+        { v: "1000+", k: "Điểm khảo sát thực địa" },
+        { v: "10+", k: "Gateway hoạt động" },
+        { v: "Đà Nẵng", k: "Khu vực thí điểm" },
+      ],
+      mapLive: "Live · Đà Nẵng",
+      mapLayer: "Phủ sóng · Kerlink iStation AEC",
+      mapLegendTitle: "RSSI (dBm)",
+      mockUrl: "lora-estimate-map/#page=heatmap",
+    },
+    how: {
+      eyebrow: "Cách hoạt động",
+      title: "Từ điểm đo đến ước lượng phủ sóng toàn thành phố.",
+      lede:
+        "Hệ thống thu thập dữ liệu thực địa từ nhiều nguồn, chuẩn hóa, tính toán mô hình ước lượng, và cho phép truy vấn tại tại mọi địa điểm trên địa bàn thành phố Đà Nẵng.",
+      steps: [
+        {
+          num: "01",
+          title: "Thu thập",
+          desc: "Dữ liệu khảo sát thực tế nạp từ ChirpStack webhook, Lpwanmapper hoặc upload CSV/JSON thủ công.",
+        },
+        {
+          num: "02",
+          title: "Chuẩn hóa",
+          desc: "Lọc và xử lý dữ liệu thô để chuẩn hóa định dạng, hiệu chỉnh sai số thiết bị.",
+        },
+        {
+          num: "03",
+          title: "Ước lượng",
+          desc: "Mô hình lan truyền ITU-R P.1812 có hiệu chỉnh bằng dữ liệu khảo sát, tính toán và vẽ ra bản đồ ước lượng vùng phủ tín hiệu.",
+        },
+        {
+          num: "04",
+          title: "Kết quả",
+          desc: "Cung cấp bản đồ trực quan về vùng phủ mạng không dây LPWAN trên địa bàn thành phố Đà Nẵng, cùng công cụ dự đoán tín hiệu để tham khảo trước khi lắp đặt thiết bị mạng.",
+        },
+      ],
+    },
+    features: {
+      eyebrow: "Tính năng",
+      title: "Công cụ cho khảo sát và triển khai LPWAN tại Đà Nẵng.",
+      lede:
+        "Từ bản đồ tương tác đến tra cứu, dự đoán,... hệ thống hỗ trợ cho nghiên cứu, khảo sát và tham khảo dữ liệu cho mọi tệp người dùng.",
+      items: [
+        {
+          num: "F · 01",
+          title: "Bản đồ phủ sóng ước lượng",
+          desc: "Bản đồ nhiệt ước lượng chất lượng tín hiệu RSSI tính bằng ITU-R P.1812, hiệu chỉnh từ dữ liệu khảo sát thực địa. Hiển thị tổng hợp tất cả gateway hoặc cô lập từng vùng phủ.",
+          cta: "Mở Bản đồ phủ sóng",
+          target: "heatmap",
+          mockUrl: "lora-estimate-map/#page=heatmap",
+        },
+        {
+          num: "F · 02",
+          title: "Bản đồ điểm đo khảo sát thực địa",
+          desc: "Mỗi marker là một phép đo thực tế, hiển thị RSSI/SNR/SF và gateway phục vụ. Nhấn vào marker để xem chi tiết thông tin.",
+          cta: "Mở Bản đồ điểm đo",
+          target: "map",
+          mockUrl: "lora-estimate-map/#page=map",
+        },
+        {
+          num: "F · 03",
+          title: "Dự đoán tín hiệu tại vị trí cụ thể",
+          desc: "Chọn vị trí trên bản đồ hoặc nhập địa chỉ địa điểm trên địa bàn thành phố Đà Nẵng, hệ thống sẽ phân tích và đưa ra kết quả dự đoán về chất lượng tín hiệu tại vị trí đó.",
+          cta: "Mở Dự đoán",
+          target: "predict",
+          mockUrl: "lora-estimate-map/#page=predict",
+        },
+        {
+          num: "F · 04",
+          title: "Tra cứu theo địa chỉ hoặc GPS",
+          desc: "Nhập địa chỉ - hệ thống geocode qua chuỗi Nominatim / VietMap / Goong / Google rồi dự đoán RSSI/SNR/SF tại điểm đó. Cũng hỗ trợ lấy vị trí GPS hiện tại của trình duyệt.",
+          cta: "Mở Tra cứu địa chỉ",
+          target: "predict",
+          mockUrl: "lora-estimate-map/#page=predict",
+        },
+        {
+          num: "F · 05",
+          title: "Quản lý nguồn dữ liệu cá nhân",
+          desc: "Liên kết tài khoản ChirpStack/Lpwanmapper để tải dữ liệu lên hệ thống hoặc upload CSV/JSON thủ công,... để xem trực quan dữ liệu của mình trên bản đồ.",
+          cta: "Mở Dữ liệu của tôi",
+          target: "sources",
+          subTab: "overview",
+          mockUrl: "lora-estimate-map/#page=sources&tab=overview",
+        },
+        {
+          num: "F · 06",
+          title: "Đóng góp dữ liệu cho bản đồ chung",
+          desc: "Chia sẻ dữ liệu khảo sát của cá nhân vào bản đồ công khai, yêu cầu xác thực email. Càng nhiều dữ liệu, mô hình hiệu chỉnh phủ sóng ước lượng càng chính xác.",
+          cta: "Đóng góp dữ liệu",
+          target: "sources",
+          subTab: "manage",
+          mockUrl: "lora-estimate-map/#page=sources&tab=manage",
+        },
+      ],
+    },
+    faq: {
+      eyebrow: "Câu hỏi thường gặp",
+      title: "Trước khi bắt đầu.",
+      lede:
+        "Một vài câu hỏi thường gặp về công nghệ LPWAN, phạm vi hoạt động, mô hình ước lượng và dữ liệu.",
+      items: [
+        {
+          q: "Mạng không dây LPWAN là gì?",
+          a: "LPWAN (Low-Power Wide-Area Network — mạng diện rộng tiêu thụ năng lượng thấp) là họ công nghệ vô tuyến thiết kế cho thiết bị IoT gửi gói tin nhỏ trên khoảng cách xa (đơn vị km), pin dùng được nhiều năm. Các chuẩn phổ biến: LoRaWAN, Sigfox, NB-IoT.\n\nLoRa (Long Range) là kỹ thuật điều chế lớp vật lý do Semtech phát triển, dùng Chirp Spread Spectrum — CSS (tín hiệu quét tần số dạng chirp thay vì sóng mang cố định). Nhờ CSS, máy thu LoRa đạt độ nhạy tới ~ −148 dBm, kháng nhiễu Doppler và đa đường (multipath) tốt. Tham số Spreading Factor (SF7 → SF12) đánh đổi giữa tốc độ và khoảng cách: SF càng cao → đi xa hơn nhưng tốc độ chậm hơn và thời gian phát (time-on-air) dài hơn.",
+        },
+        {
+          q: "Phạm vi hoạt động của hệ thống là gì?",
+          a: "Phạm vi địa lý: tập trung vào địa giới thành phố Đà Nẵng (Hải Châu, Thanh Khê, Sơn Trà, Ngũ Hành Sơn, Liên Chiểu, Cẩm Lệ và huyện Hòa Vang). Truy vấn ngoài khu vực này có thể trả về kết quả không chính xác do thiếu dữ liệu khảo sát và mô hình địa hình (DSM — Digital Surface Model).\n\nPhạm vi kỹ thuật: tối ưu cho LoRaWAN băng tần AS923-2 áp dụng tại Việt Nam (920–923 MHz). Hệ thống tính RSSI/SNR cho cả uplink (thiết bị → gateway) và downlink (gateway → thiết bị), hỗ trợ SF7-SF12 và phân tích bottleneck giữa hai chiều. Các công nghệ LPWAN khác (NB-IoT, Sigfox) chưa được hỗ trợ.",
+        },
+        {
+          q: "Mô hình ước lượng hoạt động thế nào? Có đáng tin cậy không?",
+          a: "Mô hình lan truyền chính là ITU-R P.1812 — mô hình truyền sóng có nhận thức địa hình (terrain-aware), tính suy hao đường truyền dựa trên DSM (gồm địa hình thực + tòa nhà + tán cây). DSM được làm dày bằng land cover ESA WorldCover và polygon nhà từ OSM/Google ở những nơi có dữ liệu. Sau đó hệ thống hiệu chỉnh per-gateway noise floor (sàn nhiễu riêng từng gateway) và bias từ tập dữ liệu khảo sát thực địa.\n\nĐộ tin cậy: Có mô hình đáng tin cậy do được hiệu chỉnh trực tiếp từ dữ liệu khảo sát, nghĩa là càng nhiều dữ liệu khảo sát thì mô hình ước lượng càng chi tiết. Mô hình tiếp tục cải thiện khi có thêm dữ liệu đóng góp.",
+        },
+        {
+          q: "Dự án này làm được gì?",
+          a: "Năm nhóm chức năng chính:\n• Cung cấp bản đồ ước lượng chất lượng tín hiệu mạng LPWAN trên địa bàn thành phố Đà Nẵng để làm nguồn tham khảo.\n• Bản đồ điểm đo khảo sát thực địa với RSSI/SNR/SF và gateway phục vụ cho biết tập dữ liệu khảo sát như thế nào trên địa bàn thành phố.\n• Dự đoán chất lượng tín hiệu - click lên bản đồ hoặc nhập địa chỉ cụ thể hoặc dùng GPS để xem dự đoán về chất lượng tín hiệu tại vị trí quan tâm.\n• Quản lý nguồn dữ liệu cá nhân: liên kết ChirpStack/Lpwanmapper hoặc upload CSV/JSON, có thể đóng vai trò là nơi lưu trữ dữ liệu khảo sát.\n• Đóng góp dữ liệu vào dataset công khai để cải thiện mô hình chung, tăng độ tin cậy của mô hình cho cộng đồng người dùng.",
+        },
+        {
+          q: "Dữ liệu khảo sát đến từ đâu, có được kiểm duyệt không?",
+          a: "Ba nguồn:\n• ChirpStack webhook của người dùng đẩy gói tin qua webhook đến dự án.\n• Liên kết qua api Lpwanmapper.\n• Upload CSV/JSON thủ công.\n\nMỗi batch dữ liệu người dùng đóng góp mới đều ở trạng thái chờ duyệt và xem xét trước khi đưa vào dataset công khai dùng cho mô hình ước lượng.",
+        },
+        {
+          q: "Tôi có thể đóng góp dữ liệu thế nào?",
+          a: "Tạo tài khoản và xác thực email, sau đó vào mục \"Dữ liệu của tôi\":\n• Upload CSV/JSON trực tiếp tại \"Tải lên CSV/JSON\".\n• Hoặc liên kết tài khoản ChirpStack (webhook + API key) / Lpwanmapper để dữ liệu tự đồng bộ.\n\nBatch của bạn xuất hiện ở \"Quản lý dữ liệu\" với trạng thái chờ duyệt. Khi được duyệt, dữ liệu khảo sát của bạn sẽ tham gia vào dataset chung dùng để hiệu chỉnh cho mô hình. Càng nhiều dữ liệu khảo sát, bản đồ phủ sóng càng sát thực tế.",
+        },
+        {
+          q: "Có cần đăng nhập để xem bản đồ không?",
+          a: "Không. Bản đồ phủ sóng ước lượng, bản đồ điểm đo khảo sát, dự đoán tín hiệu tại điểm và tra cứu theo địa chỉ đều mở công khai. Chỉ các thao tác liên quan đến dữ liệu cá nhân (xem nguồn đã liên kết, upload, đóng góp, lịch sử batch) mới yêu cầu tài khoản.",
+        },
+      ],
+    },
+    cta: {
+      title: "Mở bản đồ ước lượng phủ sóng cho Đà Nẵng.",
+      desc: "Tham khảo chất lượng tín hiệu, dự đoán tín hiệu cho vị trí địa lý bạn quan tâm, hoặc đóng góp dữ liệu khảo sát của bạn.",
+      primary: "Mở bản đồ ngay",
+      secondary: "Đăng nhập đóng góp",
+      secondaryLoggedIn: "Mở Nguồn dữ liệu",
+    },
+    footer: {
+      desc:
+        "Bản đồ ước lượng phủ vùng phủ sóng cho mạng không dây LPWAN.",
+      cols: [
+        {
+          h: "Tính năng",
+          items: [
+            { label: "Bản đồ điểm đo", target: "map" },
+            { label: "Bản đồ phủ sóng", target: "heatmap" },
+            { label: "Dự đoán tín hiệu", target: "predict" },
+            { label: "Danh sách Gateway", target: "admin" },
+          ],
+        },
+        {
+          h: "Tham khảo",
+          items: [
+            { label: "ITU-R P.1812-7", target: null },
+            { label: "AS923-2 VN", target: null },
+            { label: "ChirpStack v4", target: null },
+            { label: "DSM Đà Nẵng", target: null },
+          ],
+        },
+        {
+          h: "Tài khoản",
+          items: [
+            { label: "Quản lý dữ liệu", target: "sources" },
+          ],
+        },
+      ],
+      copyright: "© 2026 LoRa Estimate Map · Đà Nẵng, Việt Nam",
+      version: "Đà Nẵng pilot · build 2026.06.11",
     },
   },
 
@@ -195,6 +382,10 @@ export const strings = {
     },
     minsf: {
       panelTitle: "Bản đồ phủ sóng",
+      toggle: {
+        open: "Mở bảng phủ sóng",
+        close: "Đóng bảng",
+      },
       selector: {
         label: "Chọn gateway",
         placeholder: "— Chọn gateway —",
@@ -212,10 +403,13 @@ export const strings = {
         "Không tải được dữ liệu phủ sóng. Gateway này có thể chưa được precompute.",
       loadEmpty:
         "Chưa có dữ liệu phủ sóng cho gateway này — chạy lại `precompute_minsf.py`.",
-      model: "Mô hình: ITU-R P.1812 + P.2108 (clutter)",
     },
     estimate: {
       panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
+      toggle: {
+        open: "Mở bảng ước lượng",
+        close: "Đóng bảng",
+      },
       selector: {
         label: "Hiển thị theo gateway",
         placeholder: "Tất cả gateway (tổng hợp)",
@@ -231,17 +425,14 @@ export const strings = {
         6: "< -120 dBm",
       },
       notCovered: "< -130 (không phủ)",
-      
       loadError:
-        "Không tải được dữ liệu RSSI tổng hợp.",
-      model:
-        "Mô hình: ITU-R P.1812 + DSM + per-gw NF + Stage 2 XGBoost (clip ±15 dB)",
+        "Không tải được dữ liệu.",
     },
     urlPositionLabel: "Vị trí từ URL",
     filters: {
       contributor: {
         legend: "Hiển thị",
-        community: "Cộng đồng",
+        community: "Bản đồ chung",
         me: "Của tôi",
         meLoggedOutHint: "Đăng nhập để xem dữ liệu của riêng bạn.",
         user: "Người dùng cụ thể",
@@ -325,7 +516,15 @@ export const strings = {
       clear: "Xoá",
     },
     predictPanel: {
-      title: "Dự đoán điểm",
+      title: "Dự đoán",
+      toggle: {
+        open: "Mở bảng dự đoán",
+        close: "Đóng bảng",
+      },
+      subTabs: {
+        single: "Click chọn",
+        address: "Nhập địa chỉ",
+      },
       hint: "Click lên bản đồ để chọn điểm",
       latLabel: "Vĩ độ",
       lngLabel: "Kinh độ",
@@ -334,6 +533,14 @@ export const strings = {
       submitting: "Đang dự đoán…",
       error: "Dự đoán thất bại — thử lại.",
       clearAll: "Xoá tất cả điểm dự đoán",
+      addressTab: {
+        label: "Địa chỉ",
+        placeholder: "VD: 32 Cao Thắng, Hải Châu, Đà Nẵng",
+        hint: "Nhập địa chỉ cụ thể vị trí cần dự đoán.",
+        submit: "Tìm và dự đoán",
+        submitting: "Đang tra cứu…",
+        error: "Tra cứu thất bại — thử lại.",
+      },
     },
   },
 
@@ -400,10 +607,10 @@ export const strings = {
       colSnr: "SNR",
       colMargin: "Margin",
       colStatus: "Trạng thái",
-      bottleneckLabel: "Nút thắt",
+      bottleneckLabel: "Nghẽn",
       bottleneck: {
-        uplink: "Chiều LÊN — device TX/anten là điểm yếu.",
-        downlink: "Chiều XUỐNG — device RX là điểm yếu.",
+        uplink: "Uplink — device TX/anten là điểm yếu.",
+        downlink: "Downlink — device RX là điểm yếu.",
         both_ok: "Cân bằng — cả 2 chiều đều khoẻ.",
       },
     },
@@ -461,68 +668,9 @@ export const strings = {
     createPending: "Đang tạo…",
     etagMismatchHint: "Đóng dialog và mở lại để lấy phiên bản mới nhất.",
     etagMissingAlert: "Server không trả ETag. Reload và thử lại.",
+    etagMissingTitle: "Không thể lưu",
     ifMatchLabel: "If-Match",
     modalCloseAria: "Đóng",
-  },
-
-  bulkLookup: {
-    title: "Tra cứu phủ sóng hàng loạt (CSV)",
-    description:
-      "Tải lên CSV chứa danh sách địa chỉ hoặc tọa độ. Mỗi dòng trả về 1 kết quả độc lập — 1 lỗi không làm hỏng cả batch.",
-    fields: {
-      file: "File CSV",
-      sf: "Spreading Factor",
-      sfAuto: "Tự động",
-      csv: "Hoặc dán CSV trực tiếp",
-    },
-    csvHint:
-      "Cột hợp lệ: label, address, latitude, longitude. Mỗi dòng cần address HOẶC (latitude+longitude).",
-    /** @param {number} n */
-    previewCount: (n) => `Sẽ tra cứu ${n} dòng (tối đa 500).`,
-    submit: "Tra cứu",
-    submitPending: "Đang tra cứu…",
-    parseErrorTitle: "Parse error:",
-    sampleCsv: "Dùng CSV mẫu",
-    download: "Tải kết quả CSV",
-    viewOnMap: "Xem trên bản đồ",
-    viewOnMapEmpty: "Không có điểm hợp lệ để hiển thị",
-    reset: "Xoá kết quả",
-    summary: {
-      /** @param {number} ok @param {number} err */
-      counts: (ok, err) => `${ok} thành công · ${err} lỗi`,
-    },
-    table: {
-      headers: ["#", "Label", "Địa chỉ / Toạ độ", "Trạng thái", "Nút thắt", "RSSI", "SNR", "SF gợi ý"],
-      ok: "OK",
-      error: "Lỗi",
-    },
-    bottleneck: {
-      uplink: "Lên",
-      downlink: "Xuống",
-      both_ok: "Cân bằng",
-    },
-    parse: {
-      headerRequired: "CSV cần ít nhất header + 1 dòng dữ liệu.",
-      noColumn: "CSV cần ít nhất 1 cột: address, latitude hoặc longitude.",
-      /** @param {number} line @param {number} got @param {number} want */
-      colCountMismatch: (line, got, want) =>
-        `Dòng ${line}: số cột ${got} > header ${want}`,
-      noRecord: "Không có dòng nào hợp lệ.",
-      /** @param {number} line @param {string} reason */
-      rowError: (line, reason) => `Dòng ${line}: ${reason}`,
-      /** @param {number} n */
-      tooManyRows: (n) =>
-        `CSV có ${n} dòng — vượt giới hạn 500. Hãy chia nhỏ file.`,
-      /** @param {string} raw */
-      latOutOfRange: (raw) => `latitude "${raw}" ngoài khoảng [-90, 90]`,
-      /** @param {string} raw */
-      lngOutOfRange: (raw) => `longitude "${raw}" ngoài khoảng [-180, 180]`,
-      partialCoords:
-        "có latitude nhưng thiếu longitude (hoặc ngược lại) — cần đủ cặp.",
-      emptyRow:
-        "không có address và cũng không có cặp latitude+longitude hợp lệ.",
-    },
-    staleResults: "Bảng hiển thị kết quả của CSV trước. Bấm Tra cứu để cập nhật.",
   },
 
   auth: {
@@ -597,7 +745,7 @@ export const strings = {
       confirmTitle: "Xác thực email",
       confirmPending: "Đang xác thực…",
       confirmSuccess:
-        "Đã xác thực email thành công! Bạn có thể quay về trang chủ và đóng góp cho cộng đồng.",
+        "Đã xác thực email thành công! Bạn có thể quay về trang chủ và tiếp tục.",
       confirmGoHome: "Về trang chủ",
       missingTokenTitle: "Link không hợp lệ",
       missingTokenDetail:
@@ -635,13 +783,17 @@ export const strings = {
       syncHeading: "Đồng bộ toàn cục",
       rebuildHeading: "Bản đồ ước lượng",
       gatewaysHeading: "Quản lý gateway",
+      trainingHeading: "Dữ liệu đã duyệt",
+      retrainHeading: "Mô hình ML",
       sidebar: {
         stats: "Tổng quan",
         review: "Phê duyệt",
+        training: "Dữ liệu đã duyệt",
         users: "Người dùng",
         gateways: "Gateway",
         sync: "Đồng bộ nguồn",
         rebuild: "Bản đồ ước lượng",
+        retrain: "Mô hình ML",
       },
     },
     stats: {
@@ -714,10 +866,10 @@ export const strings = {
         mapHint:
           "Click vào marker để xem chi tiết 1 điểm. Màu sắc theo RSSI (xanh = mạnh, đỏ = rất yếu).",
         mapLegend: {
-          strong: "≥ −100 dBm",
-          medium: "−100 đến −115",
-          weak: "−115 đến −120",
-          veryWeak: "< −120",
+          strong: "≥ -100 dBm",
+          medium: "-100 đến -115",
+          weak: "-115 đến -120",
+          veryWeak: "< -120",
         },
         mapNoPoints: "Batch này không còn điểm nào chờ duyệt.",
         confirm: {
@@ -796,7 +948,7 @@ export const strings = {
         `${rebuilt} gateway rebuilt, ${skipped} gateway skipped (no new data).`,
       noNewData:
         "Không gateway nào có gói tin mới — toàn bộ skipped, map giữ nguyên.",
-      historyHeading: "5 lần rebuild gần nhất",
+      historyHeading: "Lịch sử rebuild",
       historyEmpty: "Chưa có lần rebuild nào.",
       historyHeaders: ["Thời điểm", "Trạng thái", "Rebuilt", "Skipped", "Lỗi"],
       perGwHeading: "Chi tiết theo gateway",
@@ -812,6 +964,88 @@ export const strings = {
         no_new_data: "Không có gói tin mới",
       },
       errorRequest: "Không tạo được job rebuild.",
+    },
+    training: {
+      title: "Dữ liệu đã duyệt vào bản đồ",
+      subtitle:
+        "Truy vết các batch đã được duyệt vào ts.survey_training. Xoá 1 batch để rút lại quyết định duyệt — sau đó cần rebuild bản đồ + retrain mô hình để ảnh hưởng lan ra.",
+      loading: "Đang tải danh sách batch…",
+      empty:
+        "Chưa có batch nào trong training (hoặc toàn bộ là legacy seed/sync data trước 2026-06-11).",
+      errorLoad: "Không tải được danh sách batch.",
+      headers: [
+        "Người gửi",
+        "Loại",
+        "Tên file / nguồn",
+        "Upload lúc",
+        "Số điểm",
+        "Duyệt lần cuối",
+        "",
+      ],
+      btnDelete: "Xoá khỏi training",
+      btnPending: "Đang xoá…",
+      kindLabel: {
+        csv: "CSV",
+        json: "JSON",
+        sync_lpwanmapper: "LPWAN Mapper",
+        sync_chirpstack: "ChirpStack",
+      },
+      kindUnknown: "Không rõ",
+      legacyHint:
+        "Batch legacy (trước 2026-06-11) không trace được — đã ẩn khỏi danh sách.",
+      confirm: {
+        title: "Xác nhận xoá batch khỏi training",
+        /** @param {string} who @param {number} n */
+        message: (who, n) =>
+          `Xoá ${n} điểm đã duyệt của batch (${who}) khỏi ts.survey_training? Quarantine giữ nguyên — không thể undo trừ khi admin duyệt lại.`,
+        cancel: "Huỷ",
+        confirm: "Xoá",
+      },
+      /** @param {number} n */
+      deletedToast: (n) => `Đã xoá ${n} điểm khỏi training.`,
+      followUp: {
+        title: "Tiếp tục với Rebuild + Retrain?",
+        /** @param {number} n */
+        message: (n) =>
+          `Đã xoá ${n} điểm khỏi training. Để bản đồ ước lượng + dự đoán ML phản ánh thay đổi này, bạn nên chạy lại cả 2 job (mỗi job độc lập, có thể chạy ngay).`,
+        runBoth: "Chạy Rebuild + Retrain",
+        runRebuildOnly: "Chỉ chạy Rebuild",
+        runRetrainOnly: "Chỉ chạy Retrain",
+        skip: "Để sau",
+        enqueuedToast: "Đã enqueue job. Mở tab tương ứng để theo dõi tiến độ.",
+      },
+      errorDelete: "Xoá thất bại.",
+    },
+    retrain: {
+      title: "Retrain mô hình ML",
+      subtitle:
+        "Train lại Extra Trees Regressor cho /coverage/predict. Sau khi xong, ml-service hot-reload joblib (không cần restart container). Mỗi lần train ~vài phút, tuỳ kích thước dataset.",
+      btn: "Retrain ngay",
+      btnPending: "Đang chạy…",
+      statusQueued: "Đang chờ worker",
+      statusRunning: "Đang chạy",
+      statusSucceeded: "Hoàn tất",
+      statusFailed: "Thất bại",
+      /** @param {number|null} rows */
+      summary: (rows) =>
+        rows == null
+          ? "Train xong (chưa đọc được metrics)."
+          : `Train xong trên ${rows.toLocaleString("vi-VN")} điểm đo.`,
+      metricsHeading: "Metrics",
+      metricsLabel: {
+        rmse: "RMSE",
+        mae: "MAE",
+        r2: "R²",
+        feature_count: "Số feature",
+        ml_service_reload: "Hot-reload ml-service",
+      },
+      artifactLabel: "Artifact",
+      historyHeading: "5 lần retrain gần nhất",
+      historyEmpty: "Chưa có lần retrain nào.",
+      historyHeaders: ["Thời điểm", "Trạng thái", "Số điểm", "RMSE", "Lỗi"],
+      errorRequest: "Không tạo được job retrain.",
+      csvGapWarning:
+        "⚠ Lưu ý: pipeline retrain hiện đọc từ CSV preprocessed `devices_history_full.csv`, chưa nối trực tiếp với ts.survey_training. Nên xoá batch + retrain có thể KHÔNG làm thay đổi joblib output. Đây là gap đã biết, đang chờ wire data-flow.",
     },
     errors: {
       errorCodeLabel: "Mã lỗi",
@@ -838,12 +1072,53 @@ export const strings = {
 
   sources: {
     page: {
-      title: "Nguồn dữ liệu của tôi",
+      title: "Dữ liệu của tôi",
       subtitle:
-        "Liên kết tài khoản bên ngoài (vd. lpwanmapper, ChirpStack) để đóng góp dữ liệu khảo sát lên bản đồ cộng đồng.",
-      empty: "Chưa liên kết nguồn nào. Dùng form bên trên để thêm.",
+        "Quản lý nguồn dữ liệu liên kết và các file đã đóng góp.",
+      empty: "Chưa liên kết nguồn nào. Vào mục \"Thêm nguồn mới\" bên trái.",
       loading: "Đang tải danh sách…",
       errorLoad: "Không tải được danh sách nguồn.",
+    },
+    sidebar: {
+      sectionLabel: "Mục",
+      overview: "Tổng quan",
+      addSource: "Thêm nguồn mới",
+      linkedSources: "Nguồn đã liên kết",
+      uploadFile: "Tải lên CSV/JSON",
+      dataManagement: "Quản lý dữ liệu",
+      uploadHistory: "Lịch sử upload",
+    },
+    overview: {
+      title: "Tổng quan",
+      subtitle: "Tóm tắt nguồn dữ liệu và batch đã tải lên.",
+      loading: "Đang tải…",
+      /** @param {number} n */
+      linkedCount: (n) => `${n} nguồn đã liên kết`,
+      linkedEmpty: "Chưa liên kết nguồn nào.",
+      dataHeading: "Dữ liệu đã tải lên",
+      dataEmpty: "Chưa có dữ liệu nào.",
+      /** @param {number} batches @param {number} points */
+      dataSummary: (batches, points) =>
+        `${batches} batch · ${points} điểm`,
+      /** @param {number} pub @param {number} pend @param {number} priv */
+      dataBreakdown: (pub, pend, priv) =>
+        `${pub} công khai · ${pend} chờ duyệt · ${priv} riêng tư`,
+    },
+    sections: {
+      addTitle: "Thêm nguồn mới",
+      addSubtitle:
+        "Liên kết tài khoản bên ngoài (lpwanmapper, ChirpStack) để pull dữ liệu định kỳ.",
+      linkedTitle: "Nguồn đã liên kết",
+      linkedSubtitle: "Các nguồn đang đồng bộ về tài khoản của bạn.",
+      uploadTitle: "Tải lên CSV/JSON",
+      uploadSubtitle:
+        "Tải file CSV hoặc JSON chứa phép đo LoRa. Mặc định riêng tư; muốn đóng góp cộng đồng → vào mục \"Quản lý dữ liệu\".",
+      manageTitle: "Quản lý dữ liệu",
+      manageSubtitle:
+        "Các batch còn sống. Bấm \"Đóng góp\" để đưa 1 batch vào bản đồ chung, hoặc \"Xoá\" để gỡ khỏi tài khoản.",
+      historyTitle: "Lịch sử upload",
+      historySubtitle:
+        "Log mọi lần upload / sync (bao gồm batch đã xoá). Chỉ xem.",
     },
     addForm: {
       title: "Thêm nguồn dữ liệu",
@@ -855,7 +1130,7 @@ export const strings = {
       submit: "Liên kết",
       submitPending: "Đang xác thực…",
       successHint:
-        "Đã liên kết. Mặc định CHƯA đóng góp lên cộng đồng — bấm \"Đóng góp\" trong thẻ bên dưới khi sẵn sàng.",
+        "Đã liên kết. Mỗi lần \"Tải dữ liệu mới nhất\" tạo 1 batch riêng tư; vào mục \"Quản lý dữ liệu\" để bấm \"Đóng góp\" từng batch.",
       lpwanmapper: {
         emailLabel: "Email lpwanmapper",
         passwordLabel: "Mật khẩu lpwanmapper",
@@ -873,21 +1148,27 @@ export const strings = {
       },
     },
     card: {
-      statusActive: "Đang sync",
-      statusPaused: "Tạm dừng sync",
-      statusFailed: "Sync lỗi",
-      contributeOn: "Đang đóng góp",
-      contributeOff: "Chưa đóng góp",
-      lastSyncNever: "Chưa sync lần nào",
+      statusActive: "Đang đồng bộ dữ liệu",
+      statusPaused: "Tạm dừng đồng bộ dữ liệu",
+      statusFailed: "Lỗi khi đồng bộ dữ liệu",
+      lastSyncNever: "Chưa đồng bộ dữ liệu lần nào",
       /** @param {string} when */
       lastSyncAt: (when) => `Sync gần nhất: ${when}`,
       lastSyncError: "Lỗi sync gần nhất:",
-      btnContributeOn: "Đóng góp cộng đồng",
-      btnContributeOff: "Dừng đóng góp",
-      btnPause: "Tạm dừng sync",
-      btnResume: "Bật sync",
-      btnSyncNow: "Sync ngay",
-      btnSyncPending: "Đang sync…",
+      btnPause: "Tạm dừng",
+      btnResume: "Bật đồng bộ dữ liệu",
+      btnSyncNow: "Tải dữ liệu mới nhất",
+      btnSyncPending: "Đang tải dữ liệu…",
+      btnSyncDisabledPaused:
+        "Nguồn đang tạm dừng. Nhấn \"Bật đồng bộ dữ liệu\" trước khi tải dữ liệu mới.",
+      btnSyncDisabledFailed:
+        "Nguồn đang ở trạng thái lỗi. Khắc phục lỗi rồi bật lại đồng bộ.",
+      syncConflictTitle: "Không thể tải dữ liệu lúc này",
+      /** @param {string} otherLabel @param {string} otherType */
+      syncConflictBody: (otherLabel, otherType) =>
+        `Nguồn "${otherLabel}" (${otherType}) đang ở trạng thái Đang đồng bộ dữ liệu. ` +
+        `Vui lòng vào nguồn "${otherLabel}" bấm "Tạm dừng" trước, rồi mới tải dữ liệu cho nguồn hiện tại.`,
+      syncConflictDismiss: "Đã hiểu",
       btnDelete: "Xoá liên kết",
       btnRotateWebhook: "Tạo lại webhook URL",
       btnRotateWebhookPending: "Đang tạo…",
@@ -921,11 +1202,11 @@ export const strings = {
     },
 
     devices: {
-      heading: "Thiết bị đã sync",
+      heading: "Thiết bị đã tải lên",
       loading: "Đang tải thiết bị…",
       empty: "Chưa có thiết bị nào. Bấm \"Sync ngay\" để kéo từ provider.",
       errorLoad: "Không tải được danh sách thiết bị.",
-      headers: ["DevEUI", "Tên", "Lần cuối thấy"],
+      headers: ["DevEUI", "Tên", "Last seen"],
       lastSeenNever: "—",
       /** @param {number} n */
       total: (n) => `${n} thiết bị`,
@@ -939,6 +1220,8 @@ export const strings = {
             return "Credential không hợp lệ — kiểm tra lại thông tin đăng nhập / API token.";
           case "credential_already_linked":
             return "Tài khoản này đã được người dùng khác liên kết. Mỗi tài khoản bên ngoài chỉ được liên kết bởi 1 người.";
+          case "conflicting_source_type":
+            return "Pause nguồn cũ trước khi liên kết nguồn mới để tránh dữ liệu trùng.";
           case "linked_source_not_found":
             return "Nguồn không tồn tại hoặc đã bị xoá.";
           case "linking_error":
@@ -954,14 +1237,11 @@ export const strings = {
 
   contributeUpload: {
     tabLabel: "Đóng góp dữ liệu",
-    title: "Tải lên dữ liệu phép đo",
+    title: "Tải lên dữ liệu khảo sát",
     description:
-      "Tải file CSV hoặc JSON chứa các phép đo LoRa của bạn. Mặc định chỉ bạn xem được. Nếu tick \"Đóng góp cho cộng đồng\", dữ liệu sẽ qua kiểm định độ tin cậy trước khi gia nhập bộ dữ liệu chung.",
+      "Tải file CSV hoặc JSON chứa các phép đo LoRa của bạn. Mọi file mặc định riêng tư — vào mục \"Quản lý dữ liệu\" để bấm \"Đóng góp\" từng batch sau khi xem lại.",
     fields: {
       file: "File CSV hoặc JSON",
-      community: "Đóng góp cho cộng đồng",
-      communityHint:
-        "Mỗi điểm sẽ được kiểm tra: nằm trong Việt Nam, gateway tồn tại, RSSI khớp dự đoán ITU. Điểm không đạt sẽ ở lại quarantine riêng cho bạn.",
     },
     checklist: {
       title: "Checklist trước khi đóng góp",
@@ -976,7 +1256,7 @@ export const strings = {
     submitPending: "Đang xử lý…",
     reset: "Chọn lại file",
     csvHint:
-      "CSV: cột bắt buộc timestamp, latitude, longitude, rssi_dbm, snr_db, spreading_factor, gateway_code (tuỳ chọn: frequency_mhz, device_id). JSON: hỗ trợ (A) mảng object cùng schema CSV, hoặc (C) webhook TTN v3 / ChirpStack v4 — 1 event tự động bung thành N row theo số gateway. Tối đa 1000 dòng/row.",
+      "CSV/JSON: cột bắt buộc timestamp, latitude, longitude, rssi_dbm, spreading_factor, gateway_code — hệ thống tự nhận diện synonym (vd RSSI, lat, lng, sf, gateway_id…), không phụ thuộc thứ tự cột, cột thừa bị bỏ qua. Tuỳ chọn: snr_db (mặc định 0), frequency_mhz (mặc định 923), device_id. JSON: hỗ trợ (A) mảng object cùng schema, hoặc (C) webhook TTN v3 / ChirpStack v4 — 1 event tự động bung thành N row theo số gateway. Tối đa 1000 dòng/file.",
     fileSelected: (/** @type {string} */ name, /** @type {number} */ size) =>
       `Đã chọn: ${name} (${(size / 1024).toFixed(1)} KB)`,
     noFileSelected: "Chưa chọn file.",
@@ -1009,52 +1289,69 @@ export const strings = {
     samplePrompt: "Cần file mẫu? Xem cấu trúc cột ở phần \"CSV hint\" bên trên.",
   },
 
-  csvContributeCard: {
-    title: "Dữ liệu CSV của tôi",
+  // Bảng "Quản lý dữ liệu" — batch đang sống (chưa xoá). Mỗi row 1 lần upload
+  // CSV/JSON hoặc 1 lần sync linked source. Có 2 nút hành động: Đóng góp + Xoá.
+  dataManagementTable: {
+    title: "Quản lý dữ liệu",
     subtitle:
-      "File CSV bạn đã tải lên được lưu riêng tư. Trong bảng dưới, bấm \"Đóng góp\" trên từng file để gửi các điểm hợp lệ của file đó vào bộ dữ liệu cộng đồng.",
-    loading: "Đang tải tổng quan…",
-    stats: {
-      total: (/** @type {number} */ n) => `${n} điểm đã tải lên`,
-      pending: (/** @type {number} */ n) => `${n} điểm sẵn sàng đóng góp`,
-      pendingReview: (/** @type {number} */ n) =>
-        `${n} điểm đang chờ admin duyệt`,
-      promoted: (/** @type {number} */ n) =>
-        `${n} điểm đã được admin duyệt vào bộ cộng đồng`,
-      rejected: (/** @type {number} */ n) => `${n} điểm bị kiểm định loại`,
-    },
-    emptyHint: "Bạn chưa có file CSV nào. Tải lên ở mục \"Loại nguồn → Tải lên file CSV\" phía trên.",
-    successTitle: "Đã chạy kiểm định",
-    successLine: (
-      /** @type {number} */ accepted,
-      /** @type {number} */ rejected,
-    ) =>
-      `${accepted} điểm đã chuyển sang chờ admin duyệt, ${rejected} điểm bị loại.`,
-    errorTitle: "Không chạy được kiểm định",
-    rejectBreakdownTitle: "Phân loại lý do bị loại:",
-    batches: {
-      title: "File đã tải lên",
-      loading: "Đang tải danh sách…",
-      empty: "Chưa có file nào.",
-      header: {
-        uploadedAt: "Thời điểm",
-        total: "Tổng",
-        pending: "Pending",
-        pendingReview: "Chờ duyệt",
-        promoted: "Đã đóng góp",
-        rejected: "Bị loại",
-        actions: "",
-      },
-      btnPromote: "Đóng góp",
-      btnPromotePending: "Đang kiểm định…",
-      btnPromotePendingReview: "Đang chờ duyệt",
-      btnPromoteApproved: "Đã duyệt đóng góp",
-      btnPromoteRejected: "Bị từ chối",
-      btnDelete: "Xoá",
-      btnDeletePending: "Đang xoá…",
-      confirmDelete: (/** @type {number} */ n) =>
-        `Xoá ${n} điểm của file này? Không thể hoàn tác.`,
-      deleteErrorTitle: "Không xoá được file",
-    },
+      "Danh sách file bạn đã tải lên hoặc các đợt đồng bộ từ nguồn liên kết. " +
+      "Bấm \"Đóng góp\" để gửi 1 batch vào bản đồ chung.",
+    loading: "Đang tải…",
+    empty: "Chưa có dữ liệu nào. Vào mục \"Tải lên CSV/JSON\" hoặc \"Nguồn đã liên kết\".",
+    errorLoad: "Không tải được danh sách dữ liệu.",
+    headers: [
+      "Thời điểm upload",
+      "Tên file",
+      "Số điểm",
+      "Loại",
+      "Trạng thái",
+      "",
+    ],
+    btnContribute: "Đóng góp",
+    btnContributePending: "Đang gửi…",
+    btnDelete: "Xoá",
+    btnDeletePending: "Đang xoá…",
+    confirmDelete: (/** @type {number} */ n) =>
+      `Xoá batch này (${n} điểm)? Không thể hoàn tác.`,
+    successTitle: "Đã gửi đóng góp",
+    successLine: (/** @type {number} */ queued) =>
+      `${queued} điểm đã chuyển sang chờ admin duyệt.`,
+    errorTitle: "Không gửi được đóng góp",
+    deleteErrorTitle: "Không xoá được batch",
   },
+
+  // Bảng "Lịch sử upload" — read-only log mọi batch (kể cả deleted).
+  uploadHistoryTable: {
+    title: "Lịch sử upload",
+    subtitle:
+      "Log mọi lần upload / sync — bao gồm các batch đã xoá. Read-only.",
+    loading: "Đang tải…",
+    empty: "Chưa có lịch sử nào.",
+    errorLoad: "Không tải được lịch sử upload.",
+    headers: [
+      "Thời điểm",
+      "Tên file",
+      "Số điểm",
+      "Loại",
+      "Trạng thái",
+    ],
+  },
+
+  // Nhãn loại upload — dùng chung 2 bảng trên.
+  uploadKindLabel: {
+    csv: "CSV",
+    json: "JSON",
+    sync_lpwanmapper: "Đồng bộ Lpwanmapper",
+    sync_chirpstack: "Đồng bộ ChirpStack",
+  },
+
+  // Nhãn trạng thái batch — dùng chung 2 bảng trên.
+  batchStatusLabel: {
+    private: "Riêng tư",
+    pending: "Chờ duyệt",
+    public: "Công khai",
+    rejected: "Bị từ chối",
+    deleted: "Đã xoá",
+  },
+
 };

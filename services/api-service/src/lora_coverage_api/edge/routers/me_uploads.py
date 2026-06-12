@@ -1,9 +1,15 @@
-"""CSV/JSON survey upload — personal-only hoặc community contribution.
+"""CSV/JSON survey upload — luôn upload "private" trước, "Đóng góp" sau.
 
-Plan community-data-contribution §4. User upload file mỗi dòng/object = 1
-reading (lat/lng/timestamp/rssi/snr/sf/gateway_code). Endpoint nhận multipart,
-parse ở backend (KHÔNG trust FE đã validate), ghi quarantine với provenance
-`source_type='csv_upload'` + `contributor_user_id=current_user.id`.
+Plan community-data-contribution §4 + refactor 2026-06-11 (batch-based).
+User upload file mỗi dòng/object = 1 reading. Endpoint:
+  1. Parse ở backend (KHÔNG trust FE đã validate).
+  2. Tạo 1 row `me.upload_batches` (kind ∈ {csv,json}).
+  3. Ghi quarantine với batch_id + submitted_for_community=false.
+  4. Trả `inserted_count` + batch_id.
+
+Đóng góp = action riêng (POST /api/v1/me/uploads/batches/{id}/submit, mig
+0024 + Task #4) — user tự bấm "Đóng góp" trên 1 batch trong "Quản lý dữ
+liệu" sau khi upload xong, không còn checkbox lúc upload.
 
 Hai định dạng được hỗ trợ:
   * CSV — header chuẩn (timestamp, latitude, longitude, rssi_dbm, snr_db,
@@ -14,18 +20,11 @@ Hai định dạng được hỗ trợ:
         ChirpStack v4 (`rxInfo`). 1 event → N rows tương ứng N gateway thấy
         uplink trong `rx_metadata`/`rxInfo`.
 
-`submit_to_community` checkbox quyết định promotion:
-  * false → record dừng ở quarantine, scope theo user — chỉ chính user xem
-    được qua /me/measurements (mode='self'). KHÔNG bao giờ promote.
-  * true → set `submitted_for_community=true`, chạy TrustValidator pipeline
-    (L1 bbox + gateway + L2 ITU physics, threshold 15 dB cố định). Pass →
-    set `review_status='pending_review'` chờ admin duyệt thủ công (migration
-    0018). Fail → ghi `reject_reason`, vẫn ở quarantine.
-
 Idempotency: external_id = sha256(user_id + ts_iso + lat + lng + gateway_code
 + sf)[:32]. Cùng row CSV reupload → cùng external_id → UNIQUE PARTIAL
 `(timestamp, source_type, external_id)` chặn duplicate insert. User có thể
-reupload an toàn (vd sửa typo 1 dòng rồi re-submit).
+reupload an toàn (vd sửa typo 1 dòng rồi re-submit) — tạo batch mới nhưng
+0 row insert.
 
 Rate limit: per IP qua `me_csv_upload_rate_limit` (10/hour default). Per-user
 quota chính xác hơn nhưng slowapi không native; IP đủ cho v1.
@@ -42,18 +41,18 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from ...application.identity import EmailNotVerifiedError, User
 from ...application.repositories import GatewayDirectory, SurveyIngest
-from ...application.trust import (
-    TrustValidator,
-    UnknownContributorError,
-    delete_csv_batch_for_uploader,
-    fetch_csv_stats_for_uploader,
-    list_csv_batches_for_uploader,
-    mark_and_promote_csv_batch_for_uploader,
-    promote_pending_for_uploader,
+from ...application.uploads import (
+    UploadKind,
+    create_upload_batch,
+    delete_batch,
+    fetch_upload_overview,
+    list_upload_batches,
+    set_batch_points_count,
+    submit_batch_for_review,
 )
 from ...config import get_settings
 from ...domain.coverage import Gateway, GatewayId
@@ -63,16 +62,15 @@ from ..deps import (
     current_user,
     gateway_directory,
     survey_repository,
-    trust_validator,
 )
 from ..rate_limit import limiter
 from ..schemas import (
-    CsvBatchDeleteResponse,
-    CsvPromoteResponse,
-    CsvUploadBatch,
-    CsvUploadBatchList,
     CsvUploadResponse,
-    CsvUploadStats,
+    UploadBatchDeleteResponse,
+    UploadBatchItem,
+    UploadBatchListResponse,
+    UploadBatchSubmitResponse,
+    UploadOverviewResponse,
 )
 
 router = APIRouter(prefix="/api/v1/me/uploads", tags=["me-uploads"])
@@ -90,15 +88,63 @@ _MAX_ROWS = 1000
 # File size cap defensive — 1MB đủ cho 1000 row CSV thông thường (~700 bytes/row).
 _MAX_FILE_BYTES = 1_048_576
 
-_REQUIRED_COLUMNS = (
+# Required = không default được. SNR đã rời khỏi đây — vẫn parse nhưng default
+# 0.0 nếu thiếu (xem `_build_record`). SF/RSSI/vị trí/timestamp/gateway là input
+# vật lý cốt lõi của LoRa propagation; không có cách nào impute từ data khác →
+# thiếu thì reject row (kèm reason để user sửa).
+_REQUIRED_FIELDS = (
     "timestamp",
     "latitude",
     "longitude",
     "rssi_dbm",
-    "snr_db",
     "spreading_factor",
     "gateway_code",
 )
+
+# Header alias — chuẩn hoá tên cột về canonical (lower-case, strip). User upload
+# từ TTN/ChirpStack/Helium/CSV tự chế đều có convention khác nhau; thay vì bắt
+# user đổi tên cột, mình map. Lookup case-insensitive sau strip.
+#
+# Lưu ý: KHÔNG include tên tiếng Việt — nếu user export từ tool VN tự chế, họ
+# sẽ thấy reason rõ và sửa file dễ hơn là mình đoán bừa.
+_HEADER_ALIASES: dict[str, tuple[str, ...]] = {
+    "timestamp": ("timestamp", "time", "ts", "datetime", "date_time", "received_at", "rx_time"),
+    "latitude": ("latitude", "lat"),
+    "longitude": ("longitude", "lng", "lon", "long"),
+    "rssi_dbm": ("rssi_dbm", "rssi", "rssi_db"),
+    "snr_db": ("snr_db", "snr", "snr_db_value"),
+    "spreading_factor": (
+        "spreading_factor",
+        "sf",
+        "spreadingfactor",
+        "spreading-factor",
+    ),
+    "gateway_code": (
+        "gateway_code",
+        "gateway_id",
+        "gateway",
+        "gw_id",
+        "gw",
+        "gwid",
+        "gateway_name",
+        "gatewayid",
+    ),
+    "frequency_mhz": ("frequency_mhz", "frequency", "freq", "freq_mhz"),
+    "device_id": (
+        "device_id",
+        "device",
+        "deveui",
+        "dev_eui",
+        "device_name",
+        "devicename",
+    ),
+}
+
+# Build reverse lookup: alias_lower → canonical_field. Module-level cache.
+_ALIAS_TO_CANONICAL: dict[str, str] = {
+    alias.lower(): canonical for canonical, aliases in _HEADER_ALIASES.items() for alias in aliases
+}
+
 _SOURCE_TYPE = "csv_upload"
 
 
@@ -106,7 +152,7 @@ _SOURCE_TYPE = "csv_upload"
     "/csv",
     response_model=CsvUploadResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload CSV survey measurements (personal hoặc community)",
+    summary="Upload CSV/JSON survey — tạo 1 batch private (chưa đóng góp)",
     responses={
         400: {"description": "File rỗng / sai schema header / quá lớn"},
         401: {"description": "Chưa đăng nhập"},
@@ -119,11 +165,7 @@ async def upload_survey_csv(
     user: Annotated[User, Depends(current_user)],
     repo: Annotated[SurveyIngest, Depends(survey_repository)],
     directory: Annotated[GatewayDirectory, Depends(gateway_directory)],
-    trust: Annotated[TrustValidator, Depends(trust_validator)],
     file: Annotated[UploadFile, File(description="CSV hoặc JSON (UTF-8)")],
-    submit_to_community: Annotated[
-        bool, Form(description="True = qua TrustValidator → ts.survey_training nếu pass")
-    ] = False,
 ) -> CsvUploadResponse:
     raw = await file.read()
     if not raw:
@@ -139,9 +181,13 @@ async def upload_survey_csv(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File không phải UTF-8") from None
 
-    filename = (file.filename or "").lower()
+    filename_lower = (file.filename or "").lower()
     content_type = (file.content_type or "").lower()
-    is_json = filename.endswith(".json") or content_type.startswith("application/json")
+    is_json = filename_lower.endswith(".json") or content_type.startswith("application/json")
+    kind: UploadKind = "json" if is_json else "csv"
+    # Filename hiển thị nguyên (không lowercase) — UI mục Lịch sử upload show
+    # cho user. Fallback khi UploadFile.filename None (rare nhưng spec cho phép).
+    display_filename = file.filename or ("upload.json" if is_json else "upload.csv")
 
     if is_json:
         parsed, parse_rejected_reasons = _parse_json(text, user_id=user.id, directory=directory)
@@ -153,14 +199,14 @@ async def upload_survey_csv(
     parse_rejected_count = len(parse_rejected_reasons)
 
     if parsed_count == 0:
+        # Không tạo batch row khi 0 row parse — để UI Lịch sử upload không
+        # chứa "rác" file không hợp lệ; user thấy lỗi ngay trong response.
         return CsvUploadResponse(
+            batch_id=None,
             parsed_count=0,
             parse_rejected_count=parse_rejected_count,
             parse_rejected_reasons=parse_rejected_reasons[:50],
             inserted_count=0,
-            promoted_count=0,
-            promote_rejected_count=0,
-            promote_rejected_by_reason={},
         )
 
     records = [p.record for p in parsed]
@@ -168,11 +214,24 @@ async def upload_survey_csv(
     record_ids = [uuid4() for _ in parsed]
     batch = SurveyBatch(uploader_id=UploaderId(user.id), records=records)
 
-    # `since` = thời điểm NGAY TRƯỚC khi write_quarantine. promote_pending_for_uploader
-    # filter `uploaded_at >= since` để bỏ qua rows cũ của user (đã upload trước,
-    # có thể đang ở pending từ lần trước nhưng không thuộc batch này).
-    since = datetime.now(UTC)
-
+    # Split 3 transaction vì `SurveyIngest.write_quarantine_idempotent` mở
+    # `self._engine.begin()` riêng → không thấy batch row nếu vẫn còn ở
+    # outer tx → FK violation (ts.survey_quarantine.batch_id REFERENCES
+    # me.upload_batches.id). Trình tự:
+    #   1. commit batch row (uploaded_at = now() default từ DB).
+    #   2. repo write quarantine (FK thoả vì batch đã commit).
+    #   3. commit points_count cache.
+    # Risk: step 2 fail → orphan batch row với points_count=0. User thấy
+    # trong "Lịch sử upload" và tự xoá được — chấp nhận.
+    with _engine().begin() as conn:
+        batch_id, _ = create_upload_batch(
+            conn,
+            user_id=user.id,
+            kind=kind,
+            filename=display_filename,
+            linked_source_id=None,
+            points_count=0,
+        )
     inserted_count = repo.write_quarantine_idempotent(
         batch,
         record_ids,
@@ -180,206 +239,140 @@ async def upload_survey_csv(
         source_type=_SOURCE_TYPE,
         linked_source_id=None,
         contributor_user_id=user.id,
-        submitted_for_community=submit_to_community,
+        submitted_for_community=False,
+        batch_id=batch_id,
     )
-
-    promoted_count = 0
-    promote_rejected_count = 0
-    promote_rejected_by_reason: dict[str, int] = {}
-
-    if submit_to_community and inserted_count > 0:
-        with _engine().begin() as conn:
-            try:
-                contributor = trust.load_contributor(conn, user.id)
-            except UnknownContributorError:
-                logger.warning(
-                    "csv_upload_promote_skipped_unknown_user",
-                    user_id=str(user.id),
-                )
-            else:
-                result = promote_pending_for_uploader(
-                    conn,
-                    trust,
-                    contributor,
-                    uploader_id=user.id,
-                    since=since,
-                )
-                promoted_count = result.accepted
-                promote_rejected_count = result.rejected
-                promote_rejected_by_reason = result.by_reason
+    with _engine().begin() as conn:
+        set_batch_points_count(conn, batch_id=batch_id, count=inserted_count)
 
     logger.info(
         "csv_upload_ingested",
         user_id=str(user.id),
-        submit_to_community=submit_to_community,
+        batch_id=str(batch_id),
+        kind=kind,
         parsed=parsed_count,
         parse_rejected=parse_rejected_count,
         inserted=inserted_count,
-        promoted=promoted_count,
-        promote_rejected=promote_rejected_count,
         trace_id=getattr(request.state, "trace_id", None),
     )
 
     return CsvUploadResponse(
+        batch_id=batch_id,
         parsed_count=parsed_count,
         parse_rejected_count=parse_rejected_count,
         parse_rejected_reasons=parse_rejected_reasons[:50],
         inserted_count=inserted_count,
-        promoted_count=promoted_count,
-        promote_rejected_count=promote_rejected_count,
-        promote_rejected_by_reason=promote_rejected_by_reason,
     )
 
 
 @router.get(
-    "/csv/stats",
-    response_model=CsvUploadStats,
-    summary="Tổng quan dữ liệu CSV của user (tổng / pending / promoted / rejected)",
+    "/overview",
+    response_model=UploadOverviewResponse,
+    summary="Tổng quan dữ liệu của user (batches + points theo trạng thái)",
 )
-async def csv_stats(
+async def upload_overview(
     user: Annotated[User, Depends(current_user)],
-) -> CsvUploadStats:
+) -> UploadOverviewResponse:
     with _engine().begin() as conn:
-        stats = fetch_csv_stats_for_uploader(conn, user.id)
-    return CsvUploadStats(
-        total=stats.total,
-        pending=stats.pending,
-        pending_review=stats.pending_review,
-        promoted=stats.promoted,
-        rejected=stats.rejected,
-    )
-
-
-@router.post(
-    "/csv/batches/promote",
-    response_model=CsvPromoteResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Đóng góp 1 file CSV cụ thể cho cộng đồng — chạy TrustValidator",
-    responses={
-        400: {"description": "uploaded_at không phải ISO 8601"},
-        401: {"description": "Chưa đăng nhập"},
-        403: {"description": "Chưa xác thực email"},
-        429: {"description": "Rate limit exceeded"},
-    },
-)
-@limiter.limit(_settings.me_csv_upload_rate_limit)
-async def promote_csv_batch(
-    request: Request,
-    user: Annotated[User, Depends(current_user)],
-    trust: Annotated[TrustValidator, Depends(trust_validator)],
-    uploaded_at: str,
-) -> CsvPromoteResponse:
-    """Mark + validator-loop CHỈ rows của 1 batch (1 lần upload = 1 file).
-
-    Query param `uploaded_at` (ISO 8601) lấy nguyên từ GET /csv/batches để
-    match microsecond chính xác. UI gọi từ row trong bảng "Các file đã upload"
-    trên card CsvContributeCard.
-    """
-    if not user.email_verified:
-        raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
-    try:
-        parsed_ts = datetime.fromisoformat(uploaded_at)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"uploaded_at không phải ISO 8601: {uploaded_at}",
-        ) from exc
-    if parsed_ts.tzinfo is None:
-        parsed_ts = parsed_ts.replace(tzinfo=UTC)
-
-    with _engine().begin() as conn:
-        try:
-            contributor = trust.load_contributor(conn, user.id)
-        except UnknownContributorError as exc:
-            raise HTTPException(status_code=401, detail="Tài khoản không tồn tại") from exc
-        result = mark_and_promote_csv_batch_for_uploader(
-            conn,
-            trust,
-            contributor,
-            uploader_id=user.id,
-            uploaded_at=parsed_ts,
-        )
-
-    logger.info(
-        "csv_batch_promote_invoked",
-        user_id=str(user.id),
-        uploaded_at=uploaded_at,
-        promoted=result.accepted,
-        promote_rejected=result.rejected,
-        trace_id=getattr(request.state, "trace_id", None),
-    )
-
-    return CsvPromoteResponse(
-        promoted_count=result.accepted,
-        promote_rejected_count=result.rejected,
-        promote_rejected_by_reason=result.by_reason,
+        overview = fetch_upload_overview(conn, user.id)
+    return UploadOverviewResponse(
+        batches_total=overview.batches_total,
+        points_total=overview.points_total,
+        public_batches=overview.public_batches,
+        pending_batches=overview.pending_batches,
+        private_batches=overview.private_batches,
     )
 
 
 @router.get(
-    "/csv/batches",
-    response_model=CsvUploadBatchList,
-    summary="Danh sách các file CSV user đã upload (group by uploaded_at)",
+    "/batches",
+    response_model=UploadBatchListResponse,
+    summary="Danh sách batch upload của user — Quản lý dữ liệu / Lịch sử upload",
 )
-async def list_csv_batches(
+async def list_batches(
     user: Annotated[User, Depends(current_user)],
-) -> CsvUploadBatchList:
+    include_deleted: bool = True,
+) -> UploadBatchListResponse:
+    """`include_deleted=true` (default) → Lịch sử upload (đầy đủ). `false`
+    → Quản lý dữ liệu (chỉ batch còn sống). Trạng thái suy ở backend."""
     with _engine().begin() as conn:
-        batches = list_csv_batches_for_uploader(conn, user.id)
-    return CsvUploadBatchList(
+        batches = list_upload_batches(conn, user_id=user.id, include_deleted=include_deleted)
+    return UploadBatchListResponse(
         items=[
-            CsvUploadBatch(
+            UploadBatchItem(
+                id=b.id,
+                kind=b.kind,
+                filename=b.filename,
+                linked_source_id=b.linked_source_id,
                 uploaded_at=b.uploaded_at,
-                total=b.total,
-                pending=b.pending,
-                pending_review=b.pending_review,
-                promoted=b.promoted,
-                rejected=b.rejected,
+                points_count=b.points_count,
+                status=b.status,
+                deleted_at=b.deleted_at,
             )
             for b in batches
         ]
     )
 
 
-@router.delete(
-    "/csv/batches",
-    response_model=CsvBatchDeleteResponse,
-    summary="Xoá 1 batch CSV (theo uploaded_at) — cascade cả training nếu đã promote",
+@router.post(
+    "/batches/{batch_id}/submit",
+    response_model=UploadBatchSubmitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Đóng góp 1 batch cho cộng đồng — gửi admin duyệt",
     responses={
-        400: {"description": "uploaded_at không phải ISO 8601"},
         401: {"description": "Chưa đăng nhập"},
-        404: {"description": "Batch không tồn tại / không thuộc user"},
+        403: {"description": "Chưa xác thực email"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
-async def delete_csv_batch(
+@limiter.limit(_settings.me_csv_upload_rate_limit)
+async def submit_batch(
+    request: Request,
     user: Annotated[User, Depends(current_user)],
-    uploaded_at: str,
-) -> CsvBatchDeleteResponse:
-    """Query param `uploaded_at` (ISO 8601). FE truyền nguyên giá trị nhận từ
-    GET /csv/batches để đảm bảo match chính xác microsecond."""
-    try:
-        parsed_ts = datetime.fromisoformat(uploaded_at)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"uploaded_at không phải ISO 8601: {uploaded_at}",
-        ) from exc
-    if parsed_ts.tzinfo is None:
-        parsed_ts = parsed_ts.replace(tzinfo=UTC)
+    batch_id: UUID,
+) -> UploadBatchSubmitResponse:
+    """Mark rows của batch submitted_for_community=true + chuyển sang
+    pending_review. Idempotent: re-call → 0. KHÔNG raise 404 khi batch
+    không thuộc user — filter `uploader_id` trong SQL trả 0 rows."""
+    if not user.email_verified:
+        raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
 
     with _engine().begin() as conn:
-        deleted = delete_csv_batch_for_uploader(conn, uploader_id=user.id, uploaded_at=parsed_ts)
-
-    if deleted == 0:
-        raise HTTPException(status_code=404, detail="Batch không tồn tại")
+        queued = submit_batch_for_review(conn, user_id=user.id, batch_id=batch_id)
 
     logger.info(
-        "csv_batch_deleted",
+        "upload_batch_submit_invoked",
         user_id=str(user.id),
-        uploaded_at=uploaded_at,
-        deleted=deleted,
+        batch_id=str(batch_id),
+        queued=queued,
+        trace_id=getattr(request.state, "trace_id", None),
     )
-    return CsvBatchDeleteResponse(deleted_count=deleted)
+    return UploadBatchSubmitResponse(batch_id=batch_id, queued=queued)
+
+
+@router.delete(
+    "/batches/{batch_id}",
+    response_model=UploadBatchDeleteResponse,
+    summary="Xoá 1 batch — soft-delete + hard-purge rows con (cả training)",
+    responses={
+        401: {"description": "Chưa đăng nhập"},
+        404: {"description": "Batch không tồn tại / không thuộc user / đã xoá"},
+    },
+)
+async def delete_upload_batch(
+    user: Annotated[User, Depends(current_user)],
+    batch_id: UUID,
+) -> UploadBatchDeleteResponse:
+    with _engine().begin() as conn:
+        ok = delete_batch(conn, user_id=user.id, batch_id=batch_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Batch không tồn tại")
+    logger.info(
+        "upload_batch_delete_invoked",
+        user_id=str(user.id),
+        batch_id=str(batch_id),
+    )
+    return UploadBatchDeleteResponse(batch_id=batch_id, deleted=True)
 
 
 # ── parsing helpers ───────────────────────────────────────────────────────
@@ -393,6 +386,24 @@ class _ParsedRow:
         self.external_id = external_id
 
 
+def _normalize_header(raw_header: str) -> str | None:
+    """Map 1 tên cột bất kỳ → canonical field name. None = không nhận diện."""
+    return _ALIAS_TO_CANONICAL.get(raw_header.strip().lower())
+
+
+def _canonicalize_row(raw_row: dict[str, str], header_map: dict[str, str | None]) -> dict[str, str]:
+    """Translate dict keys raw → canonical. Drop key không có canonical mapping
+    (cột thừa user upload — vd 'note', 'tags' — vẫn được phép tồn tại trong file
+    nhưng không lưu, vì DB không có column tương ứng).
+    """
+    out: dict[str, str] = {}
+    for original_key, value in raw_row.items():
+        canonical = header_map.get(original_key)
+        if canonical is not None:
+            out[canonical] = value
+    return out
+
+
 def _parse_csv(
     text_io: io.StringIO,
     *,
@@ -403,16 +414,22 @@ def _parse_csv(
 
     KHÔNG raise — bad rows skip cùng reason text; caller bao gồm reasons trong
     response để FE hiển thị "dòng N: lý do" cho user sửa.
+
+    Header normalize qua `_HEADER_ALIASES` → thứ tự cột không quan trọng, tên
+    cột case-insensitive + nhiều synonym chấp nhận, cột thừa bị drop. Chỉ
+    reject file-level khi thiếu canonical fields trong `_REQUIRED_FIELDS`.
     """
     reader = csv.DictReader(text_io)
     if not reader.fieldnames:
         raise HTTPException(status_code=400, detail="File không có header")
 
-    missing = [c for c in _REQUIRED_COLUMNS if c not in reader.fieldnames]
+    header_map: dict[str, str | None] = {h: _normalize_header(h) for h in reader.fieldnames}
+    canonical_present = {v for v in header_map.values() if v is not None}
+    missing = [f for f in _REQUIRED_FIELDS if f not in canonical_present]
     if missing:
         raise HTTPException(
             status_code=400,
-            detail=f"Thiếu cột bắt buộc: {', '.join(missing)}",
+            detail=(f"Thiếu cột bắt buộc (đã thử các tên tương đương): {', '.join(missing)}"),
         )
 
     # Cache gateway_code → Gateway (1 CSV thường dùng vài gateway). Miss → None
@@ -427,9 +444,13 @@ def _parse_csv(
             rejected.append(f"dòng {i}: vượt giới hạn {_MAX_ROWS} dòng/file")
             break
 
+        canonical_row = _canonicalize_row(row, header_map)
         try:
             record, external_id = _build_record(
-                row, user_id=user_id, directory_cache=gw_cache, directory=directory
+                canonical_row,
+                user_id=user_id,
+                directory_cache=gw_cache,
+                directory=directory,
             )
         except _RowError as exc:
             rejected.append(f"dòng {i}: {exc}")
@@ -469,7 +490,11 @@ def _build_record(
     lat = _parse_float(row.get("latitude"), "latitude")
     lon = _parse_float(row.get("longitude"), "longitude")
     rssi = _parse_float(row.get("rssi_dbm"), "rssi_dbm")
-    snr = _parse_float(row.get("snr_db"), "snr_db")
+    # SNR thiếu → default 0 dB. DB column NOT NULL nên không thể NULL; 0 là
+    # "unknown / không xác định" — Stage 1 bottleneck label sẽ tính SF12 SNR
+    # limit = -20 dB, 0 dB không trigger SNR bottleneck → an toàn cho training
+    # filter (chỉ ảnh hưởng analysis chi tiết, không bias coverage estimate).
+    snr = _parse_float(row.get("snr_db"), "snr_db", default=0.0)
     sf = _parse_int(row.get("spreading_factor"), "spreading_factor")
     freq = _parse_float(row.get("frequency_mhz"), "frequency_mhz", default=923.0)
     device_id_raw = (row.get("device_id") or "").strip()
@@ -587,10 +612,17 @@ def _parse_json_format_a(
         if not isinstance(item, dict):
             rejected.append(f"item {i}: không phải object JSON")
             continue
-        row = _stringify_row(item)
+        # Normalize key qua alias (case-insensitive) như CSV — JSON user-defined
+        # cũng dùng convention khác nhau (RSSI/rssi/rssi_dbm).
+        raw_row = _stringify_row(item)
+        header_map = {k: _normalize_header(k) for k in raw_row}
+        canonical_row = _canonicalize_row(raw_row, header_map)
         try:
             record, external_id = _build_record(
-                row, user_id=user_id, directory_cache=gw_cache, directory=directory
+                canonical_row,
+                user_id=user_id,
+                directory_cache=gw_cache,
+                directory=directory,
             )
         except _RowError as exc:
             rejected.append(f"item {i}: {exc}")

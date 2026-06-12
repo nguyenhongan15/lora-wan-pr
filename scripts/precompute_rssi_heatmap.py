@@ -726,11 +726,12 @@ def _apply_survey_overlay(
         cur = cell_max.get(f)
         if cur is None or v > cur:
             cell_max[f] = v
+    # Strict override: cell có điểm đo → luôn dùng RSSI thực đo, kể cả khi
+    # P.1812 dự đoán mạnh hơn. Lý do: ground truth thắng prediction; survey
+    # cần lộ ra cả vùng obstruction model đang lạc quan quá mức.
     for f, v in cell_max.items():
         cy, cx = divmod(f, nx)
-        cur_val = grid[cy, cx]
-        if math.isnan(cur_val) or v > cur_val:
-            grid[cy, cx] = v
+        grid[cy, cx] = v
     return {
         "n_points": len(survey_pts),
         "n_points_in_grid": n_in_grid,

@@ -116,13 +116,30 @@ def main():
     print(f"  R²:   {r2:.4f}")
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(pipeline, MODEL_PATH, compress=3)
+    # Atomic swap: ghi xuong .new roi rename de ml-service khong serve file ban
+    # do (admin retrain co the ghi de trong khi ml-service dang load).
+    model_tmp = MODEL_PATH.with_suffix(MODEL_PATH.suffix + ".new")
+    joblib.dump(pipeline, model_tmp, compress=3)
+    model_tmp.replace(MODEL_PATH)
     print(f"\nModel saved to {MODEL_PATH} ({MODEL_PATH.stat().st_size / 1024:.1f} KB)")
 
     fallback_path = MODEL_DIR / "terrain_fallback.json"
     with fallback_path.open("w") as f:
         json.dump(terrain_fallback, f, indent=2)
     print(f"Terrain fallback saved to {fallback_path}")
+
+    # Metrics JSON cho Celery task doc lai sau khi train xong.
+    metrics_path = MODEL_DIR / "train_metrics.json"
+    metrics_payload = {
+        "rmse": rmse,
+        "mae": mae,
+        "r2": r2,
+        "rows_trained": len(df),
+        "feature_count": len(feature_cols),
+    }
+    with metrics_path.open("w") as f:
+        json.dump(metrics_payload, f, indent=2)
+    print(f"Metrics saved to {metrics_path}")
 
     gw_cols = ["gateway", "gw_lat", "gw_lon", "gw_elevation", "frequency"]
     gw_table = df[gw_cols].drop_duplicates(subset="gateway").reset_index(drop=True)

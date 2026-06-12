@@ -39,7 +39,7 @@ export function PredictionView({ prediction }) {
   const [showLayer2, setShowLayer2] = useState(false);
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm md:p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-900">{t.title}</h2>
         <span
@@ -136,21 +136,23 @@ function BidirectionalBlock({ uplink, downlink, bottleneck }) {
           {tBi.bottleneckLabel}: {tBi.bottleneck[bottleneck]}
         </span>
       </div>
-      <table className="w-full text-xs">
-        <thead className="text-slate-500">
-          <tr>
-            <th className="py-1 text-left font-medium"></th>
-            <th className="py-1 text-right font-medium">{tBi.colRssi}</th>
-            <th className="py-1 text-right font-medium">{tBi.colSnr}</th>
-            <th className="py-1 text-right font-medium">{tBi.colMargin}</th>
-            <th className="py-1 text-right font-medium">{tBi.colStatus}</th>
-          </tr>
-        </thead>
-        <tbody className="font-mono text-slate-900">
-          <DirectionRow label={tBi.directionUplink} budget={uplink} />
-          <DirectionRow label={tBi.directionDownlink} budget={downlink} />
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[360px] text-xs">
+          <thead className="text-slate-500">
+            <tr>
+              <th className="py-1 text-left font-medium"></th>
+              <th className="py-1 text-right font-medium">{tBi.colRssi}</th>
+              <th className="py-1 text-right font-medium">{tBi.colSnr}</th>
+              <th className="py-1 text-right font-medium">{tBi.colMargin}</th>
+              <th className="py-1 text-right font-medium">{tBi.colStatus}</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono text-slate-900">
+            <DirectionRow label={tBi.directionUplink} budget={uplink} />
+            <DirectionRow label={tBi.directionDownlink} budget={downlink} />
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

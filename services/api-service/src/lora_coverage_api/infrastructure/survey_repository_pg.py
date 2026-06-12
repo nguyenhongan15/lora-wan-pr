@@ -29,8 +29,12 @@ class PgSurveyRepository:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    # SQL dùng chung cho cả 2 path; ON CONFLICT DO NOTHING vô hại với uuid4
-    # (xác suất collide ~0) và là yêu cầu cứng cho idempotent path.
+    # SQL dùng chung cho cả 2 path; ON CONFLICT DO NOTHING (không target column)
+    # để catch CẢ 2 unique constraint:
+    #   * PK (timestamp, id) — uuid4 nên gần như không collide.
+    #   * UNIQUE INDEX ux_survey_quarantine_external trên
+    #     (timestamp, source_type, external_id) WHERE external_id IS NOT NULL —
+    #     CSV/webhook reupload cùng row → cùng external_id → silently skip.
     # Provenance cols (plan ChirpStack webhook): NULL khi caller không cung cấp
     # (legacy /survey upload path); set khi webhook ingest đẩy WebhookContext.
     _INSERT_SQL = text(
@@ -40,7 +44,7 @@ class PgSurveyRepository:
             spreading_factor, frequency_mhz, device_id,
             serving_gateway_id, uploader_id,
             external_id, source_type, contributor_user_id, linked_source_id,
-            submitted_for_community, code_rate
+            submitted_for_community, code_rate, batch_id
         )
         VALUES (
             :id, :ts,
@@ -48,9 +52,9 @@ class PgSurveyRepository:
             :rssi, :snr, :sf, :freq, :device_id,
             :gw_id, :uploader_id,
             :external_id, :source_type, :contributor_user_id, :linked_source_id,
-            :submitted_for_community, :code_rate
+            :submitted_for_community, :code_rate, :batch_id
         )
-        ON CONFLICT (timestamp, id) DO NOTHING
+        ON CONFLICT DO NOTHING
         """
     )
 
@@ -65,6 +69,7 @@ class PgSurveyRepository:
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
         submitted_for_community: bool = False,
+        batch_id: UUID | None = None,
     ) -> dict[str, Any]:
         return {
             "id": rec_id,
@@ -84,6 +89,7 @@ class PgSurveyRepository:
             "contributor_user_id": contributor_user_id,
             "submitted_for_community": submitted_for_community,
             "code_rate": r.code_rate,
+            "batch_id": batch_id,
         }
 
     def write_quarantine(self, batch: SurveyBatch) -> SurveyBatchId:
@@ -104,6 +110,7 @@ class PgSurveyRepository:
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
         submitted_for_community: bool = False,
+        batch_id: UUID | None = None,
     ) -> int:
         if len(record_ids) != len(batch.records):
             raise ValueError(
@@ -128,6 +135,7 @@ class PgSurveyRepository:
                 linked_source_id=linked_source_id,
                 contributor_user_id=contributor_user_id,
                 submitted_for_community=submitted_for_community,
+                batch_id=batch_id,
             )
             for rid, r, ext in zip(record_ids, batch.records, ext_iter, strict=True)
         ]
@@ -222,8 +230,10 @@ class PgSurveyRepository:
         sort_dir = "ASC" if sort_order == "asc" else "DESC"
 
         if contributor.mode == "community":
-            where.append("ls.contribute_to_community = true")
-            where.append("ls.status = 'active'")
+            # CSV upload có linked_source_id NULL — LEFT JOIN để không loại;
+            # khi row có linked_source thì phải status='active'. Promotion gate
+            # đã ép submitted_for_community=true nên không cần re-check ở đây.
+            where.append("(t.linked_source_id IS NULL OR ls.status = 'active')")
             where.append("u.disabled = false")
             where_sql = "WHERE " + " AND ".join(where)
             # Tie-breaker: timestamp DESC để khi rssi/snr trùng giá trị, OFFSET
@@ -241,7 +251,7 @@ class PgSurveyRepository:
                     t.rssi_dbm, t.snr_db, t.spreading_factor, t.serving_gateway_id,
                     t.device_id, t.frequency_mhz, t.timestamp, t.code_rate
                 FROM ts.survey_training t
-                JOIN auth.linked_sources ls ON ls.id = t.linked_source_id
+                LEFT JOIN auth.linked_sources ls ON ls.id = t.linked_source_id
                 JOIN auth.users u ON u.id = t.contributor_user_id
                 {where_sql}
                 {order_sql}
@@ -281,6 +291,11 @@ class PgSurveyRepository:
             # CONFLICT DO NOTHING). User hiện tại có quarantine copy chưa lên
             # training của họ → vẫn phải hiện. Tất cả source hiện hành đều
             # có external_id NOT NULL → key valid.
+            # User soft-delete batch ở "Của tôi" KHÔNG xoá training rows (data
+            # đã được admin duyệt thuộc về community). Filter ở đây để "Của
+            # tôi" không hiện training rows thuộc batch user đã đánh dấu xoá
+            # — trên bản đồ chung chúng vẫn còn. Legacy rows batch_id IS NULL
+            # → NOT EXISTS pass-through (không match).
             sql = text(
                 f"""
                 SELECT lat, lon, rssi_dbm, snr_db, spreading_factor, serving_gateway_id,
@@ -289,6 +304,10 @@ class PgSurveyRepository:
                     {inner_select}
                     FROM ts.survey_training t
                     {where_sql}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM me.upload_batches b
+                        WHERE b.id = t.batch_id AND b.deleted_at IS NOT NULL
+                      )
                     UNION ALL
                     {inner_select}
                     FROM ts.survey_quarantine t
@@ -383,6 +402,10 @@ class PgSurveyRepository:
                 WHERE t.contributor_user_id = :user_id
                   AND t.device_id IS NOT NULL
                   {ls_clause}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM me.upload_batches b
+                    WHERE b.id = t.batch_id AND b.deleted_at IS NOT NULL
+                  )
                 GROUP BY t.device_id
                 UNION ALL
                 SELECT t.device_id, COUNT(*) AS cnt

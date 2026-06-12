@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
+import { SURVEY_RSSI_BINS, surveyRssiColorExpression } from "../components/legend.js";
 import { ApiError } from "../auth/client.js";
 import {
   approveBatch,
@@ -378,7 +379,7 @@ function BatchMapModal({
           type: /** @type {"Point"} */ ("Point"),
           coordinates: [it.longitude, it.latitude],
         },
-        properties: { id: it.id, rssi: it.rssi_dbm },
+        properties: { id: it.id, rssi_dbm: it.rssi_dbm },
       }));
       /** @type {GeoJSON.FeatureCollection} */
       const fcWithRssi = { type: "FeatureCollection", features: featuresWithRssi };
@@ -392,22 +393,12 @@ function BatchMapModal({
           id: "batch_points_layer",
           type: "circle",
           source: "batch_points",
-          paint: {
+          paint: /** @type {any} */ ({
             "circle-radius": 6,
-            "circle-color": [
-              "step",
-              ["get", "rssi"],
-              "#dc2626", // < -120
-              -120,
-              "#f97316", // -120 .. -115
-              -115,
-              "#eab308", // -115 .. -100
-              -100,
-              "#16a34a", // >= -100
-            ],
+            "circle-color": surveyRssiColorExpression(),
             "circle-stroke-width": 1.5,
             "circle-stroke-color": "#ffffff",
-          },
+          }),
         });
         map.on("click", "batch_points_layer", (e) => {
           const f = e.features?.[0];
@@ -540,13 +531,14 @@ function BatchMapModal({
 }
 
 function MapLegend() {
-  const L = tb.mapLegend;
+  // Dùng chung palette SURVEY_RSSI_BINS với "Bản đồ điểm đo" — reverse để
+  // hiển thị strong → weak (top/left → bottom/right).
+  const rows = [...SURVEY_RSSI_BINS].reverse();
   return (
     <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-      <LegendDot color="#16a34a" label={L.strong} />
-      <LegendDot color="#eab308" label={L.medium} />
-      <LegendDot color="#f97316" label={L.weak} />
-      <LegendDot color="#dc2626" label={L.veryWeak} />
+      {rows.map((bin) => (
+        <LegendDot key={bin.label} color={bin.color} label={bin.label} />
+      ))}
     </div>
   );
 }

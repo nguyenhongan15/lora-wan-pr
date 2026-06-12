@@ -97,7 +97,7 @@ export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
   }
   if (q.data.items.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-600 md:p-6">
         {t.empty}
       </div>
     );
@@ -105,7 +105,7 @@ export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
 
   return (
     <>
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>

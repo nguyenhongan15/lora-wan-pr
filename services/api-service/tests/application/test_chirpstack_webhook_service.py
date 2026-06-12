@@ -19,7 +19,6 @@ _CONTEXT = WebhookContext(
     user_id=UUID("11111111-1111-1111-1111-111111111111"),
     linked_source_id=UUID("22222222-2222-2222-2222-222222222222"),
     source_type="chirpstack",
-    contribute=False,
 )
 
 

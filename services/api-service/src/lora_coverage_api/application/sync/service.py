@@ -1,8 +1,8 @@
 """Sync orchestrator — pull data từ external source vào DB.
 
-Plan-auth-v1 §3.4 + §10. Deep module: 2 method công khai (sync, sync_all_eligible)
-ẩn decrypt, adapter dispatch, gateway external_id → uuid map, dedup loop, status
-update, audit log.
+Plan-auth-v1 §3.4 + §10 + refactor 2026-06-11 (batch-based). Deep module:
+2 method công khai (sync, sync_all_eligible) ẩn decrypt, adapter dispatch,
+gateway external_id → uuid map, dedup loop, status update, audit log.
 
 KHÔNG raise (plan §8.3): mọi failure → SyncResult.error. Caller (edge) chỉ
 inspect `result.error is None` thay vì try/except. Riêng `LinkedSourceNotFoundError`
@@ -10,16 +10,21 @@ vẫn raise để edge map → 404 (route không tồn tại ≠ sync fail).
 
 Cross-module (plan §2):
   * Sync KHÔNG gọi LinkingService. Cipher inject như primitive (DI từ edge).
-  * Co-ownership cột linked_sources:
+  * Co-ownership cột linked_sources (post-mig 0024):
       - Sync owns: status, last_sync_at, last_sync_error
-      - Linking owns: credentials_encrypted, label, contribute_to_community,
-        contributed_at, source_type, user_id
+      - Linking owns: credentials_encrypted, label, source_type, user_id
     Schema change phải đụng cả 2 module — chấp nhận leakage hợp lý cho v1
     (plan §3.4 explicitly authorizes).
 
 Concurrency (plan §10): same linked_source bị sync đồng thời → SELECT FOR UPDATE
 SKIP LOCKED ở đầu sync(). Locked → SyncResult(error="sync_in_progress"), không
 raise, không UPDATE status (giữ nguyên trạng thái ổn định).
+
+Batch tracking (mig 0024): mỗi lần sync thành công đi qua bước measurement
+ingest → tạo 1 row `me.upload_batches` kind=sync_<source_type>, filename =
+ISO timestamp lúc click. Rows quarantine của sync này gắn batch_id để UI
+"Quản lý dữ liệu" / "Lịch sử upload" gom đúng batch. Sync fail (decrypt
+/ adapter error) trước measurement step → KHÔNG tạo batch (không có data).
 """
 
 from __future__ import annotations
@@ -44,11 +49,7 @@ from ..sources import (
     UnknownSourceTypeError,
     get_adapter,
 )
-from ..trust import (
-    TrustValidator,
-    UnknownContributorError,
-    promote_pending_for_linked_source,
-)
+from ..uploads import UploadKind, create_upload_batch, set_batch_points_count
 from ._upsert import upsert_device, upsert_gateway, upsert_measurement
 
 logger = structlog.get_logger("lora_coverage_api.sync")
@@ -104,8 +105,7 @@ def _sanitise_exc(exc: BaseException) -> str:
 
 _LOCK_OWNED_ROW = text("""
     SELECT id, user_id, source_type, label,
-           credentials_encrypted, status, last_sync_at,
-           contribute_to_community
+           credentials_encrypted, status, last_sync_at
     FROM auth.linked_sources
     WHERE id = :id AND user_id = :user_id
     FOR UPDATE SKIP LOCKED
@@ -124,35 +124,42 @@ _UPDATE_SYNC_META = text("""
     WHERE id = :id
 """)
 
-# Eligibility filter (plan §3.4): chỉ sync source đang active + đã opt-in
-# contribute + owner không bị disabled. JOIN users để áp disabled filter ở
-# DB, tránh fetch row rồi loại ở Python.
+# Eligibility filter (post-mig 0024): chỉ sync source đang active + owner
+# không bị disabled. Cờ contribute_to_community đã bỏ — quyết định đóng góp
+# giờ per-batch (user bấm "Đóng góp" trên batch trong "Quản lý dữ liệu"),
+# không còn per-source. JOIN users để áp disabled filter ở DB.
 _SELECT_ELIGIBLE_IDS = text("""
     SELECT ls.id, ls.user_id
     FROM auth.linked_sources ls
     JOIN auth.users u ON u.id = ls.user_id
     WHERE ls.status = 'active'
-      AND ls.contribute_to_community = true
       AND u.disabled = false
     ORDER BY ls.last_sync_at NULLS FIRST, ls.created_at ASC
 """)
+
+# Mapping source_type → upload_batches.kind. Khoá enum trong migration 0024
+# chỉ 4 giá trị; sync source nào không trong map → skip batch creation
+# (data vẫn vào quarantine với batch_id=NULL, không xuất hiện trong UI
+# "Quản lý dữ liệu" nhưng không lỗi).
+_SYNC_KIND: dict[str, UploadKind] = {
+    "lpwanmapper": "sync_lpwanmapper",
+    "chirpstack": "sync_chirpstack",
+}
 
 
 # ── Public service ───────────────────────────────────────────────────────
 
 
 class SyncService:
-    """Stateless modulo (cipher, trust). Caller (edge/deps) khởi 1 instance / process.
+    """Stateless module (cipher). Caller (edge/deps) khởi 1 instance / process.
 
-    `trust` (TrustValidator) inject để promote pending rows sau mỗi batch
-    measurement insert — plan community-data-contribution: sync ghi thẳng
-    quarantine với cờ submitted_for_community, sau đó trust pipeline copy
-    sang training nếu pass.
+    Post-mig 0024: bỏ trust injection — sync ghi thẳng quarantine với
+    submitted_for_community=false, user bấm "Đóng góp" trên 1 batch ở UI
+    "Quản lý dữ liệu" để gửi admin duyệt (xem application/uploads).
     """
 
-    def __init__(self, *, cipher: CredentialCipher, trust: TrustValidator) -> None:
+    def __init__(self, *, cipher: CredentialCipher) -> None:
         self._cipher = cipher
-        self._trust = trust
 
     # ── single-source ────────────────────────────────────────────────────
 
@@ -235,12 +242,20 @@ class SyncService:
                 counts=(0, 0, 0, 0, 0, 0),
             )
 
-        # Plan community-data-contribution §3.4: measurement LUÔN ghi
-        # quarantine. Cờ `submitted_for_community` đẩy theo
-        # `linked_sources.contribute_to_community` — sau ingest, nếu cờ
-        # bật, trust pipeline (promote_pending_for_linked_source) chạy
-        # validate per-row → copy sang training nếu pass.
-        contribute = bool(row.contribute_to_community)
+        # Batch tracking (mig 0024): tạo batch row ngay trước measurement
+        # ingest. Nếu source_type không có trong _SYNC_KIND (vd test source
+        # tương lai), bỏ batch — data vẫn vào quarantine, chỉ không hiện
+        # trong "Quản lý dữ liệu" UI. Filename = ISO timestamp click cho UX.
+        batch_id: UUID | None = None
+        kind = _SYNC_KIND.get(source_type)
+        if kind is not None:
+            batch_id, _ = create_upload_batch(
+                conn,
+                user_id=user_id,
+                kind=kind,
+                filename=datetime.now(UTC).isoformat(),
+                linked_source_id=ls_id,
+            )
 
         try:
             adapter = get_adapter(source_type)
@@ -276,7 +291,7 @@ class SyncService:
                 since=row.last_sync_at,
                 gw_uuid_by_external=gw_uuid_by_external,
                 gw_coords_by_external=gw_coords_by_external,
-                submitted_for_community=contribute,
+                batch_id=batch_id,
                 log=log,
             )
         except (UnknownSourceTypeError, SourceError) as exc:
@@ -291,11 +306,12 @@ class SyncService:
                 counts=(0, 0, 0, 0, 0, 0),
             )
 
-        # Promote pending → training nếu user đã opt-in cộng đồng. Best-
-        # effort: validator failure (user mất khỏi auth.users giữa lúc)
-        # log + skip, sync vẫn coi như success vì raw data đã ghi quarantine.
-        if contribute:
-            self._promote_after_sync(conn, user_id=user_id, ls_id=ls_id, log=log)
+        # Cache points_count trên batch row để UI khỏi đếm lại. m_updated
+        # không tính (rows đã thuộc batch cũ — first-writer-wins ở
+        # _QUARANTINE_UPSERT_SQL). Sync 0 row mới vẫn để batch row tồn tại
+        # với count=0 → "Lịch sử upload" log đầy đủ mỗi lần click.
+        if batch_id is not None:
+            set_batch_points_count(conn, batch_id=batch_id, count=m_inserted)
 
         return self._finalise(
             conn,
@@ -305,31 +321,6 @@ class SyncService:
             log=log,
             started=started,
             counts=(gw_inserted, gw_updated, m_inserted, m_updated, dev_inserted, dev_updated),
-        )
-
-    def _promote_after_sync(
-        self,
-        conn: Connection,
-        *,
-        user_id: UUID,
-        ls_id: UUID,
-        log: Any,
-    ) -> None:
-        """Load contributor + chạy promote loop cho ls_id.
-
-        Catch UnknownContributorError defensive — user bị xoá giữa lúc sync.
-        KHÔNG raise: sync hợp lệ đã hoàn tất, promotion fail chỉ log warning.
-        """
-        try:
-            contributor = self._trust.load_contributor(conn, user_id)
-        except UnknownContributorError:
-            log.warning("trust_promotion_skipped_unknown_user")
-            return
-        promote_pending_for_linked_source(
-            conn,
-            self._trust,
-            contributor,
-            linked_source_id=ls_id,
         )
 
     def _decrypt(self, blob: bytes) -> dict[str, str]:
@@ -464,7 +455,7 @@ def _ingest_measurements(
     since: datetime | None,
     gw_uuid_by_external: dict[str, UUID],
     gw_coords_by_external: dict[str, tuple[float, float]],
-    submitted_for_community: bool,
+    batch_id: UUID | None,
     log: Any,
 ) -> tuple[int, int]:
     """Filter GPS-invalid records (bbox + serving-gw distance) trước upsert.
@@ -504,7 +495,8 @@ def _ingest_measurements(
             uploader_id=user_id,
             contributor_user_id=user_id,
             linked_source_id=ls_id,
-            submitted_for_community=submitted_for_community,
+            submitted_for_community=False,
+            batch_id=batch_id,
         )
         if status == "inserted":
             inserted += 1

@@ -20,8 +20,14 @@ import { ApiError, ProblemDetails } from "../auth/client.js";
 import { authFetch } from "../auth/_intercept.js";
 import { SyncResult } from "../sources/client.js";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// Xem ghi chú ở api/client.js: localhost → 8000 cho dev, ngược lại theo env.
+const API_BASE_URL = (() => {
+  if (typeof window !== "undefined") {
+    const h = window.location.hostname;
+    if (h === "localhost" || h === "127.0.0.1") return "http://localhost:8000";
+  }
+  return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+})();
 
 // ── Schemas ───────────────────────────────────────────────────────────────
 
@@ -140,6 +146,56 @@ export const CoverageRebuildJobList = z.object({
   items: z.array(CoverageRebuildJob),
 });
 
+// ── Training batch audit (admin trace-back) ──────────────────────────────
+
+export const TrainingBatchItem = z.object({
+  batch_id: z.string().uuid(),
+  uploader_id: z.string().uuid(),
+  uploader_email: z.string().nullable(),
+  kind: z
+    .enum(["csv", "json", "sync_lpwanmapper", "sync_chirpstack"])
+    .nullable(),
+  filename: z.string().nullable(),
+  uploaded_at: z.string().nullable(),
+  promoted_count: z.number().int().nonnegative(),
+  latest_approved_at: z.string(),
+  batch_deleted_at: z.string().nullable(),
+});
+
+export const TrainingBatchList = z.object({
+  items: z.array(TrainingBatchItem),
+});
+
+export const TrainingBatchDelete = z.object({
+  batch_id: z.string().uuid(),
+  deleted_count: z.number().int().nonnegative(),
+});
+
+// ── ML retrain (mirror CoverageRebuild) ──────────────────────────────────
+
+export const MlRetrainEnqueue = z.object({
+  job_id: z.string().uuid(),
+  status: z.literal("queued"),
+});
+
+export const MlRetrainJob = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["queued", "running", "succeeded", "failed"]),
+  triggered_by: z.string().uuid().nullable(),
+  triggered_at: z.string(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  rows_trained: z.number().int().nullable(),
+  artifact_path: z.string().nullable(),
+  metrics: z.record(z.any()),
+  error_text: z.string().nullable(),
+  celery_task_id: z.string().nullable(),
+});
+
+export const MlRetrainJobList = z.object({
+  items: z.array(MlRetrainJob),
+});
+
 /**
  * @typedef {z.infer<typeof UserAdmin>} UserAdminT
  * @typedef {z.infer<typeof UserListAdmin>} UserListAdminT
@@ -155,6 +211,12 @@ export const CoverageRebuildJobList = z.object({
  * @typedef {z.infer<typeof CoverageRebuildEnqueue>} CoverageRebuildEnqueueT
  * @typedef {z.infer<typeof CoverageRebuildJob>} CoverageRebuildJobT
  * @typedef {z.infer<typeof CoverageRebuildJobList>} CoverageRebuildJobListT
+ * @typedef {z.infer<typeof TrainingBatchItem>} TrainingBatchItemT
+ * @typedef {z.infer<typeof TrainingBatchList>} TrainingBatchListT
+ * @typedef {z.infer<typeof TrainingBatchDelete>} TrainingBatchDeleteT
+ * @typedef {z.infer<typeof MlRetrainEnqueue>} MlRetrainEnqueueT
+ * @typedef {z.infer<typeof MlRetrainJob>} MlRetrainJobT
+ * @typedef {z.infer<typeof MlRetrainJobList>} MlRetrainJobListT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -229,7 +291,7 @@ export async function deleteUser(userId) {
 
 /**
  * POST /api/v1/admin/sync — global sync mọi linked_source eligible
- * (status=active + contribute_to_community=true).
+ * (status=active).
  *
  * v1 sync synchronous → có thể chậm khi nhiều source. Caller nên hiển thị
  * spinner. Plan §10 ghi v2 chuyển sang background queue.
@@ -412,7 +474,7 @@ export async function getCoverageRebuildJob(jobId) {
 }
 
 /**
- * GET /api/v1/admin/coverage/rebuild/latest — 5 lần rebuild gần nhất.
+ * GET /api/v1/admin/coverage/rebuild/latest — toàn bộ lịch sử rebuild.
  * @returns {Promise<CoverageRebuildJobListT>}
  */
 export async function listRecentCoverageRebuilds() {
@@ -421,4 +483,69 @@ export async function listRecentCoverageRebuilds() {
   );
   if (!res.ok) await _throwProblem(res);
   return CoverageRebuildJobList.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/training/batches — list batch đã có rows trong
+ * ts.survey_training (admin trace-back data đã duyệt).
+ * @returns {Promise<TrainingBatchListT>}
+ */
+export async function listTrainingBatches() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/training/batches`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return TrainingBatchList.parse(await res.json());
+}
+
+/**
+ * DELETE /api/v1/admin/training/batches/{batch_id} — xoá hết training rows
+ * của batch. Quarantine không bị động.
+ * @param {string} batchId UUID
+ * @returns {Promise<TrainingBatchDeleteT>}
+ */
+export async function deleteTrainingBatch(batchId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/training/batches/${batchId}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return TrainingBatchDelete.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/ml/retrain — enqueue Celery task, response 202.
+ * @returns {Promise<MlRetrainEnqueueT>}
+ */
+export async function enqueueMlRetrain() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/admin/ml/retrain`, {
+    method: "POST",
+  });
+  if (!res.ok) await _throwProblem(res);
+  return MlRetrainEnqueue.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/ml/retrain/{job_id} — poll status.
+ * @param {string} jobId UUID
+ * @returns {Promise<MlRetrainJobT>}
+ */
+export async function getMlRetrainJob(jobId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/ml/retrain/${jobId}`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return MlRetrainJob.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/ml/retrain/latest — 5 lần retrain gần nhất.
+ * @returns {Promise<MlRetrainJobListT>}
+ */
+export async function listRecentMlRetrains() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/ml/retrain/latest`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return MlRetrainJobList.parse(await res.json());
 }

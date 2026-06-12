@@ -1,10 +1,10 @@
 // @ts-check
-// Sources API client — me/sources CRUD + manual sync.
+// Sources API client — me/sources CRUD + manual sync + upload batches.
 //
 // Mirror Pydantic schemas (services/api-service/.../edge/schemas.py
-// "Linking — me/sources" + "Sync"). Zod ↔ Pydantic duplicate cố ý: plan-auth
-// §11 step 9 quyết định KHÔNG codegen — đổi shape sửa cả 2, CI integration
-// test catch lệch.
+// "Linking — me/sources" + "Sync" + "Upload batches"). Zod ↔ Pydantic
+// duplicate cố ý: plan-auth §11 step 9 quyết định KHÔNG codegen — đổi shape
+// sửa cả 2, CI integration test catch lệch.
 //
 // Tất cả endpoint cần Bearer → authFetch (auth/_intercept.js). authFetch tự
 // clear store khi 401 → UI fall back về Login modal.
@@ -15,18 +15,22 @@ import { z } from "zod";
 import { ApiError, ProblemDetails } from "../auth/client.js";
 import { authFetch } from "../auth/_intercept.js";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// Xem ghi chú ở api/client.js: localhost → 8000 cho dev, ngược lại theo env.
+const API_BASE_URL = (() => {
+  if (typeof window !== "undefined") {
+    const h = window.location.hostname;
+    if (h === "localhost" || h === "127.0.0.1") return "http://localhost:8000";
+  }
+  return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+})();
 
-// ── Schemas ───────────────────────────────────────────────────────────────
+// ── Schemas: linked sources ───────────────────────────────────────────────
 
 export const LinkedSource = z.object({
   id: z.string().uuid(),
   source_type: z.string(),
   label: z.string(),
   status: z.enum(["active", "paused", "failed"]),
-  contribute_to_community: z.boolean(),
-  contributed_at: z.string().nullable(),
   last_sync_at: z.string().nullable(),
   last_sync_error: z.string().nullable(),
   created_at: z.string(),
@@ -82,16 +86,9 @@ export const LinkSourceRequest = z.object({
   ),
 });
 
-export const LinkedSourcePatchRequest = z
-  .object({
-    contribute_to_community: z.boolean().optional(),
-    status: z.enum(["active", "paused"]).optional(),
-  })
-  .refine(
-    (obj) =>
-      obj.contribute_to_community !== undefined || obj.status !== undefined,
-    { message: "PATCH cần ít nhất 1 field" },
-  );
+export const LinkedSourcePatchRequest = z.object({
+  status: z.enum(["active", "paused"]),
+});
 
 export const SyncResult = z.object({
   linked_source_id: z.string().uuid(),
@@ -105,6 +102,65 @@ export const SyncResult = z.object({
   error: z.string().nullable(),
 });
 
+// ── Schemas: upload batches (mig 0024 + refactor 2026-06-11) ──────────────
+
+export const UploadKind = z.enum([
+  "csv",
+  "json",
+  "sync_lpwanmapper",
+  "sync_chirpstack",
+]);
+export const BatchStatus = z.enum([
+  "private",
+  "pending",
+  "public",
+  "rejected",
+  "deleted",
+]);
+
+export const UploadBatchItem = z.object({
+  id: z.string().uuid(),
+  kind: UploadKind,
+  filename: z.string(),
+  linked_source_id: z.string().uuid().nullable(),
+  uploaded_at: z.string(),
+  points_count: z.number().int().nonnegative(),
+  status: BatchStatus,
+  deleted_at: z.string().nullable().default(null),
+});
+
+export const UploadBatchListResponse = z.object({
+  items: z.array(UploadBatchItem).default([]),
+});
+
+export const UploadOverviewResponse = z.object({
+  batches_total: z.number().int().nonnegative(),
+  points_total: z.number().int().nonnegative(),
+  public_batches: z.number().int().nonnegative(),
+  pending_batches: z.number().int().nonnegative(),
+  private_batches: z.number().int().nonnegative(),
+});
+
+export const UploadBatchSubmitResponse = z.object({
+  batch_id: z.string().uuid(),
+  queued: z.number().int().nonnegative(),
+});
+
+export const UploadBatchDeleteResponse = z.object({
+  batch_id: z.string().uuid(),
+  deleted: z.boolean(),
+});
+
+// CSV/JSON upload — refactor 2026-06-11: upload luôn private, không còn
+// `submit_to_community`. `batch_id` null khi parsed_count=0 (file sai schema).
+export const CsvUploadResponse = z.object({
+  batch_id: z.string().uuid().nullable(),
+  parsed_count: z.number().int().nonnegative(),
+  parse_rejected_count: z.number().int().nonnegative(),
+  parse_rejected_reasons: z.array(z.string()).default([]),
+  inserted_count: z.number().int().nonnegative(),
+});
+
 /**
  * @typedef {z.infer<typeof LinkedSource>} LinkedSourceT
  * @typedef {z.infer<typeof LinkedSourceList>} LinkedSourceListT
@@ -115,6 +171,11 @@ export const SyncResult = z.object({
  * @typedef {z.infer<typeof DeviceList>} DeviceListT
  * @typedef {z.infer<typeof LinkedSourcePatchRequest>} LinkedSourcePatchRequestT
  * @typedef {z.infer<typeof SyncResult>} SyncResultT
+ * @typedef {z.infer<typeof UploadBatchItem>} UploadBatchItemT
+ * @typedef {z.infer<typeof UploadOverviewResponse>} UploadOverviewResponseT
+ * @typedef {z.infer<typeof UploadBatchSubmitResponse>} UploadBatchSubmitResponseT
+ * @typedef {z.infer<typeof UploadBatchDeleteResponse>} UploadBatchDeleteResponseT
+ * @typedef {z.infer<typeof CsvUploadResponse>} CsvUploadResponseT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -136,7 +197,7 @@ async function _throwProblem(res) {
   });
 }
 
-// ── Endpoints ─────────────────────────────────────────────────────────────
+// ── Endpoints: linked sources ─────────────────────────────────────────────
 
 /**
  * GET /api/v1/me/sources
@@ -220,8 +281,7 @@ export async function unlinkSource(id) {
 }
 
 /**
- * PATCH /api/v1/me/sources/{id} — toggle contribute và/hoặc status.
- * Cả 2 None → backend 400. Schema refine ở client cũng chặn trước.
+ * PATCH /api/v1/me/sources/{id} — chỉ flip status (active/paused).
  * @param {string} id
  * @param {LinkedSourcePatchRequestT} patch
  * @returns {Promise<LinkedSourceT>}
@@ -255,4 +315,92 @@ export async function syncSource(id) {
   );
   if (!res.ok) await _throwProblem(res);
   return SyncResult.parse(await res.json());
+}
+
+// ── Endpoints: upload batches (refactor 2026-06-11) ───────────────────────
+
+/**
+ * POST /api/v1/me/uploads/csv — multipart upload CSV/JSON survey.
+ *
+ * Refactor 2026-06-11: upload LUÔN tạo batch private, không còn checkbox
+ * "đóng góp". User bấm "Đóng góp" trên 1 batch sau đó (xem submitUploadBatch).
+ *
+ * @param {File} file
+ * @returns {Promise<CsvUploadResponseT>}
+ */
+export async function uploadMeasurementsCsv(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/csv`, {
+    method: "POST",
+    body: fd,
+    // KHÔNG set content-type: browser tự thêm boundary cho multipart/form-data.
+  });
+  if (!res.ok) await _throwProblem(res);
+  return CsvUploadResponse.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/me/uploads/overview — card "Tổng quan" trang Dữ liệu của tôi.
+ *
+ * @returns {Promise<z.infer<typeof UploadOverviewResponse>>}
+ */
+export async function fetchUploadOverview() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/me/uploads/overview`);
+  if (!res.ok) await _throwProblem(res);
+  return UploadOverviewResponse.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/me/uploads/batches?include_deleted=...
+ *
+ * `includeDeleted=false` (Quản lý dữ liệu): chỉ batch còn sống.
+ * `includeDeleted=true` (Lịch sử upload, default): bao gồm batch deleted.
+ *
+ * @param {{ includeDeleted?: boolean }} [opts]
+ * @returns {Promise<UploadBatchItemT[]>}
+ */
+export async function listUploadBatches(opts = {}) {
+  const url = new URL(`${API_BASE_URL}/api/v1/me/uploads/batches`);
+  if (opts.includeDeleted === false) {
+    url.searchParams.set("include_deleted", "false");
+  }
+  const res = await authFetch(url.toString());
+  if (!res.ok) await _throwProblem(res);
+  const parsed = UploadBatchListResponse.parse(await res.json());
+  return parsed.items;
+}
+
+/**
+ * POST /api/v1/me/uploads/batches/{id}/submit — đóng góp 1 batch cho cộng
+ * đồng (admin duyệt). Idempotent: re-call → queued=0.
+ *
+ * 403 email_not_verified khi user chưa xác thực email.
+ *
+ * @param {string} batchId
+ * @returns {Promise<UploadBatchSubmitResponseT>}
+ */
+export async function submitUploadBatch(batchId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/me/uploads/batches/${batchId}/submit`,
+    { method: "POST" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return UploadBatchSubmitResponse.parse(await res.json());
+}
+
+/**
+ * DELETE /api/v1/me/uploads/batches/{id} — soft-delete batch + hard-purge
+ * rows con (quarantine + training). 404 nếu batch không tồn tại / đã xoá.
+ *
+ * @param {string} batchId
+ * @returns {Promise<UploadBatchDeleteResponseT>}
+ */
+export async function deleteUploadBatch(batchId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/me/uploads/batches/${batchId}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return UploadBatchDeleteResponse.parse(await res.json());
 }

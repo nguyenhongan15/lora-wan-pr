@@ -58,7 +58,7 @@ class GatewayStateService:
         if cache_url:
             import redis
 
-            self._cache = redis.from_url(cache_url, decode_responses=True)
+            self._cache = redis.from_url(cache_url, decode_responses=True)  # type: ignore[no-untyped-call]
 
     def get_state_map(self) -> dict[str, GatewayState]:
         """Return {gateway_code: GatewayState}. Empty dict nếu fail."""

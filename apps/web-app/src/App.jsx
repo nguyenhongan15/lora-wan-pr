@@ -1,9 +1,9 @@
 // @ts-check
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { AdminGateways } from "./components/AdminGateways.jsx";
 import { AdminPage } from "./admin/AdminPage.jsx";
-import { BulkLookup } from "./components/BulkLookup.jsx";
 import { CoverageMap } from "./components/CoverageMap.jsx";
+import { LandingPage } from "./components/LandingPage.jsx";
 import { AuthModal } from "./auth/AuthModal.jsx";
 import { EmailVerifyConfirmPage } from "./auth/EmailVerifyConfirmPage.jsx";
 import { EmailVerifyModal } from "./auth/EmailVerifyModal.jsx";
@@ -13,7 +13,46 @@ import { bootstrap, logout } from "./auth/client.js";
 import { SourcesPage } from "./sources/SourcesPage.jsx";
 import { strings } from "./strings.js";
 
-/** @typedef {"predict" | "map" | "heatmap" | "bulk" | "admin" | "sources" | "adminPanel"} Tab */
+/** @typedef {"home" | "predict" | "map" | "heatmap" | "admin" | "sources" | "adminPanel"} Tab */
+
+/** @type {ReadonlySet<Tab>} */
+const _VALID_TABS = new Set(/** @type {Tab[]} */ ([
+  "home",
+  "predict",
+  "map",
+  "heatmap",
+  "admin",
+  "sources",
+  "adminPanel",
+]));
+
+/** Đọc `page=X` từ hash → trả tab id; fallback "home" nếu thiếu/sai. */
+function _readPageFromHash() {
+  if (typeof window === "undefined") return /** @type {Tab} */ ("home");
+  const raw = window.location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(raw);
+  const p = params.get("page");
+  return p && _VALID_TABS.has(/** @type {Tab} */ (p))
+    ? /** @type {Tab} */ (p)
+    : /** @type {Tab} */ ("home");
+}
+
+/**
+ * Ghi `page=` vào hash (replaceState — không spam history). Tab "home" = clear hash.
+ * `subTab` optional → `#page=sources&tab=manage` cho SourcesPage sub-section.
+ * @param {Tab} next
+ * @param {string} [subTab]
+ */
+function _writePageToHash(next, subTab) {
+  if (typeof window === "undefined") return;
+  if (next === "home") {
+    window.history.replaceState(null, "", window.location.pathname);
+  } else if (subTab) {
+    window.history.replaceState(null, "", `#page=${next}&tab=${subTab}`);
+  } else {
+    window.history.replaceState(null, "", `#page=${next}`);
+  }
+}
 
 /**
  * Đọc `?reset=<token>` từ URL ở thời điểm App mount. Không subscribe — token
@@ -51,36 +90,19 @@ function _isUnknownPath() {
 }
 
 export function App() {
-  const [tab, setTab] = useState(/** @type {Tab} */ ("map"));
+  const [tab, setTab] = useState(_readPageFromHash);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navMenuOpen, setNavMenuOpen] = useState(false);
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [resetToken, setResetToken] = useState(_readResetTokenFromUrl);
   const [verifyEmailToken, setVerifyEmailToken] = useState(
     _readVerifyEmailTokenFromUrl,
   );
-  // Handoff state cho luồng Bulk → Predict: BulkLookup gọi onViewOnMap với
-  // danh sách điểm đã predict; App lưu vào ref-state, chuyển tab, và truyền
-  // xuống CoverageMap (mode="predict"). Sau khi CoverageMap consume xong,
-  // gọi onConsumed → null state để không render lại nếu user navigate qua lại.
-  const [bulkHandoff, setBulkHandoff] = useState(
-    /** @type {import("./components/BulkLookup.jsx").BulkHandoffPoint[] | null} */ (
-      null
-    ),
+  const [postLoginAction, setPostLoginAction] = useState(
+    /** @type {{ run: () => void } | null} */ (null),
   );
-  // useCallback giữ identity stable qua các App render không liên quan
-  // (auth bootstrap, menu toggle, …). Nếu callback đổi ref, CoverageMap effect
-  // dep `onBulkHandoffConsumed` sẽ trigger lại trong khi bulkHandoff vẫn còn,
-  // gây flicker / fitBounds chạy 2 lần.
-  const handleViewBulkOnMap = useCallback(
-    /** @param {import("./components/BulkLookup.jsx").BulkHandoffPoint[]} points */
-    (points) => {
-      setBulkHandoff(points);
-      setTab("predict");
-    },
-    [],
-  );
-  const handleBulkHandoffConsumed = useCallback(() => setBulkHandoff(null), []);
   const user = useSyncExternalStore(subscribe, getUser);
   const t = strings.app;
   const tHeader = strings.auth.header;
@@ -98,21 +120,53 @@ export function App() {
   // /auth/refresh → refresh-family revoke. EmailVerifyConfirmPage tự refresh
   // user payload sau khi mutation isSuccess (effect riêng trong page đó).
   useEffect(() => {
-    if (resetToken !== null) return;
-    bootstrap().catch(() => {
-      // Lỗi mạng / parse: coi như chưa login, không show banner — silent.
-    });
+    if (resetToken !== null) {
+      setBootstrapped(true);
+      return;
+    }
+    bootstrap()
+      .catch(() => {
+        // Lỗi mạng / parse: coi như chưa login, không show banner — silent.
+      })
+      .finally(() => setBootstrapped(true));
   }, [resetToken]);
+
+  // Sync back/forward navigation: browser back → hashchange → set tab khớp.
+  useEffect(() => {
+    function onHashChange() {
+      setTab(_readPageFromHash());
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // Landing CTA "Mở Dữ liệu của tôi" / "Đóng góp dữ liệu" → mở AuthModal khi chưa
+  // login, đăng nhập xong tự navigate. Effect fire khi user becomes truthy.
+  useEffect(() => {
+    if (!user || !postLoginAction) return;
+    postLoginAction.run();
+    setPostLoginAction(null);
+  }, [user, postLoginAction]);
 
   // Tab "sources" cần user. Tab "adminPanel" cần user.is_admin.
   // Khi điều kiện không còn (logout / token expire / admin bị demote giữa
-  // session) mà đang ở tab đó → switch về "map" để tránh render component
+  // session) mà đang ở tab đó → switch về "home" để tránh render component
   // không có quyền (sẽ 401/403 và hiện error vô ích).
+  //
+  // Guard chỉ chạy SAU khi bootstrap settled — tránh race condition: refresh
+  // với hash `#page=sources`, lúc mount user=null → guard reset "home" TRƯỚC
+  // khi bootstrap khôi phục user → mất tab.
   useEffect(() => {
-    if (!user && tab === "sources") setTab("map");
-    if (!user?.is_admin && tab === "adminPanel") setTab("map");
-    if (user?.is_admin && tab === "bulk") setTab("map");
-  }, [user, tab]);
+    if (!bootstrapped) return;
+    if (!user && tab === "sources") {
+      setTab("home");
+      _writePageToHash("home");
+    }
+    if (!user?.is_admin && tab === "adminPanel") {
+      setTab("home");
+      _writePageToHash("home");
+    }
+  }, [bootstrapped, user, tab]);
 
   // Reset mode: render full-screen, không render app chính. Sau khi user xong
   // (success → click "Đăng nhập" hoặc cancel) → clear param + state, mở
@@ -162,38 +216,64 @@ export function App() {
     await logout();
   }
 
+  /**
+   * Chọn tab + đóng nav menu mobile (nếu đang mở). Dùng cho cả desktop nav
+   * và mobile dropdown để không phải lặp `setNavMenuOpen(false)` ở mỗi callback.
+   * Ghi hash → refresh giữ nguyên tab. `subTab` optional cho SourcesPage.
+   * @param {Tab} next
+   * @param {string} [subTab]
+   */
+  function selectTab(next, subTab) {
+    setTab(next);
+    _writePageToHash(next, subTab);
+    setNavMenuOpen(false);
+  }
+
+  /**
+   * Mở AuthModal; nếu caller cung cấp afterLogin → lưu để fire sau khi đăng nhập
+   * thành công. User đóng modal mà không login → drop pending action.
+   * @param {(() => void) | undefined} [afterLogin]
+   */
+  function requestLogin(afterLogin) {
+    setPostLoginAction(afterLogin ? { run: afterLogin } : null);
+    setAuthOpen(true);
+  }
+
+  function closeAuthModal() {
+    setAuthOpen(false);
+    if (!getUser()) setPostLoginAction(null);
+  }
+
   return (
     <div className="flex h-dvh flex-col">
       <header className="shrink-0 border-b border-slate-200 bg-white">
-        <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <div>
-            <h1 className="text-lg font-bold text-slate-900">{t.title}</h1>
+        <div className="flex items-center justify-between gap-3 px-4 py-3 md:gap-4 md:px-6">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold text-slate-900 md:text-lg">{t.title}</h1>
 
           </div>
-          <div className="flex items-center gap-3">
-            <nav className="flex gap-2">
-              <TabButton active={tab === "map"} onClick={() => setTab("map")}>
+          <div className="flex items-center gap-2 md:gap-3">
+            <nav className="hidden gap-2 md:flex">
+              <TabButton active={tab === "home"} onClick={() => selectTab("home")}>
+                {t.tabs.home}
+              </TabButton>
+              <TabButton active={tab === "map"} onClick={() => selectTab("map")}>
                 {t.tabs.map}
               </TabButton>
-              <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
+              <TabButton active={tab === "heatmap"} onClick={() => selectTab("heatmap")}>
                 {t.tabs.heatmap}
               </TabButton>
 
-              <TabButton active={tab === "predict"} onClick={() => setTab("predict")}>
+              <TabButton active={tab === "predict"} onClick={() => selectTab("predict")}>
                 {t.tabs.predict}
               </TabButton>
-              {!user?.is_admin && (
-                <TabButton active={tab === "bulk"} onClick={() => setTab("bulk")}>
-                  {t.tabs.bulk}
-                </TabButton>
-              )}
-              <TabButton active={tab === "admin"} onClick={() => setTab("admin")}>
+              <TabButton active={tab === "admin"} onClick={() => selectTab("admin")}>
                 {t.tabs.admin}
               </TabButton>
               {user && (
                 <TabButton
                   active={tab === "sources"}
-                  onClick={() => setTab("sources")}
+                  onClick={() => selectTab("sources")}
                 >
                   {t.tabs.sources}
                 </TabButton>
@@ -201,12 +281,22 @@ export function App() {
               {user?.is_admin && (
                 <TabButton
                   active={tab === "adminPanel"}
-                  onClick={() => setTab("adminPanel")}
+                  onClick={() => selectTab("adminPanel")}
                 >
                   {t.tabs.adminPanel}
                 </TabButton>
               )}
             </nav>
+            <button
+              type="button"
+              onClick={() => setNavMenuOpen((o) => !o)}
+              aria-label={navMenuOpen ? t.navMenu.close : t.navMenu.open}
+              aria-expanded={navMenuOpen}
+              aria-controls="mobile-nav-menu"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 md:hidden"
+            >
+              {navMenuOpen ? <CloseIcon /> : <HamburgerIcon />}
+            </button>
             <div className="relative">
             <button
               type="button"
@@ -281,26 +371,53 @@ export function App() {
             </div>
           </div>
         </div>
+        {navMenuOpen && (
+          <nav
+            id="mobile-nav-menu"
+            className="flex flex-col gap-1.5 border-t border-slate-200 bg-white px-4 py-3 md:hidden"
+          >
+            <TabButton fullWidth active={tab === "home"} onClick={() => selectTab("home")}>
+              {t.tabs.home}
+            </TabButton>
+            <TabButton fullWidth active={tab === "map"} onClick={() => selectTab("map")}>
+              {t.tabs.map}
+            </TabButton>
+            <TabButton fullWidth active={tab === "heatmap"} onClick={() => selectTab("heatmap")}>
+              {t.tabs.heatmap}
+            </TabButton>
+            <TabButton fullWidth active={tab === "predict"} onClick={() => selectTab("predict")}>
+              {t.tabs.predict}
+            </TabButton>
+            <TabButton fullWidth active={tab === "admin"} onClick={() => selectTab("admin")}>
+              {t.tabs.admin}
+            </TabButton>
+            {user && (
+              <TabButton fullWidth active={tab === "sources"} onClick={() => selectTab("sources")}>
+                {t.tabs.sources}
+              </TabButton>
+            )}
+            {user?.is_admin && (
+              <TabButton fullWidth active={tab === "adminPanel"} onClick={() => selectTab("adminPanel")}>
+                {t.tabs.adminPanel}
+              </TabButton>
+            )}
+          </nav>
+        )}
       </header>
 
       <main className="min-h-0 flex-1">
-        {tab === "map" && <CoverageMap mode="points" />}
-        {tab === "heatmap" && <CoverageMap mode="heatmap" />}
-        {tab === "predict" && (
-          <CoverageMap
-            mode="predict"
-            bulkHandoff={bulkHandoff}
-            onBulkHandoffConsumed={handleBulkHandoffConsumed}
-          />
-        )}
-        {/* Bulk tab luôn mount để state (csvText, kết quả mutation, sf) sống
-            sót khi user "Xem trên bản đồ" → quay lại tab Tra cứu hàng loạt.
-            Display:none giữ instance React + DOM. Admin không có tab này. */}
-        {!user?.is_admin && (
-          <div className={tab === "bulk" ? "h-full overflow-y-auto" : "hidden"}>
-            <BulkLookup onViewOnMap={handleViewBulkOnMap} />
+        {tab === "home" && (
+          <div className="h-full overflow-y-auto">
+            <LandingPage
+              onNavigate={selectTab}
+              isLoggedIn={!!user}
+              onRequestLogin={requestLogin}
+            />
           </div>
         )}
+        {tab === "map" && <CoverageMap mode="points" />}
+        {tab === "heatmap" && <CoverageMap mode="heatmap" />}
+        {tab === "predict" && <CoverageMap mode="predict" />}
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />
@@ -321,7 +438,7 @@ export function App() {
         )}
       </main>
 
-      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+      <AuthModal isOpen={authOpen} onClose={closeAuthModal} />
       {user && (
         <EmailVerifyModal
           isOpen={verifyOpen}
@@ -334,14 +451,20 @@ export function App() {
 }
 
 /**
- * @param {{ active: boolean, onClick: () => void, children: import("react").ReactNode }} props
+ * @param {{
+ *   active: boolean,
+ *   onClick: () => void,
+ *   children: import("react").ReactNode,
+ *   fullWidth?: boolean,
+ * }} props
  */
-function TabButton({ active, onClick, children }) {
+function TabButton({ active, onClick, children, fullWidth = false }) {
   return (
     <button
       onClick={onClick}
       className={
         "rounded-md px-3 py-1.5 text-sm font-medium transition " +
+        (fullWidth ? "w-full text-left " : "") +
         (active
           ? "bg-slate-900 text-white"
           : "border border-slate-300 text-slate-700 hover:bg-slate-100")
@@ -349,6 +472,45 @@ function TabButton({ active, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function HamburgerIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
   );
 }
 

@@ -1,3 +1,6 @@
+# Local demo notes (Cloudflare Tunnel setup) — không push public.
+DEMO_LOCAL.md
+
 # ── Python ─────────────────────────────────────
 __pycache__/
 *.py[cod]

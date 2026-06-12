@@ -13,6 +13,7 @@ import {
   listGateways,
   patchGateway,
 } from "../api/client.js";
+import { AlertModal } from "./Modal.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.adminGateways;
@@ -37,7 +38,7 @@ export function AdminGateways({ editable = false }) {
   const [creating, setCreating] = useState(false);
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-6">
+    <div className="mx-auto max-w-6xl px-4 py-4 md:px-6 md:py-6">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-900">
           {t.title}
@@ -62,7 +63,7 @@ export function AdminGateways({ editable = false }) {
       )}
 
       {listQ.data && (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
@@ -243,12 +244,13 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
   const [antennaHeightM, setAntennaHeightM] = useState(String(initial.antenna_height_m));
   const [antennaGainDbi, setAntennaGainDbi] = useState(String(initial.antenna_gain_dbi));
   const [txPowerDbm, setTxPowerDbm] = useState(String(initial.tx_power_dbm));
+  const [etagAlert, setEtagAlert] = useState(false);
 
   /** @param {import("react").FormEvent} e */
   function handleSubmit(e) {
     e.preventDefault();
     if (!etag) {
-      alert(t.etagMissingAlert);
+      setEtagAlert(true);
       return;
     }
     /** @type {import("../api/client.js").GatewayPatchRequestT} */
@@ -268,7 +270,7 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
         <ReadonlyField label={t.fields.code} value={initial.code} />
         <ReadonlyField label={t.fields.id} value={initial.id} mono />
         <ReadonlyField label={t.fields.lat} value={initial.latitude.toFixed(6)} mono />
@@ -315,6 +317,14 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
           {submitting ? t.savePending : t.save}
         </button>
       </div>
+
+      {etagAlert && (
+        <AlertModal
+          title={t.etagMissingTitle}
+          body={t.etagMissingAlert}
+          onClose={() => setEtagAlert(false)}
+        />
+      )}
     </form>
   );
 }
@@ -357,7 +367,7 @@ function CreateGatewayModal({ onClose, onCreated }) {
   return (
     <Modal title={t.createTitle} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <Field label={t.fields.code} value={code} onChange={setCode} required />
           <Field label={t.fields.name} value={name} onChange={setName} required />
           <Field label={t.fields.latitude} value={latitude} onChange={setLatitude} type="number" required />

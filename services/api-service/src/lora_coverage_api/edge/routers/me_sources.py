@@ -4,9 +4,7 @@ Plan-auth-v1 §11 step 6 + plan ChirpStack per-user webhook ingest §2-3.
 Mỗi endpoint marshall I/O và gọi 1-2 method LinkingService / SyncService /
 DeviceQuery. ApplicationError handler ở edge/errors.py xử lý mọi exception.
 
-PATCH gộp 2 toggle (contribute + status) vào 1 endpoint thay vì 2 sub-route
-POST — REST-idiomatic, hỗ trợ ETag/If-Match concurrency check sau, giảm
-surface area.
+PATCH chỉ flip `status` (active/paused) — REST-idiomatic, surface area gọn.
 
 Webhook show-once: response của `POST /me/sources` và `POST /{id}/rotate-
 webhook` là CHỖ DUY NHẤT trả plaintext token. List/get endpoint chỉ phơi
@@ -20,7 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from ...application.identity import EmailNotVerifiedError, User
+from ...application.identity import User
 from ...application.linking import LinkedSource, LinkingError, LinkingService, LinkResult
 from ...application.repositories import DeviceQuery
 from ...application.sync import SyncResult, SyncService
@@ -54,8 +52,6 @@ def _to_response(ls: LinkedSource) -> LinkedSourceResponse:
         source_type=ls.source_type,
         label=ls.label,
         status=ls.status,
-        contribute_to_community=ls.contribute_to_community,
-        contributed_at=ls.contributed_at,
         last_sync_at=ls.last_sync_at,
         last_sync_error=ls.last_sync_error,
         created_at=ls.created_at,
@@ -147,25 +143,13 @@ def patch_source(
     user: Annotated[User, Depends(current_user)],
     linking: Annotated[LinkingService, Depends(linking_service)],
 ) -> LinkedSourceResponse:
-    if body.contribute_to_community is None and body.status is None:
-        raise LinkingError("PATCH body cần ít nhất 1 trong contribute_to_community hoặc status")
+    if body.status is None:
+        raise LinkingError("PATCH body cần field `status`")
 
-    if body.contribute_to_community is True and not user.email_verified:
-        raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
-
-    # Apply mỗi toggle riêng — 1 transaction để 2 update atomic. Method gọi
-    # cuối trả LinkedSource sau cả 2 update.
     with _engine().begin() as conn:
-        result: LinkedSource | None = None
-        if body.status is not None:
-            result = linking.set_sync_enabled(
-                conn, user, linked_source_id, enabled=body.status == "active"
-            )
-        if body.contribute_to_community is not None:
-            result = linking.set_contribution(
-                conn, user, linked_source_id, enabled=body.contribute_to_community
-            )
-    assert result is not None
+        result = linking.set_sync_enabled(
+            conn, user, linked_source_id, enabled=body.status == "active"
+        )
     return _to_response(result)
 
 

@@ -24,11 +24,10 @@ Quyết định:
   * `frequency_mhz` default 923.0 (AS923-2 ĐN) khi adapter không trả; check
     constraint `chk_freq_lora_band` chỉ cho 433/868/915/923 nên caller phải
     pass giá trị hợp lệ.
-  * Target routing (plan community-data-contribution §3.4): measurement
-    LUÔN ghi quarantine với cờ `submitted_for_community` set theo
-    `linked_sources.contribute_to_community`. Trust pipeline (xem
-    application/trust/promotion.py) chịu trách nhiệm copy sang training sau
-    khi pass 3 lớp validation — KHÔNG còn path ghi thẳng training.
+  * Target routing: measurement LUÔN ghi quarantine với
+    `submitted_for_community=false`. User submit batch riêng để flip cờ +
+    chạy trust pipeline (xem application/trust/promotion.py) copy sang
+    training — KHÔNG có path ghi thẳng training.
 """
 
 from __future__ import annotations
@@ -91,7 +90,7 @@ _QUARANTINE_UPSERT_SQL = text("""
         spreading_factor, frequency_mhz, device_id,
         serving_gateway_id, uploader_id,
         external_id, source_type, contributor_user_id, linked_source_id,
-        submitted_for_community, code_rate
+        submitted_for_community, code_rate, batch_id
     )
     VALUES (
         :ts,
@@ -99,13 +98,18 @@ _QUARANTINE_UPSERT_SQL = text("""
         :rssi, :snr, :sf, :freq, :device_id,
         :gw_id, :uploader_id,
         :external_id, :source_type, :contributor_user_id, :linked_source_id,
-        :submitted_for_community, :code_rate
+        :submitted_for_community, :code_rate, :batch_id
     )
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
     DO UPDATE SET
         -- First-writer-wins: xem comment trong _GATEWAY_UPSERT_SQL.
         contributor_user_id = COALESCE(ts.survey_quarantine.contributor_user_id, EXCLUDED.contributor_user_id),
         linked_source_id    = COALESCE(ts.survey_quarantine.linked_source_id,    EXCLUDED.linked_source_id),
+        -- Batch ownership cũng first-writer-wins: re-sync (cùng (timestamp,
+        -- source_type, external_id)) giữ batch gốc → UI Lịch sử upload trỏ
+        -- đúng lần đầu data xuất hiện. Sync mới với 0 row insert vẫn có batch
+        -- row riêng (points_count=0).
+        batch_id            = COALESCE(ts.survey_quarantine.batch_id,            EXCLUDED.batch_id),
         -- Cờ contribute promoted (false → true) khi user opt-in giữa hai
         -- lần sync — GREATEST giữ true nếu một trong hai bên đã true,
         -- không bao giờ revert true→false (consistency với plan §3.4:
@@ -216,6 +220,7 @@ def upsert_measurement(
     contributor_user_id: UUID | None = None,
     linked_source_id: UUID | None = None,
     submitted_for_community: bool = False,
+    batch_id: UUID | None = None,
 ) -> UpsertResult:
     """Insert hoặc update provenance của 1 measurement trong ts.survey_quarantine.
 
@@ -224,9 +229,12 @@ def upsert_measurement(
 
     `submitted_for_community` (plan community-data-contribution §3.4):
       * False — personal-only, mãi mãi ở quarantine (chỉ user owner xem được).
-      * True  — đủ điều kiện chạy qua TrustValidator pipeline; pass → promote
-        sang training. Sync orchestrator pass theo `linked_sources.
-        contribute_to_community`; CSV upload pass theo checkbox của user.
+      * True  — eligible cho admin review (user bấm "Đóng góp" per-batch).
+
+    `batch_id` (mig 0024) — FK xuống `me.upload_batches`. Caller (sync
+    orchestrator) tạo batch row trước rồi truyền id để UI gom rows về batch
+    của lần sync này. ON CONFLICT giữ batch_id cũ (first-writer-wins) → re-sync
+    không cướp ownership của row đã pull từ batch trước.
     """
     freq = rec.frequency_mhz if rec.frequency_mhz is not None else DEFAULT_FREQUENCY_MHZ
 
@@ -249,6 +257,7 @@ def upsert_measurement(
             "linked_source_id": linked_source_id,
             "submitted_for_community": submitted_for_community,
             "code_rate": rec.code_rate,
+            "batch_id": batch_id,
         },
     ).one()
     return "inserted" if row.inserted else "updated"

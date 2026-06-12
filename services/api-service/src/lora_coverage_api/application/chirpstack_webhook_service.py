@@ -160,7 +160,7 @@ class ChirpstackWebhookService:
             source_type=context.source_type,
             linked_source_id=context.linked_source_id,
             contributor_user_id=context.user_id,
-            submitted_for_community=context.contribute,
+            submitted_for_community=False,
         )
 
         return WebhookIngestReceipt(

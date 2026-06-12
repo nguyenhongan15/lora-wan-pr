@@ -208,6 +208,35 @@ async def healthz():
     return {"status": "ok"}
 
 
+@app.post("/admin/reload")
+async def admin_reload(
+    request: Request,
+    _auth: Annotated[None, Depends(verify_token)],
+):
+    """Hot-reload joblib model. Goi sau khi Celery retrain_ml_model atomic-swap
+    file artifact xong — tranh phai docker restart ml-service.
+
+    Cung bearer token nhu /residual (LORA_STAGE2_AUTH_TOKEN).
+    """
+    path = Path(settings.model_path)
+    if not path.exists():
+        request.app.state.model = None
+        request.app.state.is_model_active = False
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model artifact not found at {settings.model_path}",
+        )
+    try:
+        request.app.state.model = joblib.load(path)
+        request.app.state.is_model_active = True
+        logger.info(f"Model hot-reloaded from {settings.model_path}")
+        return {"status": "ok", "model_path": str(path), "model_version": settings.model_version}
+    except Exception as e:
+        request.app.state.is_model_active = False
+        logger.error(f"Failed to hot-reload model: {e}")
+        raise HTTPException(status_code=500, detail=f"reload failed: {e}") from e
+
+
 @app.post("/residual", response_model=PredictionResponse)
 async def predict_residual(
     request: Request,

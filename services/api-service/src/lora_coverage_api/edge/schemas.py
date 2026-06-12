@@ -223,79 +223,84 @@ class WebhookIngestResponse(BaseModel):
 
 
 class CsvUploadResponse(BaseModel):
-    """Per-row outcome breakdown sau khi parse + ingest + (optional) promote.
+    """Per-row outcome sau parse + ingest. Refactor 2026-06-11: upload luôn
+    private; user bấm "Đóng góp" trên 1 batch riêng để gửi admin duyệt nên
+    không còn `promoted_count` / `promote_rejected_*`.
 
-    `parse_rejected_count` = row CSV bị adapter loại (sai schema, RSSI ngoài
+    `parse_rejected_count` = row bị adapter loại (sai schema, RSSI ngoài
     range, gateway_code không tồn tại). `inserted_count` = row thực sự vào
-    quarantine. `promoted_count` + `promote_rejected_count` chỉ > 0 khi
-    submit_to_community=true; nếu không thì cả 2 = 0.
+    quarantine (sau ON CONFLICT DO NOTHING). `batch_id` = id row mới trong
+    `me.upload_batches`; None khi parsed_count=0 (không tạo batch rỗng).
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    batch_id: UUID | None = None
     parsed_count: int = Field(..., ge=0)
     parse_rejected_count: int = Field(..., ge=0)
     parse_rejected_reasons: list[str] = Field(default_factory=list)
     inserted_count: int = Field(..., ge=0)
-    promoted_count: int = Field(..., ge=0)
-    promote_rejected_count: int = Field(..., ge=0)
-    promote_rejected_by_reason: dict[str, int] = Field(default_factory=dict)
 
 
-class CsvUploadStats(BaseModel):
-    """Tổng quan CSV của 1 user — dùng cho card "Tải lên CSV của tôi"."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    total: int = Field(..., ge=0, description="Tổng quarantine row source_type=csv_upload")
-    pending: int = Field(
-        ...,
-        ge=0,
-        description="Row còn pending (chưa qua auto-validate) — số sẽ chạy validator khi user click Đóng góp",
-    )
-    pending_review: int = Field(
-        ...,
-        ge=0,
-        description="Row đã pass auto-validate, chờ admin duyệt thủ công",
-    )
-    promoted: int = Field(..., ge=0, description="Row đã promote sang training")
-    rejected: int = Field(..., ge=0, description="Row đã reject (set reject_reason)")
+# ── Upload batches (mig 0024 + refactor 2026-06-11) ───────────────────────
+# 1 batch = 1 lần "bắn data": upload file (csv/json) hoặc click "Tải dữ liệu
+# mới nhất" trên linked source (sync_lpwanmapper/sync_chirpstack). Trạng thái
+# suy ra ở backend (UploadBatchSummary.status), FE không tự tính.
 
 
-class CsvPromoteResponse(BaseModel):
-    """Kết quả 1 lần đóng góp tất cả CSV pending."""
+UploadKindLiteral = Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack"]
+BatchStatusLiteral = Literal["private", "pending", "public", "rejected", "deleted"]
+
+
+class UploadBatchItem(BaseModel):
+    """1 row trong bảng "Quản lý dữ liệu" / "Lịch sử upload"."""
 
     model_config = ConfigDict(extra="forbid")
 
-    promoted_count: int = Field(..., ge=0)
-    promote_rejected_count: int = Field(..., ge=0)
-    promote_rejected_by_reason: dict[str, int] = Field(default_factory=dict)
-
-
-class CsvUploadBatch(BaseModel):
-    """1 batch = 1 lần upload CSV. Key = uploaded_at (mỗi transaction NOW()
-    đồng nhất). FE dùng `uploaded_at` ISO để gọi DELETE."""
-
-    model_config = ConfigDict(extra="forbid")
-
+    id: UUID
+    kind: UploadKindLiteral
+    filename: str
+    linked_source_id: UUID | None
     uploaded_at: datetime
-    total: int = Field(..., ge=0)
-    pending: int = Field(..., ge=0)
-    pending_review: int = Field(..., ge=0)
-    promoted: int = Field(..., ge=0)
-    rejected: int = Field(..., ge=0)
+    points_count: int = Field(..., ge=0)
+    status: BatchStatusLiteral
+    deleted_at: datetime | None = None
 
 
-class CsvUploadBatchList(BaseModel):
+class UploadBatchListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[CsvUploadBatch] = Field(default_factory=list)
+    items: list[UploadBatchItem] = Field(default_factory=list)
 
 
-class CsvBatchDeleteResponse(BaseModel):
+class UploadOverviewResponse(BaseModel):
+    """Tổng quan card "Tổng quan" trên trang "Dữ liệu của tôi" (chỉ batch
+    chưa xoá). Số batches/points cũng đếm theo trạng thái suy diễn."""
+
     model_config = ConfigDict(extra="forbid")
 
-    deleted_count: int = Field(..., ge=0)
+    batches_total: int = Field(..., ge=0)
+    points_total: int = Field(..., ge=0)
+    public_batches: int = Field(..., ge=0)
+    pending_batches: int = Field(..., ge=0)
+    private_batches: int = Field(..., ge=0)
+
+
+class UploadBatchSubmitResponse(BaseModel):
+    """Đóng góp 1 batch → admin duyệt. `queued` = số rows mới chuyển
+    pending_review trong call này (idempotent: re-call → 0)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    queued: int = Field(..., ge=0)
+
+
+class UploadBatchDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    deleted: bool
 
 
 # ── Address lookup (F2 funnel) ────────────────────────────────────────────
@@ -460,16 +465,14 @@ class LinkSourceRequest(BaseModel):
 
 
 class LinkedSourcePatchRequest(BaseModel):
-    """Partial update — chỉ field có giá trị mới được apply.
+    """Partial update — chỉ field `status` được apply.
 
-    Cả 2 field None → 400 (request rỗng). Cho phép set cả 2 field cùng lúc.
     `status` chỉ accept 'active'/'paused' từ API; 'failed' do sync
     orchestrator set nội bộ (Step 7).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    contribute_to_community: bool | None = None
     status: Literal["active", "paused"] | None = None
 
 
@@ -480,8 +483,6 @@ class LinkedSourceResponse(BaseModel):
     source_type: str
     label: str
     status: Literal["active", "paused", "failed"]
-    contribute_to_community: bool
-    contributed_at: datetime | None
     last_sync_at: datetime | None
     last_sync_error: str | None
     created_at: datetime
@@ -759,3 +760,77 @@ class CoverageRebuildJobListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[CoverageRebuildJobResponse]
+
+
+# ── Admin training-batch audit (data đã duyệt vào ts.survey_training) ────
+
+
+class TrainingBatchItem(BaseModel):
+    """1 batch upload đã có ≥1 row trong ts.survey_training (đã được admin duyệt).
+
+    Khác `UploadBatchItem` ở user side: kèm `uploader_email` + `latest_approved_at`
+    cho admin trace-back.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    uploader_id: UUID
+    uploader_email: str | None
+    kind: Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack"] | None
+    filename: str | None
+    uploaded_at: datetime | None
+    promoted_count: int = Field(..., ge=0)
+    latest_approved_at: datetime
+    batch_deleted_at: datetime | None
+
+
+class TrainingBatchListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[TrainingBatchItem]
+
+
+class TrainingBatchDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    deleted_count: int
+
+
+# ── Admin ML retrain (mirror CoverageRebuild*) ───────────────────────────
+
+
+class MlRetrainEnqueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID
+    status: Literal["queued"]
+
+
+class MlRetrainJobResponse(BaseModel):
+    """1 lần admin trigger retrain Extra Trees ML model.
+
+    `metrics` JSONB chứa RMSE/MAE/R²/feature_count sau khi train xong;
+    `artifact_path` = đường dẫn joblib ml-service đang serve.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    status: Literal["queued", "running", "succeeded", "failed"]
+    triggered_by: UUID | None
+    triggered_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    rows_trained: int | None
+    artifact_path: str | None
+    metrics: dict[str, Any]
+    error_text: str | None
+    celery_task_id: str | None
+
+
+class MlRetrainJobListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[MlRetrainJobResponse]

@@ -41,17 +41,11 @@ class WebhookAuthError(ApplicationError):
 
 @dataclass(frozen=True, slots=True)
 class WebhookContext:
-    """Resolve result — pass thẳng vào ChirpstackWebhookService.ingest_uplink.
-
-    `contribute` đọc 1 lần lúc resolve (snapshot). Toggle giữa lúc resolve và
-    insert không re-check — chấp nhận race vì backfill cover trường hợp opt-in
-    sau (xem LinkingService._backfill_to_training).
-    """
+    """Resolve result — pass thẳng vào ChirpstackWebhookService.ingest_uplink."""
 
     user_id: UUID
     linked_source_id: UUID
     source_type: str
-    contribute: bool
 
 
 _SELECT_BY_TOKEN_HASH = text("""
@@ -60,7 +54,6 @@ _SELECT_BY_TOKEN_HASH = text("""
         ls.user_id         AS user_id,
         ls.source_type     AS source_type,
         ls.status          AS status,
-        ls.contribute_to_community AS contribute,
         u.disabled         AS user_disabled
     FROM auth.linked_sources ls
     JOIN auth.users u ON u.id = ls.user_id
@@ -119,7 +112,6 @@ class WebhookAuthService:
             user_id=row.user_id,
             linked_source_id=row.linked_source_id,
             source_type=row.source_type,
-            contribute=bool(row.contribute),
         )
 
 

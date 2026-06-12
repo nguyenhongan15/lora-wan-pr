@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-09T19:04:06Z",
+  "generated_at": "2026-06-12T11:02:29Z",
   "grid_m": 50.0,
   "bbox": {
     "lat_min": 15.8,
@@ -27,11 +27,11 @@
     "enabled": true,
     "scope": "per_gw",
     "max_link_km": 50.0,
-    "n_points": 9553,
-    "n_points_in_grid": 9342,
-    "n_cells_overlaid": 2130,
-    "n_gw_with_data": 11,
-    "n_gw_overlaid": 11
+    "n_points": 10107,
+    "n_points_in_grid": 10107,
+    "n_cells_overlaid": 2388,
+    "n_gw_with_data": 12,
+    "n_gw_overlaid": 12
   },
   "rssi_bins": [
     {
@@ -92,18 +92,18 @@
     {
       "code": "7276ff000b031aec",
       "name": "Kerlink iStation AEC",
-      "lat": 16.074819564819336,
-      "lon": 108.15412902832031,
+      "lat": 16.0732364654541,
+      "lon": 108.1514663696289,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 311,
-        "ix_start": 243,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 8,
+        "ix_start": 0,
+        "sub_ny": 1107,
+        "sub_nx": 1140
       },
-      "elapsed_s": 51.6,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 328.1,
+      "n_finite": 1261980,
+      "n_total": 1261980,
       "per_gw_geojson": "per_gw/7276ff000b031aec.geojson"
     },
     {
@@ -113,14 +113,14 @@
       "lon": 108.1524913,
       "noise_floor_dbm": -105.0,
       "sub_grid": {
-        "iy_start": 310,
-        "ix_start": 240,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 10,
+        "ix_start": 0,
+        "sub_ny": 1105,
+        "sub_nx": 1142
       },
-      "elapsed_s": 52.0,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 327.9,
+      "n_finite": 1261910,
+      "n_total": 1261910,
       "per_gw_geojson": "per_gw/7276ff002e0507da.geojson"
     },
     {
@@ -130,14 +130,14 @@
       "lon": 108.1532551,
       "noise_floor_dbm": -103.0,
       "sub_grid": {
-        "iy_start": 292,
-        "ix_start": 241,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 0,
+        "ix_start": 0,
+        "sub_ny": 1115,
+        "sub_nx": 1143
       },
-      "elapsed_s": 51.9,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 330.7,
+      "n_finite": 1274445,
+      "n_total": 1274445,
       "per_gw_geojson": "per_gw/7276ff002e06029f.geojson"
     },
     {
@@ -147,14 +147,14 @@
       "lon": 108.22207641601562,
       "noise_floor_dbm": -100.0,
       "sub_grid": {
-        "iy_start": 313,
-        "ix_start": 389,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 13,
+        "ix_start": 89,
+        "sub_ny": 1102,
+        "sub_nx": 1196
       },
-      "elapsed_s": 51.5,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 346.9,
+      "n_finite": 1317992,
+      "n_total": 1317992,
       "per_gw_geojson": "per_gw/7276ff002e061f5b.geojson"
     },
     {
@@ -164,48 +164,48 @@
       "lon": 108.27363586425781,
       "noise_floor_dbm": -105.0,
       "sub_grid": {
-        "iy_start": 408,
-        "ix_start": 499,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 108,
+        "ix_start": 199,
+        "sub_ny": 1007,
+        "sub_nx": 1086
       },
-      "elapsed_s": 52.7,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 261.7,
+      "n_finite": 1093602,
+      "n_total": 1093602,
       "per_gw_geojson": "per_gw/7276ff002e062cf2.geojson"
     },
     {
       "code": "a840411eebb44150",
       "name": "DNIIT GW b44150",
-      "lat": 16.073963507473916,
-      "lon": 108.1526301279979,
+      "lat": 16.0740984,
+      "lon": 108.15253,
       "noise_floor_dbm": -102.80000305175781,
       "sub_grid": {
-        "iy_start": 309,
-        "ix_start": 240,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 10,
+        "ix_start": 0,
+        "sub_ny": 1105,
+        "sub_nx": 1142
       },
-      "elapsed_s": 52.7,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 315.5,
+      "n_finite": 1261910,
+      "n_total": 1261910,
       "per_gw_geojson": "per_gw/a840411eebb44150.geojson"
     },
     {
       "code": "a84041ffff1ec39f",
       "name": "DNIIT GW 1ec39f",
-      "lat": 16.091299730870233,
-      "lon": 108.21745634078981,
+      "lat": 16.0741086,
+      "lon": 108.1525171,
       "noise_floor_dbm": -97.5,
       "sub_grid": {
-        "iy_start": 348,
-        "ix_start": 379,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 10,
+        "ix_start": 0,
+        "sub_ny": 1105,
+        "sub_nx": 1142
       },
-      "elapsed_s": 53.6,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 314.3,
+      "n_finite": 1261910,
+      "n_total": 1261910,
       "per_gw_geojson": "per_gw/a84041ffff1ec39f.geojson"
     },
     {
@@ -215,31 +215,31 @@
       "lon": 108.149817,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 310,
-        "ix_start": 234,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 10,
+        "ix_start": 0,
+        "sub_ny": 1105,
+        "sub_nx": 1136
       },
-      "elapsed_s": 52.8,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 314.7,
+      "n_finite": 1255280,
+      "n_total": 1255280,
       "per_gw_geojson": "per_gw/a84041ffff1ee248.geojson"
     },
     {
       "code": "ac1f09fffe00ab20",
       "name": "DNIIT GW 00ab20",
-      "lat": 16.0548,
-      "lon": 108.21993,
+      "lat": 16.05469,
+      "lon": 108.22009,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 267,
-        "ix_start": 384,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 0,
+        "ix_start": 84,
+        "sub_ny": 1115,
+        "sub_nx": 1201
       },
-      "elapsed_s": 50.1,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 336.1,
+      "n_finite": 1339115,
+      "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab20.geojson"
     },
     {
@@ -249,14 +249,14 @@
       "lon": 108.12857,
       "noise_floor_dbm": -111.69999694824219,
       "sub_grid": {
-        "iy_start": 391,
-        "ix_start": 188,
-        "sub_ny": 602,
-        "sub_nx": 603
+        "iy_start": 91,
+        "ix_start": 0,
+        "sub_ny": 1024,
+        "sub_nx": 1091
       },
-      "elapsed_s": 51.3,
-      "n_finite": 363006,
-      "n_total": 363006,
+      "elapsed_s": 259.0,
+      "n_finite": 1117184,
+      "n_total": 1117184,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab25.geojson"
     },
     {
@@ -266,14 +266,14 @@
       "lon": 108.21985626414313,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 267,
-        "ix_start": 384,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 0,
+        "ix_start": 84,
+        "sub_ny": 1115,
+        "sub_nx": 1201
       },
-      "elapsed_s": 50.2,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 339.6,
+      "n_finite": 1339115,
+      "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe06fcf2.geojson"
     },
     {
@@ -283,14 +283,14 @@
       "lon": 108.15448,
       "noise_floor_dbm": -109.19999694824219,
       "sub_grid": {
-        "iy_start": 297,
-        "ix_start": 244,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 0,
+        "ix_start": 0,
+        "sub_ny": 1115,
+        "sub_nx": 1146
       },
-      "elapsed_s": 51.4,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 317.9,
+      "n_finite": 1277790,
+      "n_total": 1277790,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd629.geojson"
     },
     {
@@ -300,14 +300,14 @@
       "lon": 108.23986,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 113,
-        "ix_start": 427,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 0,
+        "ix_start": 127,
+        "sub_ny": 1015,
+        "sub_nx": 1158
       },
-      "elapsed_s": 46.5,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 292.7,
+      "n_finite": 1175370,
+      "n_total": 1175370,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd63b.geojson"
     },
     {
@@ -317,14 +317,14 @@
       "lon": 108.15326048782691,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 313,
-        "ix_start": 241,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 13,
+        "ix_start": 0,
+        "sub_ny": 1102,
+        "sub_nx": 1143
       },
-      "elapsed_s": 46.6,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 313.4,
+      "n_finite": 1259586,
+      "n_total": 1259586,
       "per_gw_geojson": "per_gw/ac1f09fffe168f85.geojson"
     },
     {
@@ -334,14 +334,14 @@
       "lon": 108.15205,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 311,
-        "ix_start": 239,
-        "sub_ny": 602,
-        "sub_nx": 602
+        "iy_start": 11,
+        "ix_start": 0,
+        "sub_ny": 1104,
+        "sub_nx": 1141
       },
-      "elapsed_s": 46.4,
-      "n_finite": 362404,
-      "n_total": 362404,
+      "elapsed_s": 299.7,
+      "n_finite": 1259664,
+      "n_total": 1259664,
       "per_gw_geojson": "per_gw/c795b211a13c6b34.geojson"
     }
   ]

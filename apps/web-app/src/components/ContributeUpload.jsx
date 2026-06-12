@@ -1,7 +1,8 @@
 // @ts-check
 import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ApiError, uploadMeasurementsCsv } from "../api/client.js";
+import { ApiError } from "../auth/client.js";
+import { uploadMeasurementsCsv } from "../sources/client.js";
 import { strings } from "../strings.js";
 
 const t = strings.contributeUpload;
@@ -13,12 +14,11 @@ export function ContributeUpload() {
   const [clientError, setClientError] = useState(/** @type {string | null} */ (null));
   const inputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
 
-  // Upload always = private (submit_to_community=false). User opt-in cộng đồng
-  // sau bằng nút "Đóng góp" riêng — tương tự flow lpwanmapper/ChirpStack:
-  // link nguồn trước, toggle contribute_to_community sau.
+  // Upload luôn tạo batch private. User opt-in cộng đồng sau bằng nút "Đóng góp"
+  // ở bảng "Quản lý dữ liệu".
   const m = useMutation({
     /** @param {{ file: File }} args */
-    mutationFn: ({ file }) => uploadMeasurementsCsv(file, false),
+    mutationFn: ({ file }) => uploadMeasurementsCsv(file),
   });
 
   /** @param {import("react").ChangeEvent<HTMLInputElement>} e */
@@ -116,7 +116,7 @@ export function ContributeUpload() {
       </div>
 
       {result && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm md:p-6">
           <div className="text-sm font-semibold text-slate-900">
             {t.summary.title}
           </div>

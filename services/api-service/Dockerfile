@@ -69,8 +69,14 @@ COPY services/api-service/src /build/services/api-service/src
 # Project install — deps đã có trong .venv, uv chỉ build wheel của project
 # rồi cài. Layer nhẹ + nhanh. Sau đó cp venv ra /install + inject crc-covlib .so
 # (gộp vào 1 RUN để giảm số layer + size).
+#
+# `--reinstall-package` ép uv build lại project wheel mỗi lần (bỏ qua wheel
+# cache theo version-string). Cần vì rebuild thường không bump version trong
+# pyproject; nếu không có flag này, uv reuse wheel cũ → COPY src/ mới bị
+# "câm" → container chạy code cũ (đã debug 1 lần 2026-06-11, ~10 phút).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --package lora-coverage-api --no-dev --frozen --no-editable \
+        --reinstall-package lora-coverage-api \
     && cp -r .venv /install \
     && cp /crc-covlib-out/libcrc-covlib.so \
           /install/lib/python3.12/site-packages/crc_covlib/bin_64bit/libcrc-covlib.so

@@ -95,6 +95,7 @@ class SurveyIngest(Protocol):
         linked_source_id: UUID | None = None,
         contributor_user_id: UUID | None = None,
         submitted_for_community: bool = False,
+        batch_id: UUID | None = None,
     ) -> int:
         """Như `write_quarantine` nhưng ID do caller cung cấp + ON CONFLICT
         DO NOTHING ở (timestamp, id).
@@ -110,11 +111,12 @@ class SurveyIngest(Protocol):
             batch-level provenance, áp dụng cho mọi row trong batch. Webhook
             ingest đọc từ `WebhookContext`; legacy path (chưa migrate) pass
             None để giữ behaviour cũ.
-          * `submitted_for_community` (plan community-data-contribution §3.4):
-            cờ batch-level đẩy xuống cột `submitted_for_community`. Caller
-            (webhook ingest theo `WebhookContext.contribute`; CSV upload theo
-            checkbox) quyết định; pipeline TrustValidator phía sau đọc cờ
-            này để biết có promote hay không.
+          * `submitted_for_community`: cờ batch-level đẩy xuống cột
+            `submitted_for_community`. Mọi ingest path đẩy false; flip true
+            khi user submit batch qua `POST /me/uploads/batches/{id}/submit`.
+          * `batch_id` (mig 0024) — FK xuống `me.upload_batches`. Caller
+            tạo row batch trước rồi pass id xuống đây; None = legacy path
+            chưa migrate (vd webhook real-time chưa nối).
 
         Trả số record THỰC SỰ insert (đã trừ duplicate skip).
         """
@@ -262,11 +264,12 @@ class ContributorSpec:
     quyền lại, chỉ build SQL.
 
     `mode`:
-        community → public map; chỉ data có contribute_to_community=true,
-                    linked_source.status='active', uploader chưa bị disable.
-        self      → data của current_user; bypass contribute/disabled filter
-                    (user thấy data của mình kể cả khi chưa opt-in public).
-        user      → admin xem 1 user_id cụ thể; bypass contribute filter.
+        community → public map; chỉ data có submitted_for_community=true (đã
+                    qua admin duyệt → training), linked_source.status='active',
+                    uploader chưa bị disable.
+        self      → data của current_user; bypass filter (user thấy data của
+                    mình kể cả khi chưa submit batch).
+        user      → admin xem 1 user_id cụ thể; bypass filter.
 
     `linked_source_id` chỉ có nghĩa khi mode='self' (sub-filter UI). Edge
     resolver đã verify ownership trước khi set field này.

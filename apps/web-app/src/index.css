@@ -4,3 +4,64 @@
   font-family:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
+
+@theme {
+  --animate-fade-in: fade-in 0.5s ease-out both;
+  --animate-fade-in-up: fade-in-up 0.6s ease-out both;
+  --animate-float-slow: float-slow 7s ease-in-out infinite;
+  --animate-float-slower: float-slow 11s ease-in-out infinite;
+  --animate-pulse-glow: pulse-glow 2.4s ease-in-out infinite;
+  --animate-gradient-shift: gradient-shift 12s ease infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes float-slow {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+}
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.7; box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.6); }
+  50% { opacity: 1; box-shadow: 0 0 0 6px rgba(56, 189, 248, 0); }
+}
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Gateway marker — dùng chung giữa landing map preview và CoverageMap.
+   Chấm trắng viền xanh deep + box-shadow glow. Ring 15 km toả ra render qua
+   MapLibre circle layer (xem CoverageMap.jsx + LandingPage.jsx) để bám km
+   khi user zoom, không dùng CSS scale screen-space. */
+@keyframes cm-gw-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(10,61,145,0.25), 0 0 18px rgba(29,95,209,0.6); }
+  50%      { box-shadow: 0 0 0 4px rgba(10,61,145,0.45), 0 0 28px rgba(29,95,209,0.9); }
+}
+.cm-gw-marker {
+  width: 18px;
+  height: 18px;
+  background: #ffffff;
+  border: 3px solid #0a3d91;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 4px rgba(10,61,145,0.25),
+    0 0 18px rgba(29,95,209,0.6);
+  position: relative;
+  display: block;
+  cursor: pointer;
+  animation: cm-gw-pulse 2.4s ease-in-out infinite;
+}

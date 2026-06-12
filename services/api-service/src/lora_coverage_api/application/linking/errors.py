@@ -36,6 +36,19 @@ class LinkedSourceNotFoundError(LinkingError):
     code = "linked_source_not_found"
 
 
+class ConflictingSourceTypeError(LinkingError):
+    """User đã có active linked source trong cặp mutually-exclusive.
+
+    ChirpStack và LPWANMapper cùng feed 1 luồng dữ liệu vật lý (ChirpStack
+    là upstream của LPWANMapper). Link cả 2 → duplicate measurement vào
+    quarantine với source_type khác nhau, không bị UNIQUE chặn vì khác
+    discriminator. User chọn 1 trong 2; muốn đổi thì pause source cũ trước.
+    """
+
+    http_status = 409
+    code = "conflicting_source_type"
+
+
 class CredentialAlreadyLinkedError(LinkingError):
     """Cùng external account (theo fingerprint) đã được user khác link.
 

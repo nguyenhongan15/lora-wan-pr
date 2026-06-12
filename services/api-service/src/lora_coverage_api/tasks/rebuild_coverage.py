@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 
 # Path bên trong container — bind-mounted ở docker-compose.yml (Phase B2).
 SCRIPT_PATH = Path("/app/scripts/precompute_rssi_heatmap.py")
-SUBPROCESS_TIMEOUT_S = 3600  # 1h hard limit
+SUBPROCESS_TIMEOUT_S = 5400  # 90 phút hard limit (grid 25m + radius 30km ~60-80 phút)
 
 
 def _engine() -> Engine:
@@ -139,17 +139,19 @@ def rebuild_coverage_map(self: Any, job_id: str) -> dict[str, Any]:
     #   - KHÔNG dùng DSM (surface model) — clear LORA_SURFACE_DEM_DIRECTORY.
     #     Worker container có thể có env này từ Stage 1 ITU calibration,
     #     KHÔNG được rò rỉ vào subprocess heatmap.
-    #   - KHÔNG dùng Stage 2 XGBoost — --no-stage2.
-    #   - Survey overlay per-gw: gw có điểm đo nhận overlay riêng (filter
-    #     serving_gateway_id), gw không có điểm đo giữ pure physics.
+    #   - Stage 2 XGBoost đã bị drop hẳn cho heatmap (không còn flag CLI);
+    #     survey overlay giờ luôn bật theo default của script.
     #   - --force: script skip nếu output file đã tồn tại; admin rebuild
     #     PHẢI overwrite.
     cmd = [
         sys.executable,
         str(SCRIPT_PATH),
-        "--no-stage2",
-        "--survey-overlay",
         "--force",
+        # SF12 nghe được tới ~25 km nhưng default sub-grid 15 km cắt mất cell xa.
+        # Bump 30 km để cover trường hợp board01 đo được −118 dBm @ 21.6 km
+        # (gateway 7276ff002e062cf2 vùng Hoà Khánh ↔ Cẩm Lệ).
+        "--per-gw-radius-km",
+        "30",
     ]
     subproc_env = os.environ.copy()
     subproc_env["LORA_SURFACE_DEM_DIRECTORY"] = ""

@@ -9,11 +9,13 @@ Pipeline 2-stage (admin manual gate, migration 0018):
 Bump stats.rejected NGAY khi auto-reject (rác hiển nhiên là tín hiệu reputation
 thật); stats.accepted CHỈ bump khi admin approve (auto-pass chưa phải accept).
 
-Hai entry points:
-  * `promote_pending_for_linked_source(ls_id)` — backfill khi user PATCH
-    contribute_to_community=true HOẶC sau mỗi sync batch.
-  * `promote_pending_for_uploader(uploader_id, since)` — CSV upload không
-    có linked_source_id; lọc theo uploader + uploaded_at window.
+Entry point: `promote_pending_for_linked_source(ls_id)` — webhook real-time
+(plan ChirpStack per-user webhook ingest) gọi sau mỗi event ingest.
+
+CSV/JSON upload + click-to-sync linked source: KHÔNG đi qua promotion ở đây
+nữa (refactor 2026-06-11, mig 0024). User bấm "Đóng góp" trên 1 batch trong
+"Quản lý dữ liệu" → `application/uploads/batches.py::submit_batch_for_review`
+flip submitted_for_community + queue pending_review theo batch_id.
 
 Caller wrap transaction. KHÔNG raise: validator failure → `physics_unavailable`
 reject_reason, vẫn count vào `PromotionResult.rejected`.
@@ -95,146 +97,9 @@ _SELECT_PENDING_FOR_LS = text(
     _SELECT_BASE + " AND q.linked_source_id = :ls_id ORDER BY q.timestamp ASC"
 )
 
-# CSV upload filter: uploader + uploaded_at window (caller pass `since`
-# trước khi insert batch để không match rows cũ của user).
-_SELECT_PENDING_FOR_UPLOADER = text(
-    _SELECT_BASE
-    + " AND q.uploader_id = :uploader_id AND q.uploaded_at >= :since ORDER BY q.timestamp ASC"
-)
-
-# Variant per-batch: chỉ rows trong 1 lần upload (uploader_id + uploaded_at).
-# Dùng cho "đóng góp từng file riêng" (POST /me/uploads/csv/batches/promote).
-_SELECT_PENDING_CSV_FOR_BATCH = text(
-    _SELECT_BASE
-    + " AND q.uploader_id = :uploader_id AND q.source_type = 'csv_upload'"
-    + " AND q.uploaded_at = :uploaded_at"
-    + " ORDER BY q.timestamp ASC"
-)
-
-# Flip submitted_for_community false→true cho rows của 1 batch cụ thể (file).
-# Filter cứng theo uploaded_at để không động vào file khác cùng user.
-_MARK_SUBMITTED_FOR_CSV_BATCH = text(
-    """
-    UPDATE ts.survey_quarantine
-    SET submitted_for_community = true
-    WHERE uploader_id = :uploader_id
-      AND source_type = 'csv_upload'
-      AND uploaded_at = :uploaded_at
-      AND submitted_for_community = false
-      AND reject_reason IS NULL
-    """
-)
-
-# List batch CSV của 1 user (group by uploaded_at). PostgreSQL `now()` =
-# start-of-transaction → mọi row trong 1 lần upload share cùng uploaded_at,
-# nên đây là batch key tự nhiên (không cần thêm batch_id column).
-_LIST_CSV_BATCHES = text(
-    """
-    SELECT
-        q.uploaded_at,
-        COUNT(*)::int AS total,
-        SUM(
-            CASE WHEN q.reject_reason IS NOT NULL
-                OR q.review_status = 'rejected'
-            THEN 1 ELSE 0 END
-        )::int AS rejected,
-        SUM(
-            CASE WHEN q.review_status = 'pending_review'
-                AND q.reject_reason IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM ts.survey_training t
-                    WHERE t.timestamp = q.timestamp
-                      AND t.source_type = q.source_type
-                      AND t.external_id = q.external_id
-                      AND t.contributor_user_id = q.contributor_user_id
-                )
-            THEN 1 ELSE 0 END
-        )::int AS pending_review,
-        SUM(
-            CASE WHEN EXISTS (
-                SELECT 1 FROM ts.survey_training t
-                WHERE t.timestamp = q.timestamp
-                  AND t.source_type = q.source_type
-                  AND t.external_id = q.external_id
-                  AND t.contributor_user_id = q.contributor_user_id
-            ) THEN 1 ELSE 0 END
-        )::int AS promoted
-    FROM ts.survey_quarantine q
-    WHERE q.uploader_id = :uploader_id
-      AND q.source_type = 'csv_upload'
-    GROUP BY q.uploaded_at
-    ORDER BY q.uploaded_at DESC
-    """
-)
-
-# Xoá 1 batch CSV: trước tiên xoá rows ở training (nếu đã promote) theo
-# (timestamp, source_type, external_id) match quarantine row; rồi xoá quarantine.
-# 2-step để cascade promoted data (community dataset cũng mất khi user xoá file
-# — quyền xoá dữ liệu cá nhân).
-_DELETE_CSV_BATCH_TRAINING = text(
-    """
-    DELETE FROM ts.survey_training t
-    USING ts.survey_quarantine q
-    WHERE t.timestamp = q.timestamp
-      AND t.source_type = q.source_type
-      AND t.external_id = q.external_id
-      AND t.contributor_user_id = q.contributor_user_id
-      AND q.uploader_id = :uploader_id
-      AND q.source_type = 'csv_upload'
-      AND q.uploaded_at = :uploaded_at
-    """
-)
-
-_DELETE_CSV_BATCH_QUARANTINE = text(
-    """
-    DELETE FROM ts.survey_quarantine
-    WHERE uploader_id = :uploader_id
-      AND source_type = 'csv_upload'
-      AND uploaded_at = :uploaded_at
-    """
-)
-
-# Stats cho card "Tải lên CSV của tôi": tổng / promoted / rejected / pending_review.
-# `pending` (limbo) derive ở caller = total - promoted - rejected - pending_review.
-_CSV_STATS_FOR_UPLOADER = text(
-    """
-    SELECT
-        COUNT(*)::int AS total,
-        SUM(
-            CASE WHEN q.reject_reason IS NOT NULL
-                OR q.review_status = 'rejected'
-            THEN 1 ELSE 0 END
-        )::int AS rejected,
-        SUM(
-            CASE WHEN q.review_status = 'pending_review'
-                AND q.reject_reason IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM ts.survey_training t
-                    WHERE t.timestamp = q.timestamp
-                      AND t.source_type = q.source_type
-                      AND t.external_id = q.external_id
-                      AND t.contributor_user_id = q.contributor_user_id
-                )
-            THEN 1 ELSE 0 END
-        )::int AS pending_review,
-        SUM(
-            CASE WHEN EXISTS (
-                SELECT 1 FROM ts.survey_training t
-                WHERE t.timestamp = q.timestamp
-                  AND t.source_type = q.source_type
-                  AND t.external_id = q.external_id
-                  AND t.contributor_user_id = q.contributor_user_id
-            ) THEN 1 ELSE 0 END
-        )::int AS promoted
-    FROM ts.survey_quarantine q
-    WHERE q.uploader_id = :uploader_id
-      AND q.source_type = 'csv_upload'
-    """
-)
-
 # Mark all submitted_for_community=false rows of an ls_id → true. Dùng khi
-# user PATCH contribute_to_community=true lần đầu (backfill flag cho rows
-# webhook đã pull về trước opt-in).
+# user submit upload batch (kéo rows cùng linked_source về submitted state
+# trước khi chạy promote pipeline).
 _MARK_SUBMITTED_FOR_LS = text(
     """
     UPDATE ts.survey_quarantine
@@ -274,14 +139,14 @@ _INSERT_TRAINING_FROM_QUARANTINE = text(
         spreading_factor, frequency_mhz, device_id,
         serving_gateway_id, uploader_id,
         external_id, source_type, contributor_user_id, linked_source_id,
-        submitted_for_community, code_rate
+        submitted_for_community, code_rate, batch_id
     )
     SELECT
         gen_random_uuid(), q.timestamp, q.location, q.rssi_dbm, q.snr_db,
         q.spreading_factor, q.frequency_mhz, q.device_id,
         q.serving_gateway_id, q.uploader_id,
         q.external_id, q.source_type, q.contributor_user_id, q.linked_source_id,
-        true, q.code_rate
+        true, q.code_rate, q.batch_id
     FROM ts.survey_quarantine q
     WHERE q.timestamp = :ts AND q.id = :qid
     ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
@@ -309,144 +174,10 @@ def promote_pending_for_linked_source(
 ) -> PromotionResult:
     """Loop validate + promote mọi pending row của 1 linked_source.
 
-    Caller (LinkingService.set_contribution hoặc sync orchestrator) đã ensure
-    `contributor` được load 1 lần ở đầu — threshold ổn định cho mọi row
-    trong batch.
+    Caller (upload batch submit) đã ensure `contributor` được load 1 lần ở
+    đầu — threshold ổn định cho mọi row trong batch.
     """
     rows = conn.execute(_SELECT_PENDING_FOR_LS, {"ls_id": linked_source_id}).all()
-    return _run_loop(conn, validator, contributor, rows)
-
-
-def promote_pending_for_uploader(
-    conn: Connection,
-    validator: TrustValidator,
-    contributor: ContributorContext,
-    *,
-    uploader_id: UUID,
-    since: datetime,
-) -> PromotionResult:
-    """Loop validate + promote mọi pending row của 1 uploader sau `since`.
-
-    Dùng cho CSV upload (không có linked_source_id). `since` = thời điểm
-    NGAY TRƯỚC khi gọi write_quarantine — tránh match rows cũ của user.
-    """
-    rows = conn.execute(
-        _SELECT_PENDING_FOR_UPLOADER,
-        {"uploader_id": uploader_id, "since": since},
-    ).all()
-    return _run_loop(conn, validator, contributor, rows)
-
-
-@dataclass(frozen=True, slots=True)
-class CsvUploaderStats:
-    total: int
-    promoted: int
-    rejected: int
-    pending_review: int
-
-    @property
-    def pending(self) -> int:
-        """Rows trong quarantine chưa qua auto-validate (chưa promote, chưa
-        reject, chưa pending_review). Distinct với pending_review = rows đã
-        pass auto nhưng chờ admin duyệt thủ công.
-        """
-        return max(0, self.total - self.promoted - self.rejected - self.pending_review)
-
-
-@dataclass(frozen=True, slots=True)
-class CsvBatchSummary:
-    """1 batch = 1 lần upload CSV, key = uploaded_at."""
-
-    uploaded_at: datetime
-    total: int
-    promoted: int
-    rejected: int
-    pending_review: int
-
-    @property
-    def pending(self) -> int:
-        return max(0, self.total - self.promoted - self.rejected - self.pending_review)
-
-
-def list_csv_batches_for_uploader(
-    conn: Connection,
-    uploader_id: UUID,
-) -> list[CsvBatchSummary]:
-    """Liệt kê batch CSV (group by uploaded_at) — desc theo thời gian upload."""
-    rows = conn.execute(_LIST_CSV_BATCHES, {"uploader_id": uploader_id}).all()
-    return [
-        CsvBatchSummary(
-            uploaded_at=row.uploaded_at,
-            total=int(row.total or 0),
-            promoted=int(row.promoted or 0),
-            rejected=int(row.rejected or 0),
-            pending_review=int(row.pending_review or 0),
-        )
-        for row in rows
-    ]
-
-
-def delete_csv_batch_for_uploader(
-    conn: Connection,
-    *,
-    uploader_id: UUID,
-    uploaded_at: datetime,
-) -> int:
-    """Xoá tất cả rows của 1 batch CSV (kể cả đã promote sang training).
-
-    Trả về số quarantine rows deleted (0 = batch không tồn tại / không thuộc
-    uploader này).
-    """
-    conn.execute(
-        _DELETE_CSV_BATCH_TRAINING,
-        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
-    )
-    result = conn.execute(
-        _DELETE_CSV_BATCH_QUARANTINE,
-        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
-    )
-    return result.rowcount or 0
-
-
-def fetch_csv_stats_for_uploader(conn: Connection, uploader_id: UUID) -> CsvUploaderStats:
-    """Stats CSV upload của 1 user — dùng cho UI card hiển thị backlog."""
-    row = conn.execute(_CSV_STATS_FOR_UPLOADER, {"uploader_id": uploader_id}).one()
-    return CsvUploaderStats(
-        total=int(row.total or 0),
-        promoted=int(row.promoted or 0),
-        rejected=int(row.rejected or 0),
-        pending_review=int(row.pending_review or 0),
-    )
-
-
-def mark_and_promote_csv_batch_for_uploader(
-    conn: Connection,
-    validator: TrustValidator,
-    contributor: ContributorContext,
-    *,
-    uploader_id: UUID,
-    uploaded_at: datetime,
-) -> PromotionResult:
-    """Đóng góp 1 file CSV cụ thể (1 batch = 1 lần upload).
-
-    Flow:
-      1. UPDATE quarantine SET submitted_for_community=true cho mọi
-         csv_upload row của user CÙNG uploaded_at, còn ở false + chưa reject.
-      2. SELECT pending row của batch (filter uploaded_at).
-      3. Run validator loop → mark pending_review hoặc set reject_reason.
-
-    Idempotent: rerun chỉ chạy validator cho rows mới chưa xét — rows pass
-    đã ở review_status='pending_review' (filter loại qua _SELECT_BASE),
-    rows reject có reject_reason (cũng filter loại).
-    """
-    conn.execute(
-        _MARK_SUBMITTED_FOR_CSV_BATCH,
-        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
-    )
-    rows = conn.execute(
-        _SELECT_PENDING_CSV_FOR_BATCH,
-        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
-    ).all()
     return _run_loop(conn, validator, contributor, rows)
 
 
@@ -559,8 +290,7 @@ _LIST_PENDING_REVIEW_BATCHES = text(
         MAX(q.timestamp) AS latest_ts
     FROM ts.survey_quarantine q
     LEFT JOIN auth.users u ON u.id = q.uploader_id
-    WHERE q.source_type = 'csv_upload'
-      AND q.uploader_id IS NOT NULL
+    WHERE q.uploader_id IS NOT NULL
     GROUP BY q.uploader_id, u.email, q.uploaded_at
     HAVING COUNT(*) FILTER (WHERE q.review_status = 'pending_review') > 0
     ORDER BY q.uploaded_at DESC
@@ -584,7 +314,6 @@ _SELECT_PENDING_REVIEW_FOR_BATCH = text(
     WHERE q.review_status = 'pending_review'
       AND q.uploader_id = :uploader_id
       AND q.uploaded_at = :uploaded_at
-      AND q.source_type = 'csv_upload'
     ORDER BY q.timestamp ASC
     """
 )
@@ -865,19 +594,12 @@ def _run_loop(
 
 
 __all__ = [
-    "CsvBatchSummary",
-    "CsvUploaderStats",
     "PendingContribution",
     "PromotionResult",
     "approve_pending_contribution",
-    "delete_csv_batch_for_uploader",
-    "fetch_csv_stats_for_uploader",
     "get_pending_review",
-    "list_csv_batches_for_uploader",
     "list_pending_review",
-    "mark_and_promote_csv_batch_for_uploader",
     "mark_submitted_for_linked_source",
     "promote_pending_for_linked_source",
-    "promote_pending_for_uploader",
     "reject_pending_contribution",
 ]

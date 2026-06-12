@@ -19,8 +19,10 @@ import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
 import { EstimatePanel } from "./EstimatePanel.jsx";
-import { MinSFPanel } from "./MinSFPanel.jsx";
+// MinSFPanel: tạm ẩn UI minsf, import lại khi bật lại toggle.
+// import { MinSFPanel } from "./MinSFPanel.jsx";
 import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
+import { AddressLookupPanel } from "./address/AddressLookupPanel.jsx";
 import {
   BASEMAP_STYLE,
   SATELLITE_BASEMAP_STYLE,
@@ -29,7 +31,6 @@ import {
   DEFAULT_TX_POWER_DBM,
   DEFAULT_SORT_BY,
   DEFAULT_SORT_ORDER,
-  GATEWAY_MARKER_STYLE,
   INITIAL_CENTER,
   INITIAL_ZOOM,
   MARGIN_BAR_RANGE,
@@ -424,59 +425,6 @@ function buildLabelStrongRow(label, value) {
   return row;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-/**
- * Gateway marker SVG (teardrop pin + tower-cell icon). Build qua createElementNS
- * thay vì innerHTML — pattern an toàn dù mọi giá trị hiện đều từ config tĩnh.
- * @returns {SVGSVGElement}
- */
-function buildGatewayMarkerSvg() {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("width", String(GATEWAY_MARKER_STYLE.width));
-  svg.setAttribute("height", String(GATEWAY_MARKER_STYLE.height));
-  svg.setAttribute("viewBox", "0 0 24 32");
-  svg.setAttribute("aria-hidden", "true");
-
-  const pin = document.createElementNS(SVG_NS, "path");
-  pin.setAttribute(
-    "d",
-    "M12 0 C 5.4 0 0 5.4 0 12 C 0 21 12 32 12 32 C 12 32 24 21 24 12 C 24 5.4 18.6 0 12 0 Z",
-  );
-  pin.setAttribute("fill", GATEWAY_MARKER_STYLE.fill);
-  pin.setAttribute("stroke", GATEWAY_MARKER_STYLE.stroke);
-  pin.setAttribute("stroke-width", "1.5");
-  svg.appendChild(pin);
-
-  const g = document.createElementNS(SVG_NS, "g");
-  g.setAttribute("transform", "translate(6 5) scale(0.5)");
-  g.setAttribute("fill", "none");
-  g.setAttribute("stroke", GATEWAY_MARKER_STYLE.iconColor);
-  g.setAttribute("stroke-width", "2.5");
-  g.setAttribute("stroke-linecap", "round");
-  g.setAttribute("stroke-linejoin", "round");
-
-  for (const d of ["M5 8a7 7 0 0 1 14 0", "M9 8a3 3 0 0 1 6 0"]) {
-    const p = document.createElementNS(SVG_NS, "path");
-    p.setAttribute("d", d);
-    g.appendChild(p);
-  }
-  for (const [x1, y1, x2, y2] of [
-    ["12", "8", "12", "21"],
-    ["9", "21", "15", "21"],
-    ["9", "14", "15", "14"],
-  ]) {
-    const line = document.createElementNS(SVG_NS, "line");
-    line.setAttribute("x1", x1);
-    line.setAttribute("y1", y1);
-    line.setAttribute("x2", x2);
-    line.setAttribute("y2", y2);
-    g.appendChild(line);
-  }
-  svg.appendChild(g);
-  return svg;
-}
-
 /**
  * Pill nút thắt 2 chiều cạnh status badge ở Layer 1.
  * No-op nếu BE trả response cũ (bottleneck === undefined).
@@ -707,17 +655,16 @@ function formatLastSeenLabel(lastSeenAt, now, t) {
 /**
  * @param {{
  *   mode?: "points" | "heatmap" | "predict",
- *   bulkHandoff?: import("./BulkLookup.jsx").BulkHandoffPoint[] | null,
- *   onBulkHandoffConsumed?: () => void,
  * }} props
  *   mode === "points": render survey points (mặc định, tab "Bản đồ điểm đo").
  *     Click bản đồ → auto-predict 1 điểm + vẽ marker.
  *   mode === "heatmap": survey layer tắt — placeholder cho heatmap raster
  *     (Phase 2 sẽ thêm raster source khi tile endpoint sẵn sàng).
- *   mode === "predict": survey layer tắt — chỉ hiển thị gateway. Click bản đồ
- *     lấy toạ độ vào panel; user bấm "Dự đoán" để chạy prediction + vẽ marker.
+ *   mode === "predict": survey layer tắt — chỉ hiển thị gateway. Sub-tab
+ *     "1 điểm": click bản đồ chọn toạ độ + Dự đoán. Sub-tab "Hàng loạt":
+ *     upload CSV/JSON, submit → vẽ markers tự động + mở drawer kết quả.
  */
-export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoffConsumed }) {
+export function CoverageMap({ mode = "points" }) {
   const containerRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -739,14 +686,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const gatewayAddressCacheRef = useRef(
     /** @type {Map<string, string | null>} */ (new Map()),
   );
-  // Tracking handoff array đã xử lý (theo reference identity). Defense in
-  // depth: nếu effect re-fire vì 1 dep khác đổi mà bulkHandoff vẫn cùng ref,
-  // skip để không re-clear + redraw + re-fitBounds.
-  const consumedBulkHandoffRef = useRef(
-    /** @type {readonly unknown[] | null} */ (null),
-  );
-  // Đảm bảo URL deep-link predict chỉ chạy 1 lần / mount. Tránh race với
-  // bulk handoff khi cả 2 cùng có sẵn lúc mount.
+  // Đảm bảo URL deep-link predict chỉ chạy 1 lần / mount.
   const deepLinkConsumedRef = useRef(false);
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
@@ -761,6 +701,16 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   const [predictBusy, setPredictBusy] = useState(false);
   const [predictError, setPredictError] = useState(
     /** @type {string | null} */ (null),
+  );
+  // Collapse pattern khớp với PointsFilterPanel / MinSFPanel / EstimatePanel:
+  // default closed (1 icon button) để không che map. Reset về closed khi user
+  // rời tab predict — tránh ghost-state hiện ra ở lần re-enter sau.
+  const [predictPanelOpen, setPredictPanelOpen] = useState(false);
+  // Sub-tab trong Predict panel: "single" (click 1 điểm) hoặc "address" (nhập địa chỉ → geocode).
+  // Cả 2 sub-tab cho mọi user (kể cả admin) — chỉ khác cách lấy lat/lng,
+  // cùng vẽ marker qua drawSearchMarker.
+  const [predictSubTab, setPredictSubTab] = useState(
+    /** @type {"single" | "address"} */ ("single"),
   );
   // Default outdoor — thay đổi sẽ apply ITU-R P.2109 building entry loss BE-side.
   const [environment, setEnvironment] = useState(
@@ -780,17 +730,15 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   // viewMode points/heatmap. "estimate" là composite RSSI heatmap (default —
   // hiển thị toàn cảnh phủ sóng cộng dồn 13 gateway); "minsf" cần user chọn
   // gateway nên kém trực quan cho lần đầu vào tab.
-  const [coverageViewMode, setCoverageViewMode] = useState(
+  const [coverageViewMode] = useState(
     /** @type {"minsf" | "estimate"} */ ("estimate"),
   );
   // Code gateway đang được chọn để hiển thị min-SF overlay (null = không chọn).
   // Dùng `code` thay `id` vì precompute script ghi GeoJSON theo code (`{code}.geojson`).
-  const [minsfGatewayCode, setMinsfGatewayCode] = useState(
-    /** @type {string | null} */ (null),
-  );
-  const [minsfLoadError, setMinsfLoadError] = useState(
-    /** @type {string | null} */ (null),
-  );
+  // Tạm ẩn UI minsf → setter không reachable; giữ value để các useEffect layer
+  // visibility vẫn type-safe (always null, layer luôn hidden).
+  const [minsfGatewayCode] = useState(/** @type {string | null} */ (null));
+  const [, setMinsfLoadError] = useState(/** @type {string | null} */ (null));
   // Composite RSSI heatmap (viewMode "estimate"): load error state. Fetch
   // GeoJSON khi vào estimate mode lần đầu hoặc khi gateway picker đổi giá trị.
   // estimateLoadedRef cache theo "key": "composite" cho all-gw, code cho per-gw
@@ -1566,8 +1514,84 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     return () => controller.abort();
   }, [coverageViewMode, mode, mapLoaded, estimateGatewayCode]);
 
+  // Ring toả từ mỗi gateway — MapLibre circle layer, bán kính bám km theo zoom.
+  // Bán kính nhỏ hơn + period chậm hơn mappreview để CoverageMap đỡ nhiễu mắt.
+  // Radius_px tính lại mỗi frame theo map.getZoom() + center lat → bám đúng km
+  // kể cả khi user zoom/pan.
+  // Setup idempotent (skip nếu source/layer đã tồn tại); cleanup CHỈ cancel RAF.
+  // Source/layer sống cùng đời map — parent destroy map sẽ wipe — tránh race
+  // condition với MapLibre teardown khi HMR / dependency re-fire.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return undefined;
+
+    const SRC_ID = "cm-gw-pulse-src";
+    const LAYER_ID = "cm-gw-pulse-ring";
+
+    if (!map.getSource(SRC_ID)) {
+      map.addSource(SRC_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+    }
+    if (!map.getLayer(LAYER_ID)) {
+      map.addLayer({
+        id: LAYER_ID,
+        type: "circle",
+        source: SRC_ID,
+        paint: /** @type {any} */ ({
+          "circle-radius": 0,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "rgba(10,61,145,0.7)",
+          "circle-stroke-opacity": 0,
+        }),
+      });
+    }
+
+    let rafId = 0;
+    let cancelled = false;
+    const PERIOD_MS = 5400;
+    const TARGET_M = 5000;
+    const PEAK_OPACITY = 0.45;
+    const FADE_IN = 0.05;
+    const startMs = performance.now();
+    const tick = (/** @type {number} */ now) => {
+      if (cancelled) return;
+      const m = mapRef.current;
+      if (!m || !m.getLayer(LAYER_ID)) return;
+      // RAF timestamp có thể < startMs (frame đã bắt đầu trước khi gọi
+      // performance.now). Clamp >= 0 để phase không âm → tránh MapLibre
+      // throw "circle-radius < 0".
+      const elapsed = Math.max(0, now - startMs);
+      const phase = (elapsed % PERIOD_MS) / PERIOD_MS;
+      const latRad = (m.getCenter().lat * Math.PI) / 180;
+      const mPerPx =
+        (40075016.686 * Math.cos(latRad)) / (Math.pow(2, m.getZoom()) * 256);
+      // Radius tốc độ đều từ 0 → TARGET_M; max guard belt-and-suspenders.
+      const radiusPx = Math.max(0, (TARGET_M * phase) / mPerPx);
+      // Opacity: fade-in 5% đầu (loại pop ở mép loop) + hold + drop hard 20%
+      // cuối. min(ramp-up, drop-down).
+      const fadeIn = Math.min(1, phase / FADE_IN);
+      const fadeOut = 1 - Math.pow(phase, 4);
+      const opacity = PEAK_OPACITY * Math.min(fadeIn, fadeOut);
+      m.setPaintProperty(LAYER_ID, "circle-radius", radiusPx);
+      m.setPaintProperty(LAYER_ID, "circle-stroke-opacity", opacity);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [mapLoaded]);
+
   // Gateway markers — HTML marker đơn giản 1 marker / gateway, popup
   // TX/gain/antenna/freq khi click. Clear & recreate khi data đổi.
+  // Bản đồ ước lượng (mode=heatmap + viewMode=estimate) khi chọn 1 gateway
+  // cụ thể → chỉ hiện marker của gateway đó, ẩn các gateway còn lại; chọn
+  // "Tất cả gateway (tổng hợp)" (estimateGatewayCode === null) → hiện toàn bộ.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !gatewaysQ.data || !mapLoaded) return;
@@ -1576,14 +1600,18 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     for (const m of gatewayMarkersRef.current) m.remove();
     gatewayMarkersRef.current = [];
 
+    const filterEstimateGw =
+      mode === "heatmap" &&
+      coverageViewMode === "estimate" &&
+      estimateGatewayCode != null;
+
     for (const g of gatewaysQ.data.items) {
+      if (filterEstimateGw && g.code !== estimateGatewayCode) continue;
       const el = document.createElement("div");
-      el.style.cursor = "pointer";
-      el.style.filter = "drop-shadow(0 1px 2px rgba(0,0,0,0.5))";
-      // SVG teardrop pin: viewBox 24x32, tip ở (12, 32) = giữa-đáy SVG.
-      // Path: nửa trên là vòm tròn r=12, nửa dưới thót dần xuống tip.
-      // Icon tower-cell đặt trong vòm trên (scale 0.5 từ 24×24 → 12×12).
-      el.appendChild(buildGatewayMarkerSvg());
+      // Glow chấm trắng + ring pulse — dùng chung class .cm-gw-marker khai
+      // báo ở index.css, khớp visual với landing map preview.
+      el.className = "cm-gw-marker";
+      el.setAttribute("aria-label", `Gateway ${g.code}`);
       // g.code + g.name từ ChirpStack do user link → có thể chứa HTML (XSS).
       // Build DOM bằng textContent, KHÔNG setHTML. Các field số (tx_power_dbm,
       // antenna_*, frequency_mhz) đã validate ở schema backend nên dùng
@@ -1666,20 +1694,44 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
             applyAddress(null);
           });
       });
-      // anchor='bottom' → đáy SVG (tip teardrop) đặt đúng tại tọa độ gateway,
-      // giống folium.Marker (Leaflet default behavior).
-      const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+      // Marker tâm chấm tròn đặt đúng tại tọa độ gateway (anchor default
+      // = center). Khác teardrop pin cũ (anchor="bottom") — circle nên
+      // center mới đặt đúng tâm chấm vào toạ độ.
+      const marker = new maplibregl.Marker({ element: el })
         .setLngLat([g.longitude, g.latitude])
         .setPopup(popup)
         .addTo(map);
       gatewayMarkersRef.current.push(marker);
     }
 
+    // Sync pulse ring source — chỉ feed gateway nào đang hiện marker (cùng
+    // filterEstimateGw) để ring không vẽ vào điểm bị ẩn.
+    const pulseSrc = map.getSource("cm-gw-pulse-src");
+    if (pulseSrc && "setData" in pulseSrc) {
+      const pulseFeatures = gatewaysQ.data.items
+        .filter((g) => {
+          if (filterEstimateGw && g.code !== estimateGatewayCode) return false;
+          return g.latitude != null && g.longitude != null;
+        })
+        .map((g) => ({
+          type: /** @type {const} */ ("Feature"),
+          properties: {},
+          geometry: {
+            type: /** @type {const} */ ("Point"),
+            coordinates: [g.longitude, g.latitude],
+          },
+        }));
+      /** @type {maplibregl.GeoJSONSource} */ (pulseSrc).setData({
+        type: "FeatureCollection",
+        features: pulseFeatures,
+      });
+    }
+
     return () => {
       for (const m of gatewayMarkersRef.current) m.remove();
       gatewayMarkersRef.current = [];
     };
-  }, [gatewaysQ.data, mapLoaded]);
+  }, [gatewaysQ.data, mapLoaded, mode, coverageViewMode, estimateGatewayCode]);
 
   /**
    * Build popup DOM 2 layer cho marker dự đoán (chỉ tab "Dự đoán điểm").
@@ -1942,38 +1994,6 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     setPredictMarkerCount(0);
   }, []);
 
-  // Bulk → Predict handoff: BulkLookup chuyển 1 batch ok-items qua App,
-  // App truyền xuống đây. Clear marker cũ, vẽ lại + fitBounds, rồi notify
-  // parent reset state (tránh vẽ lại nếu user toggle tab qua lại).
-  useEffect(() => {
-    if (mode !== "predict") return;
-    if (!bulkHandoff || bulkHandoff.length === 0) return;
-    // Ref guard: cùng array ref = cùng batch đã consume → skip.
-    if (consumedBulkHandoffRef.current === bulkHandoff) return;
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    consumedBulkHandoffRef.current = bulkHandoff;
-    // Đã tiêu thụ bulk handoff thì coi deep-link như cũng đã xử lý — tránh
-    // marker rác từ ?lat=&lng= cũ append lên trên bulk markers (race).
-    deepLinkConsumedRef.current = true;
-
-    clearAllSearchMarkers();
-    const bounds = new maplibregl.LngLatBounds();
-    for (const p of bulkHandoff) {
-      // Bulk endpoint không nhận tx_power/environment → BE dùng defaults
-      // (14 dBm outdoor). Popup hiển thị các giá trị này cho consistency.
-      // Truyền label để user phân biệt được marker tương ứng row CSV nào.
-      drawSearchMarker(p.lat, p.lng, p.prediction, p.sf, p.isAuto, DEFAULT_TX_POWER_DBM, "outdoor", p.label);
-      bounds.extend([p.lng, p.lat]);
-    }
-    if (bulkHandoff.length === 1) {
-      map.flyTo({ center: [bulkHandoff[0].lng, bulkHandoff[0].lat], zoom: 14 });
-    } else {
-      map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 800 });
-    }
-    onBulkHandoffConsumed?.();
-  }, [mode, mapLoaded, bulkHandoff, drawSearchMarker, clearAllSearchMarkers, onBulkHandoffConsumed]);
-
   // Initial URL deep-link: predict 1 lần sau khi map mount.
   // Chỉ tab "Dự đoán điểm" mới tiêu thụ URL state — tab "Bản đồ điểm đo" và
   // "Bản đồ phủ sóng" không hiển thị popup "Vị trí từ URL" kể cả khi URL có
@@ -1981,13 +2001,6 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
   useEffect(() => {
     if (mode !== "predict") return;
     if (deepLinkConsumedRef.current) return;
-    // Nếu bulk handoff đang chờ xử lý → để bulk effect lo, deep-link skip để
-    // không append marker rác. Mark consumed để không revisit khi handoff
-    // được reset về null.
-    if (bulkHandoff && bulkHandoff.length > 0) {
-      deepLinkConsumedRef.current = true;
-      return;
-    }
     const url = initialUrlRef.current;
     if (!url) return;
     deepLinkConsumedRef.current = true;
@@ -2010,7 +2023,39 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
     return () => {
       cancelled = true;
     };
-  }, [mode, drawSearchMarker, bulkHandoff]);
+  }, [mode, drawSearchMarker]);
+
+  /**
+   * Address sub-tab callback: BE đã trả lat/lng + prediction → set picked
+   * coords (để URL state + sub-tab "1 điểm" thấy điểm cuối), drawSearchMarker
+   * append marker mới (giữ marker cũ — tương tự click thêm điểm), flyTo zoom
+   * 14. Marker label = display_name để phân biệt nhiều địa chỉ trên map.
+   *
+   * @param {{
+   *   lat: number,
+   *   lng: number,
+   *   displayName: string,
+   *   prediction: import("../api/client.js").PredictionT,
+   * }} r
+   */
+  const handleAddressResolved = useCallback(
+    (r) => {
+      setPickedCoords({ lat: r.lat, lng: r.lng });
+      drawSearchMarker(
+        r.lat,
+        r.lng,
+        r.prediction,
+        DEFAULT_SF,
+        true,
+        DEFAULT_TX_POWER_DBM,
+        "outdoor",
+        r.displayName,
+      );
+      writeUrlState(r.lat, r.lng);
+      mapRef.current?.flyTo({ center: [r.lng, r.lat], zoom: 14 });
+    },
+    [drawSearchMarker],
+  );
 
   /**
    * Predict mode: chạy prediction từ pickedCoords + environment, vẽ marker
@@ -2077,14 +2122,16 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
           />
         )}
 
-        {/* Tab "Bản đồ phủ sóng": toggle 2 layer minsf ↔ estimate. Cùng vị
-            trí top-right như points-mode toggle nhưng options khác. */}
+        {/* Tab "Bản đồ phủ sóng": tạm ẩn toggle minsf ↔ estimate — chỉ giữ
+            estimate. Khi bật lại minsf: uncomment block dưới + restore conditional
+            MinSFPanel ở dưới + restore import + state setters đã skip ở trên. */}
+        {/*
         {mode === "heatmap" && (
           <MapViewModeToggle
             mode={coverageViewMode}
             onChange={(v) =>
               setCoverageViewMode(
-                /** @type {"minsf" | "estimate"} */ (v),
+                "" + v,
               )
             }
             options={[
@@ -2093,6 +2140,7 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
             ]}
           />
         )}
+        */}
 
         {/* Live badge: chỉ hiện khi realtime mode đang ON ở tab "me". Đặt
             top-center vì panel filter chiếm góc top-left và view-mode toggle
@@ -2121,92 +2169,178 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
 
         {/* Container anchor cả trên + dưới: `bottom-44` (=11rem) chừa zone
             cho legend ở góc dưới-trái. `pointer-events-none` để vùng trống
-            (khi panel collapsed) không chặn map click; children tự bật lại. */}
-        <div className="pointer-events-none absolute top-3 bottom-52 left-3 z-10 flex flex-col gap-2 [&>*]:pointer-events-auto">
+            (khi panel collapsed) không chặn map click; children tự bật lại.
+            Mobile (<md): full-width-ish, top-anchored, `bottom-36` (=9rem=144px)
+            để chừa chỗ cho legend ở bottom-left không bị panel đè. `right-14`
+            (=56px) chừa chỗ cho NavigationControl + view-mode toggle ở top-right
+            không bị panel che. */}
+        <div className="pointer-events-none absolute z-10 flex flex-col gap-2 top-1 bottom-36 left-2 right-14 [&>*]:pointer-events-auto md:top-3 md:bottom-52 md:left-3 md:right-auto">
           {mode === "predict" ? (
-            <div className="w-64 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 shadow-sm">
-              <div className="text-sm font-semibold text-slate-900">
-                {t.predictPanel.title}
-              </div>
-
-              <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
-                <div className="text-slate-500">{t.predictPanel.latLabel}</div>
-                <div className="text-right font-mono text-slate-900">
-                  {pickedCoords
-                    ? pickedCoords.lat.toFixed(5)
-                    : t.predictPanel.empty}
-                </div>
-                <div className="text-slate-500">{t.predictPanel.lngLabel}</div>
-                <div className="text-right font-mono text-slate-900">
-                  {pickedCoords
-                    ? pickedCoords.lng.toFixed(5)
-                    : t.predictPanel.empty}
-                </div>
-              </div>
-
-              <fieldset className="mt-2">
-                <legend
-                  className="text-xs font-medium text-slate-700"
-                  title={t.environmentPicker.hint}
+            !predictPanelOpen ? (
+              <button
+                type="button"
+                onClick={() => setPredictPanelOpen(true)}
+                aria-label={t.predictPanel.toggle.open}
+                title={t.predictPanel.toggle.open}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-500"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-5 w-5"
+                  aria-hidden
                 >
-                  {t.environmentPicker.label}
-                </legend>
-                <div className="mt-1 flex flex-col gap-0.5">
-                  {t.environmentPicker.options.map((opt) => (
-                    <label
-                      key={opt.value}
-                      className="flex items-center gap-1.5 text-[11px] text-slate-700"
+                  <path
+                    fillRule="evenodd"
+                    d="M9.69 18.933l.003.001C9.89 19.02 10 19 10 19s.11.02.308-.066l.002-.001.006-.003.018-.008a5.741 5.741 0 00.281-.14c.186-.096.446-.24.757-.433.62-.384 1.445-.966 2.274-1.765C15.302 14.988 17 12.493 17 9A7 7 0 103 9c0 3.492 1.698 5.988 3.355 7.584a13.731 13.731 0 002.273 1.765 11.842 11.842 0 00.976.544l.062.029.018.008.006.003zM10 11.25a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </button>
+            ) : (
+              <div className="flex max-h-full min-h-0 w-full flex-col overflow-y-auto rounded-md border border-slate-200 bg-white text-xs text-slate-700 shadow-sm md:w-64">
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
+                  <span className="text-sm font-semibold text-slate-900">
+                    {t.predictPanel.title}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPredictPanelOpen(false)}
+                    aria-label={t.predictPanel.toggle.close}
+                    className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      className="h-4 w-4"
+                      aria-hidden
                     >
-                      <input
-                        type="radio"
-                        name="environment-picker"
-                        value={opt.value}
-                        checked={environment === opt.value}
-                        onChange={() =>
-                          setEnvironment(
-                            /** @type {"outdoor" | "indoor"} */ (opt.value),
-                          )
-                        }
-                      />
-                      {opt.label}
-                    </label>
-                  ))}
+                      <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                    </svg>
+                  </button>
                 </div>
-              </fieldset>
+                <div className="space-y-2 px-3 py-2">
+                  <div className="flex gap-1 rounded-md bg-slate-100 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPredictSubTab("single")}
+                      className={`flex-1 rounded px-2 py-1 text-[11px] font-medium transition ${
+                        predictSubTab === "single"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {t.predictPanel.subTabs.single}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPredictSubTab("address")}
+                      className={`flex-1 rounded px-2 py-1 text-[11px] font-medium transition ${
+                        predictSubTab === "address"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {t.predictPanel.subTabs.address}
+                    </button>
+                  </div>
 
-              {!pickedCoords && (
-                <div className="mt-2 text-[11px] leading-snug text-slate-500">
-                  {t.predictPanel.hint}
+                  {predictSubTab === "single" ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
+                        <div className="text-slate-500">
+                          {t.predictPanel.latLabel}
+                        </div>
+                        <div className="text-right font-mono text-slate-900">
+                          {pickedCoords
+                            ? pickedCoords.lat.toFixed(5)
+                            : t.predictPanel.empty}
+                        </div>
+                        <div className="text-slate-500">
+                          {t.predictPanel.lngLabel}
+                        </div>
+                        <div className="text-right font-mono text-slate-900">
+                          {pickedCoords
+                            ? pickedCoords.lng.toFixed(5)
+                            : t.predictPanel.empty}
+                        </div>
+                      </div>
+
+                      <fieldset>
+                        <legend
+                          className="text-xs font-medium text-slate-700"
+                          title={t.environmentPicker.hint}
+                        >
+                          {t.environmentPicker.label}
+                        </legend>
+                        <div className="mt-1 flex flex-col gap-0.5">
+                          {t.environmentPicker.options.map((opt) => (
+                            <label
+                              key={opt.value}
+                              className="flex items-center gap-1.5 text-[11px] text-slate-700"
+                            >
+                              <input
+                                type="radio"
+                                name="environment-picker"
+                                value={opt.value}
+                                checked={environment === opt.value}
+                                onChange={() =>
+                                  setEnvironment(
+                                    /** @type {"outdoor" | "indoor"} */ (opt.value),
+                                  )
+                                }
+                              />
+                              {opt.label}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+
+                      {!pickedCoords && (
+                        <div className="text-[11px] leading-snug text-slate-500">
+                          {t.predictPanel.hint}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={onPredictSubmit}
+                        disabled={!pickedCoords || predictBusy}
+                        className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        {predictBusy
+                          ? t.predictPanel.submitting
+                          : t.predictPanel.submit}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={clearAllSearchMarkers}
+                        disabled={predictMarkerCount === 0}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                      >
+                        {t.predictPanel.clearAll}
+                        {predictMarkerCount > 0 ? ` (${predictMarkerCount})` : ""}
+                      </button>
+
+                      {predictError && (
+                        <div className="text-[11px] text-red-600">
+                          {predictError}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <AddressLookupPanel
+                      onResolved={handleAddressResolved}
+                      markerCount={predictMarkerCount}
+                      onClear={clearAllSearchMarkers}
+                    />
+                  )}
                 </div>
-              )}
-
-              <button
-                type="button"
-                onClick={onPredictSubmit}
-                disabled={!pickedCoords || predictBusy}
-                className="mt-2 w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                {predictBusy
-                  ? t.predictPanel.submitting
-                  : t.predictPanel.submit}
-              </button>
-
-              <button
-                type="button"
-                onClick={clearAllSearchMarkers}
-                disabled={predictMarkerCount === 0}
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-              >
-                {t.predictPanel.clearAll}
-                {predictMarkerCount > 0 ? ` (${predictMarkerCount})` : ""}
-              </button>
-
-              {predictError && (
-                <div className="mt-2 text-[11px] text-red-600">
-                  {predictError}
-                </div>
-              )}
-            </div>
+              </div>
+            )
           ) : mode === "points" ? (
             <PointsFilterPanel
               user={user}
@@ -2236,23 +2370,15 @@ export function CoverageMap({ mode = "points", bulkHandoff = null, onBulkHandoff
               onConnectionLinesEnabledChange={setShowConnectionLines}
             />
           ) : mode === "heatmap" ? (
-            // Tab "Bản đồ phủ sóng": minsf panel (gateway dropdown + legend)
-            // hoặc estimate placeholder, tuỳ coverageViewMode đang chọn.
-            coverageViewMode === "minsf" ? (
-              <MinSFPanel
-                gateways={gatewaysQ.data?.items ?? []}
-                selectedCode={minsfGatewayCode}
-                onChange={setMinsfGatewayCode}
-                loadingError={minsfLoadError}
-              />
-            ) : (
-              <EstimatePanel
-                gateways={gatewaysQ.data?.items ?? []}
-                selectedCode={estimateGatewayCode}
-                onChange={setEstimateGatewayCode}
-                loadingError={estimateLoadError}
-              />
-            )
+            // Tab "Bản đồ phủ sóng": tạm ẩn minsf — chỉ render EstimatePanel.
+            // Khi bật lại, restore conditional `coverageViewMode === "minsf"`
+            // + unwrap toggle ở trên.
+            <EstimatePanel
+              gateways={gatewaysQ.data?.items ?? []}
+              selectedCode={estimateGatewayCode}
+              onChange={setEstimateGatewayCode}
+              loadingError={estimateLoadError}
+            />
           ) : null}
 
         </div>

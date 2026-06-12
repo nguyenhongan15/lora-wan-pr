@@ -323,9 +323,8 @@ def gateway_state_service() -> GatewayStateService:
 
 @lru_cache(maxsize=1)
 def _trust_validator() -> TrustValidator:
-    """Shared TrustValidator — LinkingService.set_contribution, SyncService
-    post-batch promote, ChirpStack webhook ingest post-write, CSV upload
-    endpoint đều dùng cùng instance (single Stage1ItuModel + GatewayDirectory).
+    """Shared TrustValidator — ChirpStack webhook ingest post-write + CSV
+    upload endpoint dùng cùng instance (single Stage1ItuModel + GatewayDirectory).
     """
     settings = _settings()
     return TrustValidator(
@@ -344,7 +343,7 @@ def trust_validator() -> TrustValidator:
 
 @lru_cache(maxsize=1)
 def _linking_service() -> LinkingService:
-    return LinkingService(cipher=_credential_cipher(), trust=_trust_validator())
+    return LinkingService(cipher=_credential_cipher())
 
 
 def linking_service() -> LinkingService:
@@ -353,7 +352,7 @@ def linking_service() -> LinkingService:
 
 @lru_cache(maxsize=1)
 def _sync_service() -> SyncService:
-    return SyncService(cipher=_credential_cipher(), trust=_trust_validator())
+    return SyncService(cipher=_credential_cipher())
 
 
 def sync_service() -> SyncService:

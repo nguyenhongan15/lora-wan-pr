@@ -65,12 +65,18 @@ from ..schemas import (
     CoverageRebuildEnqueueResponse,
     CoverageRebuildJobListResponse,
     CoverageRebuildJobResponse,
+    MlRetrainEnqueueResponse,
+    MlRetrainJobListResponse,
+    MlRetrainJobResponse,
     PendingContributionListResponse,
     PendingContributionResponse,
     PendingReviewBatchListResponse,
     PendingReviewBatchResponse,
     SyncReportResponse,
     SyncResultResponse,
+    TrainingBatchDeleteResponse,
+    TrainingBatchItem,
+    TrainingBatchListResponse,
     UserAdminResponse,
     UserListResponse,
     UserPatchRequest,
@@ -126,10 +132,7 @@ _STATS_QUERIES = {
     "user_count": "SELECT COUNT(*) FROM auth.users",
     "active_user_count": "SELECT COUNT(*) FROM auth.users WHERE disabled = false",
     "linked_source_count": "SELECT COUNT(*) FROM auth.linked_sources",
-    "active_source_count": (
-        "SELECT COUNT(*) FROM auth.linked_sources "
-        "WHERE status = 'active' AND contribute_to_community = true"
-    ),
+    "active_source_count": ("SELECT COUNT(*) FROM auth.linked_sources WHERE status = 'active'"),
     "gateway_count": "SELECT COUNT(*) FROM geo.gateways",
     # ts.survey_training là hypertable training (đã accept) — quarantine
     # KHÔNG count vì không phải đóng góp confirm.
@@ -631,7 +634,6 @@ _LIST_REBUILD_JOBS = text("""
            per_gw_log, error_text, celery_task_id
     FROM audit.coverage_rebuild_jobs
     ORDER BY triggered_at DESC
-    LIMIT 5
 """)
 
 
@@ -689,7 +691,7 @@ def enqueue_coverage_rebuild(
 def list_recent_coverage_rebuilds(
     admin: Annotated[User, Depends(require_admin)],
 ) -> CoverageRebuildJobListResponse:
-    """5 lần rebuild gần nhất — frontend hiển thị lịch sử."""
+    """Toàn bộ lịch sử rebuild bản đồ ước lượng (mới → cũ)."""
     with _engine().begin() as conn:
         rows = conn.execute(_LIST_REBUILD_JOBS).all()
     return CoverageRebuildJobListResponse(items=[_row_to_rebuild_response(r) for r in rows])
@@ -736,3 +738,211 @@ def reject_contribution(
             detail="Không tìm thấy đóng góp đang chờ duyệt (đã xử lý hoặc không tồn tại).",
         )
     return ContributionReviewResponse(id=contribution_id, review_status="rejected")
+
+
+# ── Admin trace-back: data đã duyệt vào ts.survey_training ──────────────
+# Mục đích: admin có thể audit + xoá batch đã được approve trước đó (vd phát
+# hiện data sai lệch sau khi đã promote). Sau khi xoá → admin trigger rebuild
+# bản đồ + retrain ML qua endpoint riêng.
+#
+# Chỉ list batch có batch_id (mig 0024+). Legacy training rows (~13k row trước
+# 2026-06-11) không trace được — admin biết qua hint UI; không cần backfill
+# vì data đó là seed/sync history, không phải user contribution.
+
+_LIST_TRAINING_BATCHES = text("""
+    SELECT
+        t.batch_id,
+        b.user_id AS uploader_id,
+        u.email AS uploader_email,
+        b.kind,
+        b.filename,
+        b.uploaded_at,
+        COUNT(*)::int AS promoted_count,
+        MAX(t.promoted_at) AS latest_approved_at,
+        b.deleted_at AS batch_deleted_at
+    FROM ts.survey_training t
+    LEFT JOIN me.upload_batches b ON b.id = t.batch_id
+    LEFT JOIN auth.users u ON u.id = b.user_id
+    WHERE t.batch_id IS NOT NULL
+    GROUP BY t.batch_id, b.user_id, u.email, b.kind, b.filename,
+             b.uploaded_at, b.deleted_at
+    ORDER BY latest_approved_at DESC
+""")
+
+# Xoá hết training rows của 1 batch. KHÔNG đụng quarantine — quarantine có thể
+# vẫn còn rows pending/approved của batch đó; admin xoá training = "rút lại
+# quyết định duyệt", không phải xoá toàn bộ batch (user side delete đã có
+# riêng và mạnh hơn — purge cả 2 table).
+_DELETE_TRAINING_FOR_BATCH = text("""
+    DELETE FROM ts.survey_training
+    WHERE batch_id = :batch_id
+""")
+
+
+@router.get(
+    "/training/batches",
+    response_model=TrainingBatchListResponse,
+    summary="Danh sách batch đã duyệt vào ts.survey_training (admin audit)",
+)
+def list_training_batches(
+    admin: Annotated[User, Depends(require_admin)],
+) -> TrainingBatchListResponse:
+    """Trace-back các batch đã được admin approve. Sort mới-nhất trước theo
+    `latest_approved_at` (max promoted_at trong batch).
+
+    Note: chỉ trả batch có `batch_id` không NULL trong training. Row legacy
+    từ trước migration 0024 (~13k row) không xuất hiện ở đây.
+    """
+    with _engine().begin() as conn:
+        rows = conn.execute(_LIST_TRAINING_BATCHES).all()
+    return TrainingBatchListResponse(
+        items=[
+            TrainingBatchItem(
+                batch_id=r.batch_id,
+                uploader_id=r.uploader_id,
+                uploader_email=r.uploader_email,
+                kind=r.kind,
+                filename=r.filename,
+                uploaded_at=r.uploaded_at,
+                promoted_count=int(r.promoted_count),
+                latest_approved_at=r.latest_approved_at,
+                batch_deleted_at=r.batch_deleted_at,
+            )
+            for r in rows
+        ]
+    )
+
+
+@router.delete(
+    "/training/batches/{batch_id}",
+    response_model=TrainingBatchDeleteResponse,
+    summary="Xoá hết training rows của 1 batch (admin rút lại duyệt)",
+    responses={
+        404: {"description": "Batch không có row nào trong training"},
+    },
+)
+def delete_training_batch(
+    batch_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> TrainingBatchDeleteResponse:
+    """Hard-delete `ts.survey_training` của batch. Quarantine giữ nguyên
+    (user vẫn thấy batch trong "Lịch sử upload", nhưng status hiển thị về
+    "private" do không còn promoted row).
+
+    Sau khi xoá → admin tự bấm "Rebuild + Retrain" để propagate ảnh hưởng
+    sang bản đồ ước lượng + ML model.
+    """
+    with _engine().begin() as conn:
+        result = conn.execute(_DELETE_TRAINING_FOR_BATCH, {"batch_id": batch_id})
+    deleted = result.rowcount or 0
+    if deleted == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Batch {batch_id} không có row nào trong training (đã bị xoá hoặc chưa bao giờ promote).",
+        )
+    logger.info(
+        "admin_training_batch_deleted",
+        admin_id=str(admin.id),
+        batch_id=str(batch_id),
+        deleted_count=deleted,
+    )
+    return TrainingBatchDeleteResponse(batch_id=batch_id, deleted_count=deleted)
+
+
+# ── ML retrain (admin "Retrain mô hình học máy") ────────────────────────
+# Mirror pattern coverage rebuild — producer enqueue Celery, worker chạy
+# scripts/train_extra_trees.py atomic-swap + ghi metrics.json. Frontend poll
+# `GET /admin/ml/retrain/{job_id}` mỗi 5s.
+
+_INSERT_RETRAIN_JOB = text("""
+    INSERT INTO audit.ml_retrain_jobs (status, triggered_by)
+    VALUES ('queued', :uid)
+    RETURNING id
+""")
+
+_SELECT_RETRAIN_JOB = text("""
+    SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
+           rows_trained, artifact_path, metrics, error_text, celery_task_id
+    FROM audit.ml_retrain_jobs
+    WHERE id = :id
+""")
+
+_LIST_RETRAIN_JOBS = text("""
+    SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
+           rows_trained, artifact_path, metrics, error_text, celery_task_id
+    FROM audit.ml_retrain_jobs
+    ORDER BY triggered_at DESC
+    LIMIT 5
+""")
+
+
+def _row_to_retrain_response(r: Any) -> MlRetrainJobResponse:
+    return MlRetrainJobResponse(
+        id=r.id,
+        status=r.status,
+        triggered_by=r.triggered_by,
+        triggered_at=r.triggered_at,
+        started_at=r.started_at,
+        finished_at=r.finished_at,
+        rows_trained=r.rows_trained,
+        artifact_path=r.artifact_path,
+        metrics=dict(r.metrics or {}),
+        error_text=r.error_text,
+        celery_task_id=r.celery_task_id,
+    )
+
+
+@router.post(
+    "/ml/retrain",
+    response_model=MlRetrainEnqueueResponse,
+    status_code=202,
+)
+def enqueue_ml_retrain(
+    admin: Annotated[User, Depends(require_admin)],
+) -> MlRetrainEnqueueResponse:
+    """Tạo job + enqueue task retrain Extra Trees ML model.
+
+    Idempotency: KHÔNG dedupe — worker concurrency=1 nên job mới chờ job cũ
+    xong. Train chạy ~vài phút (Extra Trees 1500 trees trên ~10k row).
+    """
+    from ...tasks.retrain_ml import retrain_ml_model
+
+    with _engine().begin() as conn:
+        job_id = conn.execute(_INSERT_RETRAIN_JOB, {"uid": admin.id}).scalar_one()
+
+    retrain_ml_model.delay(str(job_id))
+    logger.info(
+        "admin_ml_retrain_enqueued",
+        admin_id=str(admin.id),
+        job_id=str(job_id),
+    )
+    return MlRetrainEnqueueResponse(job_id=job_id, status="queued")
+
+
+@router.get(
+    "/ml/retrain/latest",
+    response_model=MlRetrainJobListResponse,
+)
+def list_recent_ml_retrains(
+    admin: Annotated[User, Depends(require_admin)],
+) -> MlRetrainJobListResponse:
+    """5 lần retrain gần nhất — frontend hiển thị lịch sử."""
+    with _engine().begin() as conn:
+        rows = conn.execute(_LIST_RETRAIN_JOBS).all()
+    return MlRetrainJobListResponse(items=[_row_to_retrain_response(r) for r in rows])
+
+
+@router.get(
+    "/ml/retrain/{job_id}",
+    response_model=MlRetrainJobResponse,
+)
+def get_ml_retrain(
+    job_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> MlRetrainJobResponse:
+    """Poll status 1 job — frontend gọi mỗi 5s tới khi succeeded/failed."""
+    with _engine().begin() as conn:
+        row = conn.execute(_SELECT_RETRAIN_JOB, {"id": job_id}).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} không tồn tại.")
+    return _row_to_retrain_response(row)

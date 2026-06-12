@@ -71,11 +71,11 @@ class SurveyBatchStatus(StrEnum):
 class SurveyRecord:
     """1 reading từ thiết bị field. Toạ độ WGS84.
 
-    `submitted_for_community`: caller-driven flag (CSV upload checkbox,
-    ChirpStack webhook context kế thừa từ linked_source.contribute_to_community,
-    sync orchestrator giữ false để pipeline tự quyết). True → record sẽ chạy
-    qua TrustValidator pipeline; pass → promote sang ts.survey_training. False
-    → mãi mãi ở quarantine, chỉ user owner xem được (personal-only).
+    `submitted_for_community`: caller-driven flag. Mọi ingest path (CSV/JSON
+    upload, sync, ChirpStack webhook) đẩy false; user submit batch riêng
+    qua `POST /me/uploads/batches/{id}/submit` để flip true. True → record
+    chạy qua TrustValidator pipeline; pass → promote sang ts.survey_training.
+    False → ở quarantine, chỉ user owner xem được (personal-only).
     """
 
     timestamp: datetime

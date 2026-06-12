@@ -18,8 +18,14 @@
 
 import { getToken, getUser, setSession, clear } from "./store.js";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// Xem ghi chú ở api/client.js: localhost → 8000 cho dev, ngược lại theo env.
+const API_BASE_URL = (() => {
+  if (typeof window !== "undefined") {
+    const h = window.location.hostname;
+    if (h === "localhost" || h === "127.0.0.1") return "http://localhost:8000";
+  }
+  return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+})();
 
 /** @type {Promise<boolean> | null} */
 let _refreshPromise = null;
