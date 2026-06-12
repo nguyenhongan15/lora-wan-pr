@@ -18,12 +18,19 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, Protocol
 
 from sqlalchemy import Engine, text
 
 from ..linking._crypto import CredentialCipher
 from ..sources.chirpstack._client import Client
+
+
+class Cache(Protocol):
+    """Minimal cache protocol — backend (Valkey/in-memory/no-op) wired ở edge/."""
+
+    def get(self, key: str) -> str | None: ...
+    def setex(self, key: str, ttl_s: int, value: str) -> None: ...
 
 log = logging.getLogger(__name__)
 

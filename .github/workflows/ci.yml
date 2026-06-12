@@ -23,7 +23,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       docker: ${{ steps.filter.outputs.docker }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -80,7 +80,7 @@ jobs:
                 exit 1
               fi
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-python-uv
 
       - name: Restore mypy cache
@@ -128,7 +128,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg://lora:test@localhost:5432/lora_coverage
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-python-uv
 
       - name: Migrate
@@ -142,11 +142,11 @@ jobs:
     if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build api-service image (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/api-service/Dockerfile
@@ -183,9 +183,9 @@ jobs:
       run:
         working-directory: apps/web-app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
