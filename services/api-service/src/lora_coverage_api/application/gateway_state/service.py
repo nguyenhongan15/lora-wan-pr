@@ -32,6 +32,7 @@ class Cache(Protocol):
     def get(self, key: str) -> str | None: ...
     def setex(self, key: str, ttl_s: int, value: str) -> None: ...
 
+
 log = logging.getLogger(__name__)
 
 StateLiteral = Literal["online", "offline", "never_seen", "unknown"]
@@ -55,17 +56,13 @@ class GatewayStateService:
         self,
         engine: Engine,
         cipher: CredentialCipher,
-        cache_url: str,
+        cache: Cache | None,
         ttl_s: int = 60,
     ) -> None:
         self._eng = engine
         self._cipher = cipher
         self._ttl_s = ttl_s
-        self._cache = None
-        if cache_url:
-            import redis
-
-            self._cache = redis.from_url(cache_url, decode_responses=True)  # type: ignore[no-untyped-call]
+        self._cache = cache
 
     def get_state_map(self) -> dict[str, GatewayState]:
         """Return {gateway_code: GatewayState}. Empty dict nếu fail."""

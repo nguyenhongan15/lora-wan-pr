@@ -304,12 +304,23 @@ def _credential_cipher() -> CredentialCipher:
 
 
 @lru_cache(maxsize=1)
+def _gateway_state_cache():  # type: ignore[no-untyped-def]
+    """Instantiate cache backend (Valkey/Redis URL) — edge-only concern."""
+    url = _settings().gateway_state_cache_url
+    if not url:
+        return None
+    import redis
+
+    return redis.from_url(url, decode_responses=True)  # type: ignore[no-untyped-call]
+
+
+@lru_cache(maxsize=1)
 def _gateway_state_service() -> GatewayStateService:
     s = _settings()
     return GatewayStateService(
         engine=_engine(),
         cipher=_credential_cipher(),
-        cache_url=s.gateway_state_cache_url,
+        cache=_gateway_state_cache(),
         ttl_s=s.gateway_state_cache_ttl_s,
     )
 
