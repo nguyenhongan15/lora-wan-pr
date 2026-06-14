@@ -226,6 +226,7 @@ def _sync_to_response(r: SyncResult) -> SyncResultResponse:
         linked_source_id=r.linked_source_id,
         gateways_inserted=r.gateways_inserted,
         gateways_updated=r.gateways_updated,
+        gateways_quarantined=r.gateways_quarantined,
         measurements_inserted=r.measurements_inserted,
         measurements_updated=r.measurements_updated,
         devices_inserted=r.devices_inserted,

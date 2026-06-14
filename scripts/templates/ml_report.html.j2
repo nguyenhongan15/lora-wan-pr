@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Báo cáo huấn luyện mô hình ML — {{ job_meta.job_id }}</title>
+  <style>
+    @page { size: A4; margin: 20mm 18mm; }
+    body {
+      font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif;
+      color: #222; line-height: 1.45; font-size: 11pt;
+    }
+    h1 { font-size: 22pt; margin: 0 0 4pt; color: #1a3a72; }
+    h2 { font-size: 14pt; color: #1a3a72; border-bottom: 2px solid #1a3a72; padding-bottom: 4pt; margin-top: 24pt; }
+    h3 { font-size: 12pt; color: #333; margin-top: 16pt; }
+    .meta { color: #666; font-size: 10pt; margin-bottom: 16pt; }
+    .conclusion {
+      padding: 14pt 18pt; border-radius: 6pt; margin: 16pt 0;
+      border-left: 6pt solid {{ {
+        'green': '#2ca02c', 'red': '#d62728', 'gray': '#888'
+      }[conclusion.color] }};
+      background: {{ {
+        'green': '#f0fbf0', 'red': '#fbf0f0', 'gray': '#f5f5f5'
+      }[conclusion.color] }};
+    }
+    .conclusion .status { font-size: 14pt; font-weight: bold; color: {{ {
+      'green': '#1a6b1a', 'red': '#8b1a1a', 'gray': '#555'
+    }[conclusion.color] }}; }
+    .conclusion .reason { margin-top: 6pt; color: #444; font-size: 10.5pt; }
+    table { width: 100%; border-collapse: collapse; margin: 8pt 0; font-size: 10pt; }
+    th, td { border: 1px solid #ccc; padding: 5pt 8pt; text-align: left; }
+    th { background: #f0f0f5; font-weight: 600; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .kpi-grid { display: flex; gap: 12pt; margin: 12pt 0; flex-wrap: wrap; }
+    .kpi {
+      flex: 1; min-width: 130pt; padding: 10pt 14pt; background: #fafafa;
+      border: 1px solid #e0e0e0; border-radius: 4pt;
+    }
+    .kpi .label { color: #666; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5pt; }
+    .kpi .value { font-size: 20pt; font-weight: bold; color: #1a3a72; margin-top: 2pt; }
+    .kpi .unit { color: #888; font-size: 11pt; }
+    .plot { margin: 14pt 0; page-break-inside: avoid; }
+    .plot img { max-width: 100%; height: auto; border: 1px solid #e0e0e0; }
+    .plot .caption { font-size: 9.5pt; color: #666; text-align: center; margin-top: 4pt; }
+    .warn { background: #fff8e6; border-left: 4pt solid #f5a623; padding: 10pt; margin: 12pt 0; font-size: 10pt; }
+    .err  { background: #fff0f0; border-left: 4pt solid #d62728; padding: 10pt; margin: 12pt 0; font-size: 10pt; font-family: monospace; white-space: pre-wrap; }
+    .footer { margin-top: 24pt; padding-top: 8pt; border-top: 1px solid #ddd; color: #888; font-size: 9pt; }
+    code { background: #f0f0f5; padding: 1pt 4pt; border-radius: 2pt; font-size: 9.5pt; }
+  </style>
+</head>
+<body>
+
+<h1>Báo cáo huấn luyện mô hình ML</h1>
+<div class="meta">
+  <strong>Mã job:</strong> {{ job_meta.job_id }}<br>
+  <strong>Thời điểm kích hoạt:</strong> {{ job_meta.triggered_at }}<br>
+  <strong>Người thực hiện:</strong> {{ job_meta.triggered_by }}<br>
+  <strong>Báo cáo sinh lúc:</strong> {{ job_meta.generated_at }}
+</div>
+
+<div class="conclusion">
+  <div class="status">{{ conclusion.label }}</div>
+  {% if conclusion.reason %}<div class="reason">{{ conclusion.reason }}</div>{% endif %}
+</div>
+
+{% if failure %}
+<h2>Chi tiết lỗi</h2>
+<div class="err">{{ failure.error_text }}</div>
+<div class="footer">
+  Báo cáo được sinh tự động bởi <code>scripts/render_ml_report.py</code>.
+</div>
+</body></html>
+{% else %}
+
+<h2>1. Tóm tắt</h2>
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">Hold-out RMSE</div>
+    <div class="value">
+      {% if holdout and not holdout.skipped %}{{ holdout.overall.rmse_db | fmt2 }}{% else %}—{% endif %}
+      <span class="unit">dB</span>
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="label">Hold-out MAE</div>
+    <div class="value">
+      {% if holdout and not holdout.skipped %}{{ holdout.overall.mae_db | fmt2 }}{% else %}—{% endif %}
+      <span class="unit">dB</span>
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="label">Hold-out bias</div>
+    <div class="value">
+      {% if holdout and not holdout.skipped %}{{ holdout.overall.bias_db | fmt2_signed }}{% else %}—{% endif %}
+      <span class="unit">dB</span>
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="label">Hold-out R²</div>
+    <div class="value">
+      {% if holdout and not holdout.skipped and holdout.overall.r2 is not none %}{{ holdout.overall.r2 | fmt2 }}{% else %}—{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if delta_rmse_vs_previous is not none %}
+<p>
+  So với lần huấn luyện trước:
+  <strong>{{ delta_rmse_vs_previous | fmt2_signed }} dB RMSE</strong>
+  ({% if delta_rmse_vs_previous < 0 %}cải thiện{% elif delta_rmse_vs_previous > 0 %}kém hơn{% else %}không đổi{% endif %}).
+</p>
+{% endif %}
+
+{% if holdout and holdout.skipped %}
+<div class="warn">
+  <strong>Cảnh báo:</strong> không chạy được đánh giá hold-out. Lý do: {{ holdout.reason }}.
+  Báo cáo chỉ phản ánh sai số trên tập huấn luyện (có thể quá lạc quan).
+</div>
+{% endif %}
+
+<h2>2. Cấu hình huấn luyện</h2>
+<table>
+  <tr><th>Thuật toán</th><td>ExtraTreesRegressor (scikit-learn)</td></tr>
+  <tr><th>n_estimators</th><td>{{ training.hyperparams.n_estimators }}</td></tr>
+  <tr><th>max_depth</th><td>{{ training.hyperparams.max_depth }}</td></tr>
+  <tr><th>min_samples_split</th><td>{{ training.hyperparams.min_samples_split }}</td></tr>
+  <tr><th>min_samples_leaf</th><td>{{ training.hyperparams.min_samples_leaf }}</td></tr>
+  <tr><th>random_state</th><td>{{ training.hyperparams.random_state }}</td></tr>
+  <tr><th>Số đặc trưng</th><td>{{ training.features | length }} (20 numeric + 1 categorical)</td></tr>
+</table>
+
+<h2>3. Dữ liệu huấn luyện</h2>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Tổng số mẫu</div><div class="value">{{ "{:,}".format(dataset.n_rows) }}</div></div>
+  <div class="kpi"><div class="label">Số gateway</div><div class="value">{{ dataset.n_gateways }}</div></div>
+  <div class="kpi"><div class="label">Khoảng cách trung vị</div><div class="value">{{ dataset.distance_km.p50 | fmt2 }}<span class="unit">km</span></div></div>
+</div>
+
+<h3>Phân phối Spreading Factor</h3>
+<table>
+  <tr><th>SF</th><th class="num">Số mẫu</th><th class="num">Tỉ lệ</th></tr>
+  {% for sf, n in dataset.sf_distribution.items() %}
+  <tr>
+    <td>SF{{ sf }}</td>
+    <td class="num">{{ "{:,}".format(n) }}</td>
+    <td class="num">{{ "{:.1f}".format(100 * n / dataset.n_rows) }}%</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h3>Phân phối khoảng cách (km)</h3>
+<table>
+  <tr><th class="num">Min</th><th class="num">P25</th><th class="num">P50</th><th class="num">P75</th><th class="num">Max</th></tr>
+  <tr>
+    <td class="num">{{ dataset.distance_km.min | fmt2 }}</td>
+    <td class="num">{{ dataset.distance_km.p25 | fmt2 }}</td>
+    <td class="num">{{ dataset.distance_km.p50 | fmt2 }}</td>
+    <td class="num">{{ dataset.distance_km.p75 | fmt2 }}</td>
+    <td class="num">{{ dataset.distance_km.max | fmt2 }}</td>
+  </tr>
+</table>
+
+<h2>4. Kết quả huấn luyện</h2>
+<table>
+  <tr><th>RMSE training</th><td class="num">{{ training.metrics.rmse_db | fmt2 }} dB</td></tr>
+  <tr><th>MAE training</th><td class="num">{{ training.metrics.mae_db | fmt2 }} dB</td></tr>
+  <tr><th>R² training</th><td class="num">{{ training.metrics.r2 | fmt2 }}</td></tr>
+  <tr><th>n training</th><td class="num">{{ "{:,}".format(training.metrics.n) }}</td></tr>
+</table>
+<p style="font-size: 9.5pt; color: #666;">
+  <em>Lưu ý:</em> RMSE trên tập huấn luyện thường rất thấp do mô hình ghi nhớ dữ liệu.
+  Đánh giá chính xác chất lượng tổng quát hóa cần xem mục <strong>5. Hold-out</strong>.
+</p>
+
+{% for plot in plots if plot.filename in ['01_train_pred_vs_meas.png', '02_train_error_vs_distance.png', '03_feature_importance.png'] %}
+<div class="plot">
+  <img src="{{ plot.data_uri }}" alt="{{ plot.title }}">
+  <div class="caption">{{ plot.title }}</div>
+</div>
+{% endfor %}
+
+{% if holdout and not holdout.skipped %}
+<h2>5. Đánh giá hold-out ({{ holdout.window.start }} – {{ holdout.window.end }})</h2>
+<p>
+  Dữ liệu hold-out là survey thực địa tại {{ holdout.window.bbox }} từ {{ holdout.window.start }} đến {{ holdout.window.end }} —
+  hoàn toàn không có trong tập huấn luyện, đại diện cho hiệu năng thực tế.
+</p>
+
+<h3>5.1. Theo khoảng cách</h3>
+<table>
+  <tr><th>Khoảng cách (km)</th><th class="num">n</th><th class="num">RMSE</th><th class="num">MAE</th><th class="num">bias</th></tr>
+  {% for b in holdout.per_distance_bin %}
+  <tr>
+    <td>{{ b.bin_km }}</td>
+    <td class="num">{{ b.n }}</td>
+    <td class="num">{{ b.rmse_db | fmt2 }} dB</td>
+    <td class="num">{{ b.mae_db | fmt2 }} dB</td>
+    <td class="num">{{ b.bias_db | fmt2_signed }} dB</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h3>5.2. Theo gateway</h3>
+<table>
+  <tr><th>Gateway</th><th class="num">n</th><th class="num">RMSE</th><th class="num">MAE</th><th class="num">bias</th></tr>
+  {% for g in holdout.per_gateway %}
+  <tr>
+    <td><code>{{ g.gateway }}</code></td>
+    <td class="num">{{ g.n }}</td>
+    <td class="num">{{ g.rmse_db | fmt2 }} dB</td>
+    <td class="num">{{ g.mae_db | fmt2 }} dB</td>
+    <td class="num">{{ g.bias_db | fmt2_signed }} dB</td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% for plot in plots if plot.filename in ['04_holdout_per_distance.png', '05_holdout_per_gateway.png'] %}
+<div class="plot">
+  <img src="{{ plot.data_uri }}" alt="{{ plot.title }}">
+  <div class="caption">{{ plot.title }}</div>
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>6. Khuyến nghị</h2>
+{% if conclusion.status == "DAT" %}
+<p>Mô hình <strong>đạt mục tiêu chất lượng {{ target_rmse_db }} dB</strong>. Có thể đưa vào vận hành.</p>
+{% elif conclusion.status == "KHONG_DAT" %}
+<ul>
+  <li>Sai số RMSE hold-out {{ holdout.overall.rmse_db | fmt2 }} dB cao hơn mục tiêu {{ target_rmse_db }} dB.</li>
+  <li>Phương sai cao chủ yếu là <em>shadow fading vật lý</em> — cận dưới lý thuyết ở khu vực đô thị thường ~6-8 dB.</li>
+  <li>Đề xuất: bổ sung khảo sát ở khoảng cách &gt; 2 km, nhiều gateway hơn, môi trường đa dạng (LOS biển vs NLOS phố cũ).</li>
+</ul>
+{% else %}
+<p>Chưa đánh giá được chất lượng tổng quát hóa. Cần kích hoạt hold-out eval (cấu hình biến môi trường DEM/OSM).</p>
+{% endif %}
+
+<div class="footer">
+  Báo cáo được sinh tự động bởi <code>scripts/render_ml_report.py</code>.
+  Mục tiêu: RMSE ≤ {{ target_rmse_db }} dB.
+</div>
+{% endif %}
+
+</body>
+</html>

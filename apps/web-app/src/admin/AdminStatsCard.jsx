@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
 import { getStats } from "./client.js";
+import { OverviewDashboard } from "./OverviewDashboard.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.admin.stats;
@@ -17,6 +18,9 @@ export function AdminStatsCard() {
   const q = useQuery({
     queryKey: ["admin", "stats"],
     queryFn: getStats,
+    // online_user_count thay đổi liên tục (5 min window, throttle 30s ở
+    // middleware) — poll 30s cho cảm giác near-realtime.
+    refetchInterval: 30000,
   });
 
   if (q.isPending) {
@@ -30,8 +34,7 @@ export function AdminStatsCard() {
   /** @type {Array<[string, number]>} */
   const cells = [
     [t.userCount, s.user_count],
-    [t.activeUserCount, s.active_user_count],
-    [t.linkedSourceCount, s.linked_source_count],
+    [t.onlineUserCount, s.online_user_count],
     [t.activeSourceCount, s.active_source_count],
     [t.gatewayCount, s.gateway_count],
     [t.measurementCount, s.measurement_count],
@@ -39,21 +42,24 @@ export function AdminStatsCard() {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-      {cells.map(([label, value]) => (
-        <div
-          key={label}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm"
-        >
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {label}
+    <>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {cells.map(([label, value]) => (
+          <div
+            key={label}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm"
+          >
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              {label}
+            </div>
+            <div className="mt-1 text-2xl font-bold text-slate-900">
+              {value.toLocaleString("vi-VN")}
+            </div>
           </div>
-          <div className="mt-1 text-2xl font-bold text-slate-900">
-            {value.toLocaleString("vi-VN")}
-          </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      <OverviewDashboard />
+    </>
   );
 }
 

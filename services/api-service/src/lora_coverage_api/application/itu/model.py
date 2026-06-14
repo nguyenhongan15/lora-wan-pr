@@ -30,14 +30,18 @@ from ..path_loss import (
     DEVICE_SENSITIVITY_DBM_125KHZ,
     GW_SENSITIVITY_DBM_125KHZ,
     NOISE_FLOOR_DBM_125KHZ,
+    SF_SNR_LIMITS_DB,
     SUBURBAN_PROFILE,
     EnvironmentProfile,
     compute_link_budget,
+    estimate_ber,
+    estimate_jitter_ms,
+    estimate_pdr,
     recommend_sf,
-    resolve_bottleneck,
     resolve_gateway_rx_gain,
     resolve_sensitivity,
     status_worse_of,
+    time_on_air_ms,
 )
 from .backend import GeoPoint, LinkGeometry, Stage1PhysicsBackend
 
@@ -138,7 +142,6 @@ class Stage1ItuModel:
         )
 
         coverage_status = status_worse_of(ul.status, dl.status)
-        bottleneck = resolve_bottleneck(ul, dl)
         worst_snr = ul.snr_db if ul.margin_db <= dl.margin_db else dl.snr_db
 
         # Confidence heuristic 1 / (1 + d/30) — distance lớn vẫn giảm confidence
@@ -146,6 +149,16 @@ class Stage1ItuModel:
         # lỏng cho v0.
         score = max(0.1, 1.0 / (1.0 + d_km / 30.0))
         sigma = self.env_profile.shadow_fading_std_db
+
+        # Signal-quality (FE "Dự đoán điểm"): margin SNR-only (không gộp sens
+        # margin) — PDR/BER là hàm của SNR vs SF demod threshold, không phụ
+        # thuộc front-end sensitivity (đã được tách qua status classify).
+        sf_limit = SF_SNR_LIMITS_DB[sf]
+        worst_snr_margin = min(ul.snr_db - sf_limit, dl.snr_db - sf_limit)
+        pdr = estimate_pdr(worst_snr_margin)
+        ber = estimate_ber(worst_snr_margin)
+        toa_ms = time_on_air_ms(sf, bw_hz=125_000)
+        jitter_ms = estimate_jitter_ms(toa_ms)
 
         return Prediction(
             rssi_dbm=round(dl.rssi_dbm, 2),
@@ -168,9 +181,21 @@ class Stage1ItuModel:
             downlink_snr_db=round(dl.snr_db, 2),
             downlink_margin_db=round(dl.margin_db, 2),
             downlink_status=dl.status,
-            bottleneck=bottleneck,
             path_loss_db=round(pl_db, 2),
             distance_to_serving_gateway_km=round(d_km, 3),
+            pdr=round(pdr, 4),
+            ber=ber,
+            fer=round(1.0 - pdr, 4),
+            bandwidth_hz=125_000,
+            time_on_air_ms=round(toa_ms, 2),
+            jitter_ms=round(jitter_ms, 2),
+            shadow_fading_sigma_db=sigma,
+            uplink_noise_floor_dbm=ul_noise_floor,
+            downlink_noise_floor_dbm=NOISE_FLOOR_DBM_125KHZ,
+            environment=target.environment,
+            tx_power_dbm=target.tx_power_dbm,
+            frequency_mhz=target.frequency_mhz,
+            spreading_factor=sf,
         )
 
 

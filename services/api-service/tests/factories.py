@@ -15,7 +15,6 @@ from lora_coverage_api.domain.coverage import (
     CoverageStatus,
     Gateway,
     GatewayId,
-    LinkBottleneck,
     Prediction,
     Target,
 )
@@ -110,11 +109,10 @@ def make_prediction(
     downlink_snr_db: float | None = None,
     downlink_margin_db: float = 30.0,
     downlink_status: CoverageStatus | None = None,
-    bottleneck: LinkBottleneck = "both_ok",
 ) -> Prediction:
-    """Defaults: UL = DL = top-level rssi/snr/status. Bottleneck "both_ok".
+    """Defaults: UL = DL = top-level rssi/snr/status.
 
-    Test bodies test bidirectional behavior override UL/DL/bottleneck explicit;
+    Test bodies test bidirectional behavior override UL/DL explicit;
     legacy tests chỉ assert top-level fields không cần đụng.
     """
     return Prediction(
@@ -133,7 +131,6 @@ def make_prediction(
         downlink_snr_db=snr_db if downlink_snr_db is None else downlink_snr_db,
         downlink_margin_db=downlink_margin_db,
         downlink_status=coverage_status if downlink_status is None else downlink_status,
-        bottleneck=bottleneck,
     )
 
 

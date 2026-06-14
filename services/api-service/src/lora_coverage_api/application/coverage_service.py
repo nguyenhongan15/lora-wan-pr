@@ -6,10 +6,12 @@ Phụ thuộc 2 thứ qua DI: GatewayDirectory + PathLossModel.
 
 from __future__ import annotations
 
-from ..domain.coverage import Prediction, Target
+import dataclasses
+
+from ..domain.coverage import CoverageStatus, Prediction, Target
 from ..domain.errors import PredictionErrorCode, PredictionUnavailable
 from ..domain.result import Err, Ok, Result
-from .path_loss import PathLossModel
+from .path_loss import PathLossModel, detect_bottleneck_causes
 from .repositories import GatewayDirectory
 
 
@@ -33,14 +35,24 @@ class CoverageQueryService:
         # phải đảm bảo: 1 GW có DL strong nhưng UL chết do RX gain thấp sẽ
         # KHÔNG phục vụ được — chọn theo top-level rssi_dbm (DL only) sẽ
         # bias sai. Behavioral change so với v0 chỉ-DL.
+        #
+        # Đồng thời đếm số candidate có status != NO_COVERAGE = "phủ sóng được"
+        # — diversity metric cho FE hiển thị (1 GW = single point of failure,
+        # ≥2 = redundancy).
         best: Prediction | None = None
         best_margin: float = float("-inf")
+        covering = 0
         for gw in candidates:
             p = self._model.predict(target, gw)
+            if p.coverage_status != CoverageStatus.NO_COVERAGE:
+                covering += 1
             margin = min(p.uplink_margin_db, p.downlink_margin_db)
             if margin > best_margin:
                 best = p
                 best_margin = margin
 
         assert best is not None  # candidates không rỗng → best có giá trị
-        return Ok(best)
+        causes = detect_bottleneck_causes(best, target)
+        return Ok(
+            dataclasses.replace(best, covering_gateway_count=covering, bottleneck_causes=causes)
+        )

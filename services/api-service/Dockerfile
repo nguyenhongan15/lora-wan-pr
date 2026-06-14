@@ -97,6 +97,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # rasterio (cho precompute_rssi_heatmap.py qua Celery worker) cần
         # libexpat1; rasterio wheel chỉ ship GDAL còn expat phải có sẵn ở OS.
         libexpat1 \
+        # WeasyPrint (ML retrain báo cáo PDF) needs Cairo + Pango + GDK-Pixbuf
+        # + harfbuzz + ffi. fonts-liberation cung cấp font Latin + Việt cơ bản
+        # cho PDF (không có sẽ render Tofu □□□).
+        libcairo2 \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libharfbuzz0b \
+        libffi8 \
+        fonts-liberation \
+        # DejaVu Sans/Serif/Mono — full Vietnamese diacritics. fonts-liberation
+        # thiếu glyph ố/ầ/ặ/ỗ → PDF render "Tofu" □□□.
+        fonts-dejavu \
         tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 app \

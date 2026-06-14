@@ -42,9 +42,12 @@ from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from sqlalchemy import text
 
-from ...application.identity import EmailNotVerifiedError, User
+from ...application.identity import EmailNotVerifiedError, Mailer, MailerError, User
 from ...application.repositories import GatewayDirectory, SurveyIngest
+from ...application.trust import TrustValidator
+from ...application.trust.promotion import approve_pending_review_for_batch_id
 from ...application.uploads import (
     UploadKind,
     create_upload_batch,
@@ -61,7 +64,9 @@ from ..deps import (
     _engine,
     current_user,
     gateway_directory,
+    mailer_dep,
     survey_repository,
+    trust_validator,
 )
 from ..rate_limit import limiter
 from ..schemas import (
@@ -330,21 +335,72 @@ async def submit_batch(
     request: Request,
     user: Annotated[User, Depends(current_user)],
     batch_id: UUID,
+    trust: Annotated[TrustValidator, Depends(trust_validator)],
+    mailer: Annotated[Mailer, Depends(mailer_dep)],
 ) -> UploadBatchSubmitResponse:
     """Mark rows của batch submitted_for_community=true + chuyển sang
     pending_review. Idempotent: re-call → 0. KHÔNG raise 404 khi batch
-    không thuộc user — filter `uploader_id` trong SQL trả 0 rows."""
+    không thuộc user — filter `uploader_id` trong SQL trả 0 rows.
+
+    Admin shortcut: nếu user là admin, sau khi queue pending_review sẽ
+    approve thẳng trong cùng txn (tin cậy mặc định) → INSERT training,
+    bypass admin review queue. Email thông báo gửi tới chính admin đó +
+    super admin (skip duplicate nếu trùng địa chỉ).
+    """
     if not user.email_verified:
         raise EmailNotVerifiedError("Cần xác thực email trước khi đóng góp dữ liệu cho cộng đồng")
 
     with _engine().begin() as conn:
         queued = submit_batch_for_review(conn, user_id=user.id, batch_id=batch_id)
+        approved = (
+            approve_pending_review_for_batch_id(conn, trust, batch_id=batch_id, reviewer_id=user.id)
+            if user.is_admin
+            else []
+        )
+        # Admin self-submit shortcut → row vào training thẳng. Đặt
+        # last_rebuild_at = NULL cho gw bị ảnh hưởng để bịt gap "batch
+        # timestamp historical → MAX không vượt last_rebuild_at → rebuild
+        # skip" (giống logic ở admin.py:_invalidate_rebuild_for_gateways).
+        affected_gw_ids = list({p.serving_gateway_id for p in approved if p.serving_gateway_id})
+        if affected_gw_ids:
+            conn.execute(
+                text("UPDATE geo.gateways SET last_rebuild_at = NULL WHERE id = ANY(:ids)"),
+                {"ids": affected_gw_ids},
+            )
+
+    if approved:
+        timestamps = [p.timestamp for p in approved]
+        uploaded_at = approved[0].submitted_at
+        super_email = _settings.super_admin_email
+        recipients = [user.email]
+        if super_email and super_email.lower() != user.email.lower():
+            recipients.append(super_email)
+        for recipient in recipients:
+            try:
+                mailer.send_admin_self_contribution_published(
+                    recipient,
+                    contributor_email=user.email,
+                    uploaded_at=uploaded_at,
+                    approved_count=len(approved),
+                    earliest_timestamp=min(timestamps),
+                    latest_timestamp=max(timestamps),
+                )
+            except MailerError as exc:
+                logger.warning(
+                    "admin_self_contribution_email_failed",
+                    recipient=recipient,
+                    user_id=str(user.id),
+                    batch_id=str(batch_id),
+                    approved_count=len(approved),
+                    error=str(exc),
+                )
 
     logger.info(
         "upload_batch_submit_invoked",
         user_id=str(user.id),
         batch_id=str(batch_id),
         queued=queued,
+        admin_auto_approved=len(approved),
         trace_id=getattr(request.state, "trace_id", None),
     )
     return UploadBatchSubmitResponse(batch_id=batch_id, queued=queued)

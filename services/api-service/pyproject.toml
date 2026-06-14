@@ -72,6 +72,17 @@ dependencies = [
     # admin trigger rebuild qua Celery worker (image api-service), cần thêm vào
     # đây để worker subprocess không crash.
     "rasterio>=1.4",
+    # geopandas + matplotlib: scripts/eval_extra_trees_holdout.py + render_report
+    # vẽ scatter / per-bin charts cho báo cáo huấn luyện. matplotlib backend mặc
+    # định 'Agg' (no display) — không cần system Qt/Tk.
+    "geopandas>=1.0",
+    "matplotlib>=3.9",
+    # ML retrain report: Jinja2 template render summary.html, WeasyPrint convert
+    # → PDF tải về. Runtime deps (libpango, libcairo, libgdk-pixbuf) khai báo
+    # trong services/api-service/Dockerfile.
+    "jinja2>=3.1",
+    "weasyprint>=63.0",
+    "osmium>=4.3.1",
 ]
 
 [tool.uv.sources]

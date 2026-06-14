@@ -16,7 +16,6 @@ from lora_coverage_api.domain.coverage import (
     ConfidenceMethod,
     Gateway,
     GatewayId,
-    Prediction,
     Target,
 )
 
@@ -153,36 +152,3 @@ def test_gateway_rejects_rx_antenna_gain_when_outside_minus10_to_30(bad_gain: fl
 def test_gateway_rejects_rx_sensitivity_when_outside_minus150_to_minus50(bad_sens: float):
     with pytest.raises(ValueError, match="rx_sensitivity_dbm"):
         _gw(rx_sensitivity_dbm=bad_sens)
-
-
-# ── Prediction.bottleneck enum ──────────────────────────────────────────
-
-
-def _pred(**overrides) -> Prediction:
-    # Real CoverageStatus import inline to keep helper local.
-    from lora_coverage_api.domain.coverage import CoverageStatus
-
-    base = {
-        "rssi_dbm": -90.0,
-        "snr_db": 10.0,
-        "coverage_status": CoverageStatus.STRONG,
-        "serving_gateway_id": None,
-        "confidence": Confidence(score=0.5, method=ConfidenceMethod.PHYSICS),
-        "model_version": "t",
-        "recommended_sf": 7,
-    }
-    base.update(overrides)
-    return Prediction(**base)
-
-
-@pytest.mark.parametrize("bad_bottleneck", ["both", "ul", "dl", "", "UPLINK"])
-def test_prediction_rejects_invalid_bottleneck(bad_bottleneck: str):
-    with pytest.raises(ValueError, match="bottleneck"):
-        _pred(bottleneck=bad_bottleneck)
-
-
-@pytest.mark.parametrize("ok_bottleneck", ["uplink", "downlink", "both_ok"])
-def test_prediction_accepts_valid_bottleneck_literals(ok_bottleneck: str):
-    p = _pred(bottleneck=ok_bottleneck)
-
-    assert p.bottleneck == ok_bottleneck

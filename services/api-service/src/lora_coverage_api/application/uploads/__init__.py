@@ -14,6 +14,7 @@ from __future__ import annotations
 from .batches import (
     UploadBatchSummary,
     UploadKind,
+    add_batch_points_count,
     create_upload_batch,
     delete_batch,
     fetch_upload_overview,
@@ -25,6 +26,7 @@ from .batches import (
 __all__ = [
     "UploadBatchSummary",
     "UploadKind",
+    "add_batch_points_count",
     "create_upload_batch",
     "delete_batch",
     "fetch_upload_overview",

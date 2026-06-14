@@ -318,6 +318,29 @@ _SELECT_PENDING_REVIEW_FOR_BATCH = text(
     """
 )
 
+# Variant theo batch_id (me.upload_batches.id) — admin self-contribute dùng
+# key này vì caller (submit_batch endpoint) chỉ có batch_id, không có cặp
+# (uploader_id, uploaded_at).
+_SELECT_PENDING_REVIEW_BY_BATCH_ID = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        g.code AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.review_status = 'pending_review'
+      AND q.batch_id = :batch_id
+    ORDER BY q.timestamp ASC
+    """
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PendingReviewBatch:
@@ -414,6 +437,28 @@ def approve_pending_review_batch(
     rows = conn.execute(
         _SELECT_PENDING_REVIEW_FOR_BATCH,
         {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    approved: list[PendingContribution] = []
+    for row in rows:
+        ok = approve_pending_contribution(conn, validator, qid=row.id, reviewer_id=reviewer_id)
+        if ok:
+            approved.append(_row_to_pending(row))
+    return approved
+
+
+def approve_pending_review_for_batch_id(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    batch_id: UUID,
+    reviewer_id: UUID,
+) -> list[PendingContribution]:
+    """Như `approve_pending_review_batch` nhưng filter theo `batch_id` (FK
+    me.upload_batches.id). Dùng cho admin self-contribute: submit_batch
+    endpoint chỉ giữ batch_id, không có cặp (uploader_id, uploaded_at)."""
+    rows = conn.execute(
+        _SELECT_PENDING_REVIEW_BY_BATCH_ID,
+        {"batch_id": batch_id},
     ).all()
     approved: list[PendingContribution] = []
     for row in rows:

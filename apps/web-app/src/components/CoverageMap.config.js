@@ -1,7 +1,7 @@
 // @ts-check
 // Config tách khỏi CoverageMap.jsx để chỉnh sửa "data" mà không chạm vào
 // logic component: hình học mặc định, basemap tile, ngưỡng màu RSSI,
-// kiểu marker, defaults SF/freq/sort. Khi muốn đổi basemap, ngưỡng phủ
+// kiểu marker, defaults SF/freq. Khi muốn đổi basemap, ngưỡng phủ
 // sóng, hay màu trạng thái — chỉ sửa file này.
 
 import { surveyRssiColorExpression } from "./legend.js";
@@ -37,11 +37,6 @@ export const DEFAULT_TX_POWER_DBM = 14;
 
 // VN AS923-2 — DNIIT seed cũng dùng 923 (xem migrations/seeds/seed_gateways.sql).
 export const DEFAULT_FREQ_MHZ = 923;
-
-/** @type {import("../api/client.js").SortBy} */
-export const DEFAULT_SORT_BY = "timestamp";
-/** @type {import("../api/client.js").SortOrder} */
-export const DEFAULT_SORT_ORDER = "desc";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Color tokens (dùng chung popup badge + search marker + survey circle)

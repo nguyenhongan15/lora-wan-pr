@@ -2,17 +2,15 @@
 
 Mirror pattern cua tasks/rebuild_coverage.py:
   - Update audit.ml_retrain_jobs (status/started_at/celery_task_id ...).
-  - Run subprocess: `python /app/scripts/train_extra_trees.py`.
-    Script tu lo atomic swap (.new -> rename) + ghi train_metrics.json.
+  - Run subprocess `python /app/scripts/build_training_csv.py` de rebuild CSV
+    tu ts.survey_training (community rows) — bao gom DEM + landuse feature
+    engineering cho toan bo central VN (Hue/DN/QN).
+  - Run subprocess `python /app/scripts/train_extra_trees.py` de train tren
+    CSV moi. Script tu lo atomic swap (.new -> rename) + ghi train_metrics.json.
   - Sau khi success: doc train_metrics.json, ghi metrics + rows_trained vao
     audit row.
 
 Khong co per-gw logic (train chay 1 luot tren toan bo data).
-
-GHI CHU (TODO): `train_extra_trees.py` doc tu CSV preprocessed
-`services/ml-service/reference_wireless/data/processed/devices_history_full.csv`,
-KHONG phai tu `ts.survey_training`. Nen retrain hien tai khong reflect admin
-delete-approved-data. Future work: rebuild CSV tu survey_training truoc khi train.
 """
 
 from __future__ import annotations
@@ -34,9 +32,14 @@ from ..config import get_settings
 log = logging.getLogger(__name__)
 
 SCRIPT_PATH = Path("/app/scripts/train_extra_trees.py")
+BUILD_CSV_SCRIPT_PATH = Path("/app/scripts/build_training_csv.py")
+REPORT_SCRIPT_PATH = Path("/app/scripts/render_ml_report.py")
 METRICS_PATH = Path("/app/services/ml-service/data/train_metrics.json")
 ARTIFACT_PATH = Path("/app/services/ml-service/data/extra_trees_model.joblib")
-SUBPROCESS_TIMEOUT_S = 3600  # 1h
+REPORTS_ROOT = Path("/app/reports")
+SUBPROCESS_TIMEOUT_S = 3600  # 1h — bao gom build CSV (5-30 phut) + train (~1 phut)
+BUILD_CSV_TIMEOUT_S = 2400  # 40 phut — terrain sampling cho ~10k+ rows
+REPORT_TIMEOUT_S = 600  # 10 phut — du cho hold-out eval + plot + PDF
 
 
 def _engine() -> Engine:
@@ -49,15 +52,64 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     t_start = time.time()
 
     with eng.begin() as conn:
-        conn.execute(
+        row = conn.execute(
             text(
                 "UPDATE audit.ml_retrain_jobs "
                 "SET status='running', started_at=now(), celery_task_id=:tid "
-                "WHERE id=:id"
+                "WHERE id=:id "
+                "RETURNING triggered_at, triggered_by"
             ),
             {"tid": self.request.id, "id": job_id},
-        )
+        ).one()
+    triggered_at_iso = row.triggered_at.isoformat() if row.triggered_at else ""
+    triggered_by_id = str(row.triggered_by) if row.triggered_by else "(unknown)"
 
+    report_dir = REPORTS_ROOT / f"retrain-{job_id}"
+
+    # Step 1: rebuild CSV tu ts.survey_training (community rows) — DEM + landuse
+    # feature engineering. Replaces the old static CSV (May 2026 snapshot).
+    try:
+        csv_proc = subprocess.run(
+            [sys.executable, str(BUILD_CSV_SCRIPT_PATH)],
+            capture_output=True,
+            text=True,
+            timeout=BUILD_CSV_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.time() - t_start
+        err = f"build_csv timeout after {BUILD_CSV_TIMEOUT_S}s: {exc!s}"
+        _render_failure_report(report_dir, job_id, triggered_at_iso, triggered_by_id, err)
+        with eng.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE audit.ml_retrain_jobs SET "
+                    "status='failed', finished_at=now(), error_text=:err, report_dir=:rd "
+                    "WHERE id=:id"
+                ),
+                {"err": err, "rd": str(report_dir), "id": job_id},
+            )
+        log.error("retrain job %s build_csv timed out after %.0fs", job_id, elapsed)
+        return {"status": "failed", "error": "build_csv_timeout"}
+
+    if csv_proc.returncode != 0:
+        err = "build_csv failed: " + (csv_proc.stderr or "")[-3500:]
+        _render_failure_report(report_dir, job_id, triggered_at_iso, triggered_by_id, err)
+        with eng.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE audit.ml_retrain_jobs SET "
+                    "status='failed', finished_at=now(), error_text=:err, report_dir=:rd "
+                    "WHERE id=:id"
+                ),
+                {"err": err, "rd": str(report_dir), "id": job_id},
+            )
+        log.error("retrain job %s build_csv failed: exit=%d", job_id, csv_proc.returncode)
+        return {"status": "failed", "exit_code": csv_proc.returncode, "step": "build_csv"}
+
+    log.info("retrain job %s build_csv ok (%.0fs)", job_id, time.time() - t_start)
+
+    # Step 2: train Extra Trees tren CSV moi.
     cmd = [sys.executable, str(SCRIPT_PATH)]
     try:
         proc = subprocess.run(
@@ -69,15 +121,16 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = time.time() - t_start
-        err = f"timeout after {SUBPROCESS_TIMEOUT_S}s: {exc!s}"
+        err = f"train timeout after {SUBPROCESS_TIMEOUT_S}s: {exc!s}"
+        _render_failure_report(report_dir, job_id, triggered_at_iso, triggered_by_id, err)
         with eng.begin() as conn:
             conn.execute(
                 text(
                     "UPDATE audit.ml_retrain_jobs SET "
-                    "status='failed', finished_at=now(), error_text=:err "
+                    "status='failed', finished_at=now(), error_text=:err, report_dir=:rd "
                     "WHERE id=:id"
                 ),
-                {"err": err, "id": job_id},
+                {"err": err, "rd": str(report_dir), "id": job_id},
             )
         log.error("retrain job %s timed out after %.0fs", job_id, elapsed)
         return {"status": "failed", "error": "timeout"}
@@ -85,14 +138,15 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     elapsed = time.time() - t_start
     if proc.returncode != 0:
         err = (proc.stderr or "")[-4000:]
+        _render_failure_report(report_dir, job_id, triggered_at_iso, triggered_by_id, err)
         with eng.begin() as conn:
             conn.execute(
                 text(
                     "UPDATE audit.ml_retrain_jobs SET "
-                    "status='failed', finished_at=now(), error_text=:err "
+                    "status='failed', finished_at=now(), error_text=:err, report_dir=:rd "
                     "WHERE id=:id"
                 ),
-                {"err": err, "id": job_id},
+                {"err": err, "rd": str(report_dir), "id": job_id},
             )
         log.error("retrain job %s failed: exit=%d (%.0fs)", job_id, proc.returncode, elapsed)
         return {"status": "failed", "exit_code": proc.returncode, "stderr_tail": err}
@@ -112,19 +166,25 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     if reload_status:
         metrics["ml_service_reload"] = reload_status
 
+    # Render bao cao (plots + HTML + PDF + hold-out eval). Fail-soft — neu fail,
+    # ghi log + bao cao loi vao metrics nhung KHONG fail job (model da swap xong).
+    report_status = _render_report(report_dir, job_id, triggered_at_iso, triggered_by_id)
+    metrics["report"] = report_status
+
     with eng.begin() as conn:
         conn.execute(
             text(
                 "UPDATE audit.ml_retrain_jobs SET "
                 "status='succeeded', finished_at=now(), "
                 "rows_trained=:rows, artifact_path=:art, "
-                "metrics=CAST(:m AS jsonb) "
+                "metrics=CAST(:m AS jsonb), report_dir=:rd "
                 "WHERE id=:id"
             ),
             {
                 "rows": rows_trained,
                 "art": str(ARTIFACT_PATH),
                 "m": json.dumps(metrics),
+                "rd": str(report_dir),
                 "id": job_id,
             },
         )
@@ -135,6 +195,64 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
         "metrics": metrics,
         "elapsed_s": round(elapsed, 1),
     }
+
+
+def _render_report(
+    report_dir: Path, job_id: str, triggered_at: str, triggered_by: str
+) -> dict[str, Any]:
+    """Goi render_ml_report.py qua subprocess. Fail-soft: tra dict status."""
+    report_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        str(REPORT_SCRIPT_PATH),
+        "--out-dir",
+        str(report_dir),
+        "--job-id",
+        job_id,
+        "--triggered-at",
+        triggered_at,
+        "--triggered-by",
+        triggered_by,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=REPORT_TIMEOUT_S, check=False
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("Report render timeout for job %s", job_id)
+        return {"status": "timeout"}
+    if proc.returncode != 0:
+        tail = (proc.stderr or "")[-1500:]
+        log.warning("Report render failed for job %s: %s", job_id, tail)
+        return {"status": "failed", "stderr_tail": tail}
+    return {"status": "ok"}
+
+
+def _render_failure_report(
+    report_dir: Path, job_id: str, triggered_at: str, triggered_by: str, error_text: str
+) -> None:
+    """Mini-report cho failed job — chi summary.html voi loi.
+
+    Fail-soft tuyet doi: bat moi exception, KHONG re-raise — bao cao loi
+    khong duoc lam kep job da fail.
+    """
+    try:
+        sys.path.insert(0, str(Path("/app/scripts")))
+        from render_ml_report import render_failure_report  # type: ignore[import-not-found]
+
+        report_dir.mkdir(parents=True, exist_ok=True)
+        render_failure_report(
+            report_dir,
+            {
+                "job_id": job_id,
+                "triggered_at": triggered_at,
+                "triggered_by": triggered_by,
+                "generated_at": "",
+            },
+            error_text,
+        )
+    except Exception as exc:
+        log.warning("Failure-report render failed for job %s: %s", job_id, exc)
 
 
 def _call_ml_service_reload() -> str | None:
@@ -148,7 +266,9 @@ def _call_ml_service_reload() -> str | None:
     url = f"{base}/admin/reload"
     headers = {"Authorization": f"Bearer {s.stage2_auth_token}"}
     try:
-        resp = httpx.post(url, headers=headers, timeout=10.0)
+        # joblib.load 122MB Extra Trees ~10-15s. Bump timeout đủ rộng cho
+        # model lớn hơn trong tương lai (n_estimators=1500 hiện tại).
+        resp = httpx.post(url, headers=headers, timeout=60.0)
         resp.raise_for_status()
         log.info("ml-service reload ok: %s", resp.json())
         return "ok"

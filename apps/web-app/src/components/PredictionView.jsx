@@ -1,5 +1,4 @@
 // @ts-check
-import { useState } from "react";
 import { strings } from "../strings.js";
 
 const t = strings.predictionView;
@@ -14,14 +13,35 @@ const STATUS_BG = {
   no_coverage: "bg-nocov",
 };
 
-const tBi = t.bidirectional;
+/** @param {number} ber */
+function formatBer(ber) {
+  if (ber <= 0) return "≈ 0";
+  const exp = Math.round(Math.log10(ber));
+  return `≈ 10${toSuperscript(exp)}`;
+}
+
+/** @param {number} n */
+function toSuperscript(n) {
+  const map = {
+    "-": "⁻",
+    0: "⁰",
+    1: "¹",
+    2: "²",
+    3: "³",
+    4: "⁴",
+    5: "⁵",
+    6: "⁶",
+    7: "⁷",
+    8: "⁸",
+    9: "⁹",
+  };
+  return String(n)
+    .split("")
+    .map((c) => map[c] ?? c)
+    .join("");
+}
 
 /**
- * Two-layer view per business-logic §4.2:
- *   Layer 1 — badge + Vietnamese sentence cho end-user.
- *   Layer 2 — chi tiết kỹ thuật (RSSI/SNR/SF khuyến nghị/gateway/confidence)
- *             ẩn mặc định, mở qua toggle.
- *
  * @param {{ prediction: import("../api/client.js").PredictionT }} props
  */
 export function PredictionView({ prediction }) {
@@ -29,14 +49,21 @@ export function PredictionView({ prediction }) {
     rssi_dbm,
     snr_db,
     coverage_status,
-    confidence,
     recommended_sf,
     serving_gateway_id,
-    uplink,
-    downlink,
-    bottleneck,
+    signal_quality,
+    environment_params,
   } = prediction;
-  const [showLayer2, setShowLayer2] = useState(false);
+
+  // BE chưa rebuild → signal_quality/environment_params undefined. Hiển thị
+  // dải tối thiểu (RSSI/SNR/SF/GW) + báo "BE chưa hỗ trợ".
+  const hasSq = !!signal_quality;
+  const hasEnv = !!environment_params;
+  const usedSf = environment_params?.spreading_factor ?? recommended_sf;
+  const envLabel = hasEnv ? t.environmentLabel[environment_params.environment] : "—";
+  const envValue = hasEnv
+    ? `${environment_params.frequency_mhz} MHz · ${environment_params.tx_power_dbm} dBm · ${envLabel}`
+    : t.fields.unavailable;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm md:p-6">
@@ -53,127 +80,102 @@ export function PredictionView({ prediction }) {
         {t.layer1Sentence[coverage_status]}
       </p>
 
-      <button
-        type="button"
-        onClick={() => setShowLayer2((v) => !v)}
-        className="mt-3 text-xs font-medium text-slate-500 hover:text-slate-900"
+      <dl className="mt-5 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <ResultItem
+          label={t.fields.rssi}
+          value={`${rssi_dbm.toFixed(1)} dBm`}
+        />
+        <ResultItem
+          label={t.fields.snr}
+          value={`${snr_db.toFixed(1)} dB`}
+        />
+        <ResultItem
+          label={t.fields.pdr}
+          value={hasSq ? `${(signal_quality.pdr * 100).toFixed(1)}%` : t.fields.unavailable}
+          sub={hasSq ? t.fields.pdrSub : undefined}
+        />
+        <ResultItem
+          label={t.fields.interference}
+          value={
+            hasSq
+              ? `UL ${signal_quality.uplink_noise_floor_dbm.toFixed(1)} · DL ${signal_quality.downlink_noise_floor_dbm.toFixed(1)} dBm`
+              : t.fields.unavailable
+          }
+          sub={hasSq ? t.fields.interferenceSub : undefined}
+        />
+        <ResultItem
+          label={t.fields.sf}
+          value={`SF${usedSf}`}
+          sub={
+            usedSf === recommended_sf
+              ? t.fields.sfMatch
+              : t.fields.sfRecommended(recommended_sf)
+          }
+        />
+        <ResultItem
+          label={t.fields.bandwidth}
+          value={
+            hasSq
+              ? `${(signal_quality.bandwidth_hz / 1000).toFixed(0)} kHz`
+              : t.fields.unavailable
+          }
+          sub={hasSq ? t.fields.bandwidthSub : undefined}
+        />
+        <ResultItem
+          label={t.fields.shadowing}
+          value={
+            hasSq
+              ? `σ = ${signal_quality.shadow_fading_sigma_db.toFixed(1)} dB`
+              : t.fields.unavailable
+          }
+          sub={hasSq ? t.fields.shadowingSub : undefined}
+        />
+        <ResultItem
+          label={t.fields.berFer}
+          value={
+            hasSq
+              ? `${formatBer(signal_quality.ber)} · FER ${(signal_quality.fer * 100).toFixed(1)}%`
+              : t.fields.unavailable
+          }
+          sub={hasSq ? t.fields.berFerSub : undefined}
+        />
+        <ResultItem
+          label={t.fields.latency}
+          value={
+            hasSq
+              ? `≈ ${signal_quality.time_on_air_ms.toFixed(0)} ms`
+              : t.fields.unavailable
+          }
+          sub={hasSq ? t.fields.latencySub(signal_quality.jitter_ms) : undefined}
+        />
+        <ResultItem
+          label={t.fields.gateway}
+          value={serving_gateway_id ?? t.gatewayNone}
+          mono
+        />
+        <ResultItem
+          label={t.fields.environment}
+          value={envValue}
+          sub={hasEnv ? t.fields.environmentSub : undefined}
+        />
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * @param {{ label: string, value: string, sub?: string, mono?: boolean }} props
+ */
+function ResultItem({ label, value, sub, mono }) {
+  return (
+    <div>
+      <dt className="text-slate-500">{label}</dt>
+      <dd
+        className={`mt-1 font-mono text-slate-900 ${mono ? "truncate text-xs" : "text-base"}`}
       >
-        {showLayer2 ? t.toggleLayer2.hide : t.toggleLayer2.show}
-      </button>
-
-      {showLayer2 && (
-        <>
-          <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
-            <div>
-              <dt className="text-slate-500">{t.fields.rssi}</dt>
-              <dd className="mt-1 font-mono text-base text-slate-900">
-                {rssi_dbm.toFixed(1)} dBm
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">{t.fields.snr}</dt>
-              <dd className="mt-1 font-mono text-base text-slate-900">
-                {snr_db.toFixed(1)} dB
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">{t.fields.recommendedSf}</dt>
-              <dd className="mt-1 font-mono text-base text-slate-900">
-                SF{recommended_sf}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">{t.fields.confidence}</dt>
-              <dd className="mt-1 font-mono text-base text-slate-900">
-                {(confidence.score * 100).toFixed(1)}%
-              </dd>
-              <dd className="text-xs text-slate-400">({confidence.method})</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">{t.fields.gateway}</dt>
-              <dd className="mt-1 truncate font-mono text-xs text-slate-700">
-                {serving_gateway_id ?? t.gatewayNone}
-              </dd>
-            </div>
-          </dl>
-
-          {uplink && downlink && bottleneck && (
-            <BidirectionalBlock
-              uplink={uplink}
-              downlink={downlink}
-              bottleneck={bottleneck}
-            />
-          )}
-        </>
-      )}
+        {value}
+      </dd>
+      {sub && <dd className="mt-0.5 text-xs text-slate-400">{sub}</dd>}
     </div>
-  );
-}
-
-/**
- * @param {{
- *   uplink: import("../api/client.js").LinkBudgetT,
- *   downlink: import("../api/client.js").LinkBudgetT,
- *   bottleneck: "uplink" | "downlink" | "both_ok"
- * }} props
- */
-function BidirectionalBlock({ uplink, downlink, bottleneck }) {
-  /** @type {Record<string, string>} */
-  const bottleneckBg = {
-    uplink: "bg-amber-100 text-amber-900 ring-amber-200",
-    downlink: "bg-amber-100 text-amber-900 ring-amber-200",
-    both_ok: "bg-emerald-100 text-emerald-900 ring-emerald-200",
-  };
-  return (
-    <div className="mt-6 rounded-md border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-700">
-          {tBi.sectionTitle}
-        </h3>
-        <span
-          className={`rounded-full px-2 py-0.5 text-xs ring-1 ${bottleneckBg[bottleneck]}`}
-        >
-          {tBi.bottleneckLabel}: {tBi.bottleneck[bottleneck]}
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[360px] text-xs">
-          <thead className="text-slate-500">
-            <tr>
-              <th className="py-1 text-left font-medium"></th>
-              <th className="py-1 text-right font-medium">{tBi.colRssi}</th>
-              <th className="py-1 text-right font-medium">{tBi.colSnr}</th>
-              <th className="py-1 text-right font-medium">{tBi.colMargin}</th>
-              <th className="py-1 text-right font-medium">{tBi.colStatus}</th>
-            </tr>
-          </thead>
-          <tbody className="font-mono text-slate-900">
-            <DirectionRow label={tBi.directionUplink} budget={uplink} />
-            <DirectionRow label={tBi.directionDownlink} budget={downlink} />
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/**
- * @param {{ label: string, budget: import("../api/client.js").LinkBudgetT }} props
- */
-function DirectionRow({ label, budget }) {
-  return (
-    <tr className="border-t border-slate-200">
-      <td className="py-1 pr-2 font-sans text-slate-700">{label}</td>
-      <td className="py-1 text-right">{budget.rssi_dbm.toFixed(1)} dBm</td>
-      <td className="py-1 text-right">{budget.snr_db.toFixed(1)} dB</td>
-      <td className="py-1 text-right">{budget.margin_db.toFixed(1)} dB</td>
-      <td className="py-1 text-right font-sans">
-        <span
-          className={`rounded px-1.5 py-0.5 text-white ${STATUS_BG[budget.status]}`}
-        >
-          {STATUS_LABEL[budget.status]}
-        </span>
-      </td>
-    </tr>
   );
 }

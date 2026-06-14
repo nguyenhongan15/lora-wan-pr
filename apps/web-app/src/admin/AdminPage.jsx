@@ -19,12 +19,13 @@ import { ContributionReviewPanel } from "./ContributionReviewPanel.jsx";
 import { CoverageRebuildPanel } from "./CoverageRebuildPanel.jsx";
 import { GlobalSyncPanel } from "./GlobalSyncPanel.jsx";
 import { MLRetrainPanel } from "./MLRetrainPanel.jsx";
+import { NotificationsPanel } from "./NotificationsPanel.jsx";
 import { TrainingBatchesPanel } from "./TrainingBatchesPanel.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.admin.page;
 
-/** @typedef {"stats" | "review" | "training" | "users" | "gateways" | "sync" | "rebuild" | "retrain"} Section */
+/** @typedef {"stats" | "review" | "training" | "users" | "gateways" | "sync" | "rebuild" | "retrain" | "notifications"} Section */
 
 /** @type {{ key: Section, label: string, heading: string }[]} */
 const SECTIONS = [
@@ -36,6 +37,7 @@ const SECTIONS = [
   { key: "sync", label: t.sidebar.sync, heading: t.syncHeading },
   { key: "rebuild", label: t.sidebar.rebuild, heading: t.rebuildHeading },
   { key: "retrain", label: t.sidebar.retrain, heading: t.retrainHeading },
+  { key: "notifications", label: t.sidebar.notifications, heading: t.notificationsHeading },
 ];
 
 /**
@@ -93,6 +95,7 @@ export function AdminPage({ currentUserId, currentUserIsSuperAdmin }) {
           {active === "sync" && <GlobalSyncPanel />}
           {active === "rebuild" && <CoverageRebuildPanel />}
           {active === "retrain" && <MLRetrainPanel />}
+          {active === "notifications" && <NotificationsPanel />}
         </div>
       </main>
     </div>

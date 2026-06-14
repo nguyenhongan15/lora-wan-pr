@@ -140,6 +140,20 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // Pageview beacon cho admin dashboard "Tổng quan". Fire-and-forget mỗi mount
+  // (mỗi reload / mỗi tab mở = +1). Endpoint public, không auth, không trả body.
+  useEffect(() => {
+    const base =
+      typeof window !== "undefined" &&
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1")
+        ? "http://localhost:8000"
+        : import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+    fetch(`${base}/api/v1/telemetry/visit`, { method: "POST" }).catch(() => {
+      // Ngầm bỏ qua lỗi mạng — chart admin tự reconcile lần sau, không phá UX.
+    });
+  }, []);
+
   // Landing CTA "Mở Dữ liệu của tôi" / "Đóng góp dữ liệu" → mở AuthModal khi chưa
   // login, đăng nhập xong tự navigate. Effect fire khi user becomes truthy.
   useEffect(() => {
@@ -415,9 +429,9 @@ export function App() {
             />
           </div>
         )}
-        {tab === "map" && <CoverageMap mode="points" />}
-        {tab === "heatmap" && <CoverageMap mode="heatmap" />}
-        {tab === "predict" && <CoverageMap mode="predict" />}
+        {tab === "map" && <CoverageMap mode="points" onRequestLogin={requestLogin} />}
+        {tab === "heatmap" && <CoverageMap mode="heatmap" onRequestLogin={requestLogin} />}
+        {tab === "predict" && <CoverageMap mode="predict" onRequestLogin={requestLogin} />}
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />

@@ -21,8 +21,24 @@ AS923_DEVICE_TX_POWER_CAP_DBM = 14.0
 DEVICE_DEFAULT_TX_GAIN_DBI = 2.0
 DEVICE_DEFAULT_RX_GAIN_DBI = 0.0
 
-# Bottleneck direction trong bidirectional link budget.
-LinkBottleneck = Literal["uplink", "downlink", "both_ok"]
+# Bottleneck root-cause flags — direction (UL/DL) đã bỏ khỏi response 2026-06-14.
+# 5 cause compute được từ Stage 1/Stage 2 output + Target. 4 cause khác
+# (multipath fast fading, instant shadowing, frequency offset, polarization
+# mismatch) cần telemetry chưa có → parking.
+# - path_loss_high: PL_total > 140 dB → suy hao quá lớn cho LoRa link budget.
+# - snr_low: min(UL,DL) SNR margin < 3 dB so với SF limit → sát ngưỡng decode.
+# - interference: UL noise floor lệch ≥ 7 dB so với thermal -117 → môi trường
+#   nhiễu đồng kênh chiếm dominant.
+# - tx_power_cap: device TX = 14 dBm (AS923-2 cap) AND UL margin < DL margin
+#   (chiều UL là weaker link).
+# - sf_mismatch: SF user chọn < recommended_sf → cấu hình thấp hơn cần thiết.
+BottleneckCause = Literal[
+    "path_loss_high",
+    "snr_low",
+    "interference",
+    "tx_power_cap",
+    "sf_mismatch",
+]
 
 # Terminal environment — quyết định Stage 1 có cộng building entry loss
 # (ITU-R P.2109) hay không. outdoor = không cộng; indoor/indoor_deep map sang
@@ -121,10 +137,8 @@ class Prediction:
     coverage_status = worst-of(uplink_status, downlink_status) để phản ánh
     giới hạn link 2 chiều thực tế.
 
-    Bottleneck:
-    - "uplink": UL margin nhỏ hơn DL margin > 1 dB → device TX là điểm yếu.
-    - "downlink": DL margin nhỏ hơn UL margin > 1 dB → device RX là điểm yếu.
-    - "both_ok": chênh lệch ≤ 1 dB và cả 2 status STRONG.
+    Engineer suy chiều yếu (UL vs DL) từ uplink_margin_db vs downlink_margin_db
+    trực tiếp; không cần field summary direction riêng.
     """
 
     rssi_dbm: float  # = downlink_rssi_dbm (semantic backward-compat)
@@ -142,7 +156,6 @@ class Prediction:
     downlink_snr_db: float = 0.0
     downlink_margin_db: float = 0.0
     downlink_status: CoverageStatus = CoverageStatus.NO_COVERAGE
-    bottleneck: LinkBottleneck = "both_ok"
     # Path loss tổng (basic transmission loss + BEL nếu có) cho UL+DL đối xứng.
     # Engineer debug "RSSI thấp do terrain xa hay building entry loss" — bóc tách
     # giúp họ biết cần đặt thêm GW (PL terrain cao) hay đẩy device ra ngoài
@@ -151,14 +164,45 @@ class Prediction:
     # Khoảng cách haversine target → serving gateway. Hữu ích display ở popup.
     # 0.0 = no serving gateway / chưa wire.
     distance_to_serving_gateway_km: float = 0.0
+    # ── Signal-quality metrics (FE "Dự đoán điểm" tab) ─────────────────────
+    # Stage 1 tính từ SNR margin (= worst-of UL/DL); Stage 2 ML residual shift
+    # SNR đồng đều → orchestrator recompute. Default 0.0 để legacy test/factory
+    # không vỡ.
+    pdr: float = 0.0  # Packet Delivery Ratio [0,1]
+    ber: float = 0.0  # Bit Error Rate (linear, vd 1e-3)
+    fer: float = 0.0  # Frame Error Rate = 1 - pdr [0,1]
+    # LoRa MAC params (AS923-2 channel 0 default).
+    bandwidth_hz: int = 125_000
+    time_on_air_ms: float = 0.0
+    jitter_ms: float = 0.0
+    # σ shadow fading (dB) — trùng √aleatoric_variance_db2; expose riêng để FE
+    # khỏi √ và để hiển thị "đa đường + che chắn" rõ ý hơn cho user.
+    shadow_fading_sigma_db: float = 0.0
+    # Noise floor (dBm): UL = per-gateway calibrated (Gateway.noise_floor_dbm),
+    # DL = thermal -117 dBm (chưa có DL telemetry để calibrate).
+    uplink_noise_floor_dbm: float = 0.0
+    downlink_noise_floor_dbm: float = 0.0
+    # Echo env params từ Target (FE hiển thị "Thông số môi trường ảnh hưởng").
+    environment: TerminalEnvironment = "outdoor"
+    tx_power_dbm: float = 0.0
+    frequency_mhz: float = 923.0
+    # SF user yêu cầu cho lần predict này (≠ recommended_sf khi mismatch).
+    spreading_factor: int = 7
+    # Số gateway đủ phủ sóng (status != NO_COVERAGE) trong 30 km radius. Cho
+    # biết redundancy: 1 = chỉ 1 GW phục vụ (single point of failure), ≥2 =
+    # diversity. 0 = NO_COVERAGE thực sự (không gw nào đủ). Mặc định 0 để
+    # backward compat với Stage 2+ factory chưa wire field này.
+    covering_gateway_count: int = 0
+    # Root-cause flags của bottleneck — orthogonal với direction (uplink/downlink).
+    # Tuple để giữ Prediction frozen + hashable. Rỗng = không phát hiện cause
+    # nào (link healthy hoặc tất cả threshold chưa chạm).
+    bottleneck_causes: tuple[BottleneckCause, ...] = ()
 
     def __post_init__(self) -> None:
         if self.confidence is None:
             raise ValueError("Prediction.confidence is required")
         if self.recommended_sf not in (7, 8, 9, 10, 11, 12):
             raise ValueError(f"invalid recommended_sf: {self.recommended_sf}")
-        if self.bottleneck not in ("uplink", "downlink", "both_ok"):
-            raise ValueError(f"invalid bottleneck: {self.bottleneck}")
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,9 +1,9 @@
 """Idempotent upsert primitives cho external-source records.
 
-Hai function:
-  * upsert_gateway       → geo.gateways (key: source_type, external_id)
-  * upsert_measurement   → ts.survey_quarantine
-                           (key: timestamp, source_type, external_id)
+Functions:
+  * upsert_gateway              → geo.gateways            (key: code)
+  * upsert_gateway_quarantine   → geo.gateway_quarantine  (key: source_type, external_id)
+  * upsert_measurement          → ts.survey_quarantine    (key: timestamp, source_type, external_id)
 
 Caller (sync orchestrator hoặc CLI) quản lý transaction. Mỗi function chạy 1
 SQL với ON CONFLICT; trả `UpsertResult` tag tag "inserted"/"updated"/"skipped"
@@ -59,15 +59,31 @@ _GATEWAY_UPSERT_SQL = text("""
     -- Conflict target = code (EUI). Cùng hardware visible qua nhiều source
     -- vẫn ON CONFLICT chính xác — xem module docstring.
     ON CONFLICT (code) DO UPDATE SET
-        location            = EXCLUDED.location,
-        altitude_m          = EXCLUDED.altitude_m,
-        -- Cho phép sync sau "nâng cấp" name khi row cũ vẫn là placeholder
-        -- (= code). Adapter set name=code khi source không trả friendly name
-        -- (xem upsert_gateway: "name": rec.label or rec.external_id). Khi
-        -- source khác về sau có tên thật → cập nhật. Khi user đã có tên thật
-        -- rồi → giữ, tránh swing nếu source xoá tên.
+        -- Owner-scoped policy: physical state (location/altitude/name) chỉ
+        -- update khi caller chính là contributor gốc của row (cùng user đã
+        -- tạo gateway này). User khác link cùng EUI vào source khác → KHÔNG
+        -- được "cướp" gateway và bẻ lại metadata. Legacy row có
+        -- contributor_user_id IS NULL → bất kỳ sync nào cũng update được
+        -- (grandfather 15 seed gateway).
+        location            = CASE
+            WHEN geo.gateways.contributor_user_id IS NULL
+              OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.location
+            ELSE geo.gateways.location
+        END,
+        altitude_m          = CASE
+            WHEN geo.gateways.contributor_user_id IS NULL
+              OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.altitude_m
+            ELSE geo.gateways.altitude_m
+        END,
+        -- Name update: owner-scoped + skip placeholder (EXCLUDED.name=code
+        -- nghĩa là adapter không trả label, vd lpwanmapper /login).
         name                = CASE
-            WHEN geo.gateways.name = geo.gateways.code THEN EXCLUDED.name
+            WHEN EXCLUDED.name = EXCLUDED.code THEN geo.gateways.name
+            WHEN geo.gateways.contributor_user_id IS NULL
+              OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.name
             ELSE geo.gateways.name
         END,
         -- First-writer-wins (plan-auth §3.3 fix): existing trước EXCLUDED →
@@ -88,7 +104,7 @@ _QUARANTINE_UPSERT_SQL = text("""
     INSERT INTO ts.survey_quarantine (
         timestamp, location, rssi_dbm, snr_db,
         spreading_factor, frequency_mhz, device_id,
-        serving_gateway_id, uploader_id,
+        serving_gateway_id, serving_gateway_eui, uploader_id,
         external_id, source_type, contributor_user_id, linked_source_id,
         submitted_for_community, code_rate, batch_id
     )
@@ -96,7 +112,7 @@ _QUARANTINE_UPSERT_SQL = text("""
         :ts,
         ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
         :rssi, :snr, :sf, :freq, :device_id,
-        :gw_id, :uploader_id,
+        :gw_id, :gw_eui, :uploader_id,
         :external_id, :source_type, :contributor_user_id, :linked_source_id,
         :submitted_for_community, :code_rate, :batch_id
     )
@@ -159,6 +175,117 @@ def upsert_gateway(
     return ("inserted" if row.inserted else "updated", row.id)
 
 
+# ── Gateway quarantine path (mig 0029) ───────────────────────────────────
+# Sync gặp EUI lạ (chưa tồn tại trong geo.gateways) → INSERT
+# geo.gateway_quarantine chờ admin duyệt. Re-sync cùng (source_type,
+# external_id) → UPDATE (location/name/altitude có thể đổi nếu user move
+# physical gateway hoặc rename trong source). Sau admin approve: orchestrator
+# Bước 4 sẽ INSERT geo.gateways + flip review_status='approved'.
+
+_GATEWAY_QUARANTINE_UPSERT_SQL = text("""
+    INSERT INTO geo.gateway_quarantine (
+        code, name, location, altitude_m, frequency_mhz,
+        external_id, source_type, contributor_user_id, linked_source_id,
+        review_status
+    )
+    VALUES (
+        :code, :name,
+        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+        :altitude_m, :freq_mhz,
+        :external_id, :source_type, :contributor_user_id, :linked_source_id,
+        'pending_review'
+    )
+    ON CONFLICT (source_type, external_id) DO UPDATE SET
+        -- Re-sync cùng quarantine row: cho phép owner refresh metadata. Khác
+        -- contributor không bao giờ UPSERT vào cùng (source_type, external_id)
+        -- — orchestrator đã guard ở app layer. ELSE branch chỉ phòng race.
+        location     = CASE
+            WHEN geo.gateway_quarantine.contributor_user_id IS NULL
+              OR geo.gateway_quarantine.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.location ELSE geo.gateway_quarantine.location
+        END,
+        altitude_m   = CASE
+            WHEN geo.gateway_quarantine.contributor_user_id IS NULL
+              OR geo.gateway_quarantine.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.altitude_m ELSE geo.gateway_quarantine.altitude_m
+        END,
+        name         = CASE
+            WHEN EXCLUDED.name = EXCLUDED.code THEN geo.gateway_quarantine.name
+            WHEN geo.gateway_quarantine.contributor_user_id IS NULL
+              OR geo.gateway_quarantine.contributor_user_id = EXCLUDED.contributor_user_id
+            THEN EXCLUDED.name ELSE geo.gateway_quarantine.name
+        END,
+        contributor_user_id = COALESCE(geo.gateway_quarantine.contributor_user_id, EXCLUDED.contributor_user_id),
+        linked_source_id    = COALESCE(geo.gateway_quarantine.linked_source_id,    EXCLUDED.linked_source_id),
+        updated_at   = now()
+    RETURNING (xmax = 0) AS inserted, id, review_status
+""")
+
+
+def upsert_gateway_quarantine(
+    conn: Connection,
+    rec: GatewayRecord,
+    *,
+    source_type: str,
+    contributor_user_id: UUID | None = None,
+    linked_source_id: UUID | None = None,
+    frequency_mhz: float = DEFAULT_FREQUENCY_MHZ,
+) -> tuple[UpsertResult, UUID, str]:
+    """Insert hoặc update 1 gateway quarantine row. Trả (status, id, review_status).
+
+    `review_status` ở output để caller phân biệt: 'pending_review' (chưa duyệt),
+    'approved' (đã duyệt — row vẫn ở quarantine làm audit, nhưng đã promote
+    sang geo.gateways), 'rejected'. Re-sync trên row 'rejected' KHÔNG tự
+    flip về pending — admin reject là quyết định dứt khoát.
+    """
+    if frequency_mhz not in _ALLOWED_FREQ_MHZ:
+        raise ValueError(
+            f"frequency_mhz={frequency_mhz} không thuộc band cho phép {_ALLOWED_FREQ_MHZ}"
+        )
+
+    row = conn.execute(
+        _GATEWAY_QUARANTINE_UPSERT_SQL,
+        {
+            "code": rec.external_id,
+            "name": rec.label or rec.external_id,
+            "lat": rec.latitude,
+            "lon": rec.longitude,
+            "altitude_m": rec.altitude_m if rec.altitude_m is not None else 0.0,
+            "freq_mhz": frequency_mhz,
+            "external_id": rec.external_id,
+            "source_type": source_type,
+            "contributor_user_id": contributor_user_id,
+            "linked_source_id": linked_source_id,
+        },
+    ).one()
+    return ("inserted" if row.inserted else "updated", row.id, row.review_status)
+
+
+# ── Existing gateway lookup (orchestrator gate) ──────────────────────────
+
+_LOOKUP_EXISTING_GATEWAY = text("""
+    SELECT id, contributor_user_id
+    FROM geo.gateways
+    WHERE code = :code
+""")
+
+
+def lookup_existing_gateway(conn: Connection, *, code: str) -> tuple[UUID, UUID | None] | None:
+    """Trả (gateway_id, contributor_user_id) nếu EUI đã có trong geo.gateways,
+    ngược lại None. Dùng ở sync orchestrator để quyết định path:
+
+      * None  → INSERT vào geo.gateway_quarantine (chờ admin duyệt)
+      * (id, None) → grandfather (seed/legacy) → UPSERT geo.gateways
+      * (id, contributor) cùng user → UPSERT geo.gateways
+      * (id, contributor) khác user → skip (không cướp; vẫn dùng id làm FK
+        cho measurement của user này)
+    """
+    row = conn.execute(_LOOKUP_EXISTING_GATEWAY, {"code": code}).one_or_none()
+    if row is None:
+        return None
+    return (row.id, row.contributor_user_id)
+
+
 _DEVICE_UPSERT_SQL = text("""
     INSERT INTO geo.devices (
         dev_eui, name, source_type, external_id,
@@ -216,6 +343,7 @@ def upsert_measurement(
     *,
     source_type: str,
     serving_gateway_id: UUID | None,
+    serving_gateway_eui: str | None,
     uploader_id: UUID,
     contributor_user_id: UUID | None = None,
     linked_source_id: UUID | None = None,
@@ -250,6 +378,7 @@ def upsert_measurement(
             "freq": freq,
             "device_id": rec.device_external_id,
             "gw_id": serving_gateway_id,
+            "gw_eui": serving_gateway_eui,
             "uploader_id": uploader_id,
             "external_id": rec.external_id,
             "source_type": source_type,

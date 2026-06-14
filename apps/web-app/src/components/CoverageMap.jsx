@@ -9,19 +9,27 @@ import {
   listSurveyTraining,
   predictCoverage,
 } from "../api/client.js";
-import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import {
-  formatBitrate,
-  formatTimeOnAir,
-  maxPayloadBytes,
-} from "../lora/datarate.js";
+  deleteUploadBatch,
+  startLiveSession,
+  syncLiveSession,
+} from "../sources/client.js";
+import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
+import { AlertModal } from "./Modal.jsx";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
 import { EstimatePanel } from "./EstimatePanel.jsx";
 // MinSFPanel: tạm ẩn UI minsf, import lại khi bật lại toggle.
 // import { MinSFPanel } from "./MinSFPanel.jsx";
-import { PointsFilterPanel } from "./filters/PointsFilterPanel.jsx";
+import {
+  PointsFilterToggleBtn,
+  PointsFilterBody,
+} from "./filters/PointsFilterPanel.jsx";
+import {
+  RealtimeToggleBtn,
+  RealtimeBody,
+} from "./filters/RealtimePanel.jsx";
 import { AddressLookupPanel } from "./address/AddressLookupPanel.jsx";
 import {
   BASEMAP_STYLE,
@@ -29,11 +37,8 @@ import {
   DEFAULT_FREQ_MHZ,
   DEFAULT_SF,
   DEFAULT_TX_POWER_DBM,
-  DEFAULT_SORT_BY,
-  DEFAULT_SORT_ORDER,
   INITIAL_CENTER,
   INITIAL_ZOOM,
-  MARGIN_BAR_RANGE,
   MINSF_BAND_COLORS,
   MINSF_FILL_OPACITY,
   RSSI_FILL_OPACITY,
@@ -42,7 +47,7 @@ import {
   STATUS_COLOR_FALLBACK,
   SURVEY_CIRCLE_PAINT,
 } from "./CoverageMap.config.js";
-import { ESTIMATE_RSSI_BAND_COLORS } from "./legend.js";
+import { ESTIMATE_RSSI_BAND_COLORS, colorForRssi } from "./legend.js";
 import {
   addSurveyHeatmapLayer,
   setSurveyHeatmapVisible,
@@ -189,10 +194,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *   rssiRange: { min: number | null, max: number | null },
  *   snrRange: { min: number | null, max: number | null },
  *   timeRange: { from: string | null, to: string | null },
- *   sortConfig: {
- *     sortBy: import("../api/client.js").SortBy,
- *     sortOrder: import("../api/client.js").SortOrder,
- *   },
  * }} PointsFilterState
  */
 
@@ -205,10 +206,6 @@ function readPointsFilterUrlState() {
     rssiRange: { min: null, max: null },
     snrRange: { min: null, max: null },
     timeRange: { from: null, to: null },
-    sortConfig: {
-      sortBy: DEFAULT_SORT_BY,
-      sortOrder: DEFAULT_SORT_ORDER,
-    },
   };
   if (typeof window === "undefined") return def;
   const p = new URLSearchParams(window.location.search);
@@ -239,13 +236,6 @@ function readPointsFilterUrlState() {
   const tt = p.get("time_to");
   def.timeRange = { from: tf, to: tt };
 
-  const sb = p.get("sort_by");
-  if (sb === "rssi" || sb === "snr" || sb === "timestamp") {
-    def.sortConfig.sortBy = sb;
-  }
-  const so = p.get("sort_order");
-  if (so === "asc" || so === "desc") def.sortConfig.sortOrder = so;
-
   return def;
 }
 
@@ -275,18 +265,9 @@ function writePointsFilterUrlState(state) {
   if (state.timeRange.to) p.set("time_to", state.timeRange.to);
   else p.delete("time_to");
 
-  if (state.sortConfig.sortBy !== DEFAULT_SORT_BY) {
-    p.set("sort_by", state.sortConfig.sortBy);
-  } else {
-    p.delete("sort_by");
-  }
-  if (state.sortConfig.sortOrder !== DEFAULT_SORT_ORDER) {
-    p.set("sort_order", state.sortConfig.sortOrder);
-  } else {
-    p.delete("sort_order");
-  }
-  // rank_from / rank_to không còn quản lý từ UI — clean URL legacy keys khi
-  // user vào lại trang sau khi đã có cửa sổ rank cũ.
+  // Clean URL legacy keys (sort + rank window đã gỡ khỏi UI).
+  p.delete("sort_by");
+  p.delete("sort_order");
   p.delete("rank_from");
   p.delete("rank_to");
 
@@ -410,182 +391,52 @@ const SATELLITE_OVERLAY_LAYER_ID = "satellite-overlay";
  * ─────────────────────────────────────────────────────────────────────── */
 
 /**
- * Helper "label: <strong>value</strong>" — build qua textContent thay vì
- * innerHTML để không bao giờ inject markup từ label/value (defense-in-depth).
+ * BER scientific format: 1e-X → "≈ 10⁻ˣ"
+ * @param {number} ber
+ */
+function formatBer(ber) {
+  if (ber <= 0) return "≈ 0";
+  const exp = Math.round(Math.log10(ber));
+  return `≈ 10${toSuperscript(exp)}`;
+}
+
+/** @type {Record<string, string>} */
+const SUPERSCRIPT_MAP = {
+  "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³",
+  "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+};
+
+/** @param {number} n */
+function toSuperscript(n) {
+  return String(n).split("").map((c) => SUPERSCRIPT_MAP[c] ?? c).join("");
+}
+
+/**
+ * Ô field trong grid 11 mục: label nhỏ-xám, value bold, sub-text tùy chọn.
  * @param {string} label
  * @param {string} value
+ * @param {string} [sub]
  * @returns {HTMLDivElement}
  */
-function buildLabelStrongRow(label, value) {
-  const row = document.createElement("div");
-  row.appendChild(document.createTextNode(`${label}: `));
-  const strong = document.createElement("strong");
-  strong.textContent = value;
-  row.appendChild(strong);
-  return row;
-}
-
-/**
- * Pill nút thắt 2 chiều cạnh status badge ở Layer 1.
- * No-op nếu BE trả response cũ (bottleneck === undefined).
- * @param {HTMLElement} parent
- * @param {("uplink" | "downlink" | "both_ok") | undefined} bn
- */
-function appendBottleneckPill(parent, bn) {
-  if (!bn) return;
-  /** @type {Record<string, string>} */
-  const labels = t.popup.bottleneckShort;
-  const label = labels[bn];
-  if (!label) return;
-  const balanced = bn === "both_ok";
-  const bg = balanced ? "#ecfdf5" : "#fffbeb";
-  const fg = balanced ? "#047857" : "#b45309";
-  const border = balanced ? "#a7f3d0" : "#fde68a";
-  const pill = document.createElement("span");
-  pill.style.cssText = `display:inline-block;background:${bg};color:${fg};border:1px solid ${border};padding:1px 6px;border-radius:9999px;font-weight:500;font-size:10px`;
-  pill.textContent = label;
-  parent.appendChild(pill);
-}
-
-/**
- * Margin bar: width tỉ lệ với margin trong khoảng MARGIN_BAR_RANGE,
- * màu nền theo STATUS_COLOR[status]. Numeric label nằm cạnh thanh bar.
- * @param {number} marginDb
- * @param {string} status
- * @returns {HTMLDivElement}
- */
-function buildMarginCell(marginDb, status) {
-  const { min, max } = MARGIN_BAR_RANGE;
-  const pct = Math.max(0, Math.min(100, ((marginDb - min) / (max - min)) * 100));
-  const color = STATUS_COLOR[status] ?? STATUS_COLOR_FALLBACK;
-
-  const wrap = document.createElement("div");
-  wrap.style.cssText = "display:flex;align-items:center;gap:4px;min-width:96px";
-
-  const num = document.createElement("span");
-  num.style.cssText =
-    "font-variant-numeric:tabular-nums;color:#334155;min-width:48px";
-  num.textContent = t.popup.bidir.marginValue(marginDb);
-  wrap.appendChild(num);
-
-  const track = document.createElement("div");
-  track.style.cssText =
-    "flex:1;height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden";
-  const fill = document.createElement("div");
-  fill.style.cssText = `width:${pct.toFixed(1)}%;height:100%;background:${color}`;
-  track.appendChild(fill);
-  wrap.appendChild(track);
-
-  return wrap;
-}
-
-/**
- * @param {string} label
- * @param {import("../api/client.js").LinkBudgetT} lb
- * @returns {HTMLTableRowElement}
- */
-function buildBidirRow(label, lb) {
-  const tr = document.createElement("tr");
-
-  const tdLabel = document.createElement("td");
-  tdLabel.style.cssText = "padding:3px 4px;color:#334155;white-space:nowrap";
-  tdLabel.textContent = label;
-  tr.appendChild(tdLabel);
-
-  const tdRssi = document.createElement("td");
-  tdRssi.style.cssText =
-    "padding:3px 4px;font-variant-numeric:tabular-nums;white-space:nowrap";
-  tdRssi.textContent = `${lb.rssi_dbm.toFixed(1)} dBm`;
-  tr.appendChild(tdRssi);
-
-  const tdSnr = document.createElement("td");
-  tdSnr.style.cssText =
-    "padding:3px 4px;font-variant-numeric:tabular-nums;white-space:nowrap";
-  tdSnr.textContent = `${lb.snr_db.toFixed(1)} dB`;
-  tr.appendChild(tdSnr);
-
-  const tdMargin = document.createElement("td");
-  tdMargin.style.cssText = "padding:3px 4px";
-  tdMargin.appendChild(buildMarginCell(lb.margin_db, lb.status));
-  tr.appendChild(tdMargin);
-
-  return tr;
-}
-
-/**
- * Section UL/DL trong Layer 2 — bảng 2×4 (UL/DL × label/RSSI/SNR/Margin)
- * với margin bar visual. Chỉ append khi BE trả đủ uplink + downlink.
- * @param {HTMLElement} parent
- * @param {import("../api/client.js").LinkBudgetT} ul
- * @param {import("../api/client.js").LinkBudgetT} dl
- */
-function appendBidirectionalSection(parent, ul, dl) {
-  const wrap = document.createElement("div");
-  wrap.style.cssText =
-    "margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0";
-
-  const head = document.createElement("div");
-  head.style.cssText =
-    "font-weight:600;color:#0f172a;margin-bottom:4px;font-size:11px";
-  head.textContent = t.popup.bidir.sectionTitle;
-  wrap.appendChild(head);
-
-  const table = document.createElement("table");
-  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px";
-
-  const thead = document.createElement("thead");
-  const headTr = document.createElement("tr");
-  headTr.style.cssText = "color:#64748b;text-align:left";
-  for (const label of ["", t.popup.bidir.colRssi, t.popup.bidir.colSnr, t.popup.bidir.colMargin]) {
-    const th = document.createElement("th");
-    th.style.cssText = "padding:2px 4px;font-weight:500";
-    th.textContent = label;
-    headTr.appendChild(th);
+function buildFieldCell(label, value, sub) {
+  const cell = document.createElement("div");
+  cell.style.cssText = "min-width:0";
+  const dt = document.createElement("div");
+  dt.style.cssText = "color:#64748b;font-size:10px;line-height:1.3";
+  dt.textContent = label;
+  cell.appendChild(dt);
+  const dd = document.createElement("div");
+  dd.style.cssText =
+    "color:#0f172a;font-weight:600;font-size:11px;margin-top:1px;word-break:break-word;font-variant-numeric:tabular-nums";
+  dd.textContent = value;
+  cell.appendChild(dd);
+  if (sub) {
+    const subEl = document.createElement("div");
+    subEl.style.cssText = "color:#94a3b8;font-size:10px;line-height:1.25;margin-top:1px";
+    subEl.textContent = sub;
+    cell.appendChild(subEl);
   }
-  thead.appendChild(headTr);
-  table.appendChild(thead);
-
-  const tbody = document.createElement("tbody");
-  tbody.appendChild(buildBidirRow(t.popup.bidir.ul, ul));
-  tbody.appendChild(buildBidirRow(t.popup.bidir.dl, dl));
-  table.appendChild(tbody);
-
-  wrap.appendChild(table);
-  parent.appendChild(wrap);
-}
-
-/**
- * Block thông số đường truyền dữ liệu LoRaWAN — bitrate, time-on-air (23 B),
- * max payload bytes. Pure function của SF (BW=125 kHz, CR=4/5, AS923-2 DT=0).
- * Tách section vì khác bản chất với phủ sóng — đây là "truyền data nhanh hay
- * chậm khi đã có sóng".
- * @param {HTMLElement} parent
- * @param {number} sf
- */
-function appendDataLinkSection(parent, sf) {
-  const wrap = document.createElement("div");
-  wrap.style.cssText =
-    "margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;font-size:11px";
-
-  const title = document.createElement("div");
-  title.style.cssText = "font-weight:600;color:#0f172a;margin-bottom:4px";
-  title.textContent = t.popup.dataLink.sectionTitle;
-  wrap.appendChild(title);
-
-  for (const [label, value] of [
-    [t.popup.dataLink.bitrate, formatBitrate(sf)],
-    [t.popup.dataLink.timeOnAir, formatTimeOnAir(sf)],
-    [t.popup.dataLink.maxPayload, t.popup.dataLink.maxPayloadValue(maxPayloadBytes(sf))],
-  ]) {
-    const row = document.createElement("div");
-    row.appendChild(document.createTextNode(`${label}: `));
-    const strong = document.createElement("strong");
-    strong.textContent = value;
-    row.appendChild(strong);
-    wrap.appendChild(row);
-  }
-
-  parent.appendChild(wrap);
+  return cell;
 }
 
 /**
@@ -634,6 +485,10 @@ const REALTIME_BADGE_TICK_MS = 5000;
 // Khi auto-pan tới điểm mới, zoom tối thiểu để user thấy chi tiết đường đi.
 // Giữ zoom cao hơn nếu user đang zoom xa hơn (max → preserve user intent).
 const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 15;
+// Chu kỳ pull external source vào DB cho live session (mig 0031). Chậm hơn
+// REALTIME_POLL_MS — sync ChirpStack/LPWANMapper tốn round-trip, không cần
+// fan-out 1s/lần; 20s đủ "gần realtime" cho UX khảo sát mà không nghẽn upstream.
+const LIVE_SESSION_SYNC_MS = 20000;
 // Reference ổn định cho displayedItems khi chưa có data — tránh `?? []` tạo
 // array mới mỗi render gây useEffect deps re-fire.
 const EMPTY_TRAINING_ITEMS = Object.freeze(/** @type {never[]} */ ([]));
@@ -664,7 +519,13 @@ function formatLastSeenLabel(lastSeenAt, now, t) {
  *     "1 điểm": click bản đồ chọn toạ độ + Dự đoán. Sub-tab "Hàng loạt":
  *     upload CSV/JSON, submit → vẽ markers tự động + mở drawer kết quả.
  */
-export function CoverageMap({ mode = "points" }) {
+/**
+ * @param {{
+ *   mode?: "points" | "heatmap" | "predict",
+ *   onRequestLogin?: (afterLogin?: () => void) => void,
+ * }} props
+ */
+export function CoverageMap({ mode = "points", onRequestLogin }) {
   const containerRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -672,6 +533,10 @@ export function CoverageMap({ mode = "points" }) {
   // Mảng marker dự đoán — predict mỗi điểm append 1 marker, không xoá cũ.
   // Re-render qua bumpMarkerCount() để nút "Xoá tất cả" disable đúng lúc.
   const searchMarkersRef = useRef(/** @type {maplibregl.Marker[]} */ ([]));
+  // Pin tạm (1 dot xám) — đánh dấu vị trí user vừa pick (map click hoặc address
+  // resolve) TRƯỚC khi bấm "Dự đoán". Hidden sau khi predict thành công (marker
+  // kết quả màu thay vào) hoặc khi user "Xoá tất cả".
+  const pickMarkerRef = useRef(/** @type {maplibregl.Marker | null} */ (null));
   // Line features song song với searchMarkersRef — index N có thể không 1-1 vì
   // marker mà serving_gateway_id == null sẽ không có line. clearAll reset cả 2.
   const searchLineFeaturesRef = useRef(
@@ -702,10 +567,21 @@ export function CoverageMap({ mode = "points" }) {
   const [predictError, setPredictError] = useState(
     /** @type {string | null} */ (null),
   );
+  // Geolocation API: nút "Dùng vị trí của tôi" trong sub-tab single.
+  // getCurrentPosition async ~vài giây với enableHighAccuracy → spinner.
+  const [gpsBusy, setGpsBusy] = useState(false);
+  const [gpsError, setGpsError] = useState(
+    /** @type {string | null} */ (null),
+  );
   // Collapse pattern khớp với PointsFilterPanel / MinSFPanel / EstimatePanel:
   // default closed (1 icon button) để không che map. Reset về closed khi user
   // rời tab predict — tránh ghost-state hiện ra ở lần re-enter sau.
   const [predictPanelOpen, setPredictPanelOpen] = useState(false);
+  // Tab "Bản đồ điểm đo": 2 panel độc lập (filter + theo dõi trực tiếp). State
+  // lift lên đây để icon column ở left luôn cố định — mở 1 panel không push
+  // icon của panel còn lại xuống dưới.
+  const [pointsFilterOpen, setPointsFilterOpen] = useState(false);
+  const [realtimePanelOpen, setRealtimePanelOpen] = useState(false);
   // Sub-tab trong Predict panel: "single" (click 1 điểm) hoặc "address" (nhập địa chỉ → geocode).
   // Cả 2 sub-tab cho mọi user (kể cả admin) — chỉ khác cách lấy lat/lng,
   // cùng vẽ marker qua drawSearchMarker.
@@ -781,9 +657,6 @@ export function CoverageMap({ mode = "points" }) {
   const [timeRange, setTimeRange] = useState(
     () => initialPointsFilterRef.current.timeRange,
   );
-  const [sortConfig, setSortConfig] = useState(
-    () => initialPointsFilterRef.current.sortConfig,
-  );
 
   // Realtime "Theo dõi trực tiếp" — chỉ active khi contributor === "me".
   // `lastPointTimestampRef` = cursor cho param `since`; advance = max(timestamp)
@@ -792,8 +665,14 @@ export function CoverageMap({ mode = "points" }) {
   // `realtimeFeatures` accumulator: snapshot lần đầu + append incremental.
   const [realtimeEnabled, setRealtimeEnabled] = useState(false);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
+  // Khi bật, displayedItems chỉ giữ điểm có timestamp >= sessionStartedAtRef
+  // (mốc lúc tick toggle realtime) — ẩn snapshot lịch sử khỏi map.
+  const [liveOnlyEnabled, setLiveOnlyEnabled] = useState(false);
   const lastPointTimestampRef = useRef(/** @type {string | null} */ (null));
   const sessionCounterRef = useRef(0);
+  // Mốc client time (epoch ms) khi user tick toggle realtime. Dùng cho
+  // liveOnly filter — so với p.timestamp parse ISO. Reset cùng cursor.
+  const sessionStartedAtRef = useRef(/** @type {number | null} */ (null));
   const [lastSeenAt, setLastSeenAt] = useState(
     /** @type {number | null} */ (null),
   );
@@ -802,6 +681,27 @@ export function CoverageMap({ mode = "points" }) {
   );
   // Tick để badge "Mới nhất: Ns trước" tự re-render dù không có điểm mới.
   const [nowTick, setNowTick] = useState(() => Date.now());
+  // Nút Kết thúc → final sync + summary modal. State busy + modal result.
+  const [endingBusy, setEndingBusy] = useState(false);
+  const [endModal, setEndModal] = useState(
+    /** @type {{ title: string, body: string } | null} */ (null),
+  );
+  // Live session (mig 0031): 1 chuyến = 1 batch. Ref vì sync interval đọc
+  // trong closure ổn định; cumulative counter cho tổng kết Kết thúc.
+  // `liveSessionSourceId` là source RIÊNG cho live session (nơi GHI data),
+  // không liên quan tới `linkedSourceId` filter (chỉ điều khiển XEM data).
+  // Tách hẳn 2 state để user có thể đang lọc "Tất cả nguồn" mà vẫn ghi
+  // chuyến vào 1 source cụ thể, hoặc đang xem 1 source này nhưng ghi vào
+  // source khác.
+  const [liveSessionSourceId, setLiveSessionSourceId] = useState(
+    /** @type {string | null} */ (null),
+  );
+  // Tách "bật realtime" (xem điểm mới) khỏi "chuyến khảo sát" (1 batch).
+  // Batch chỉ tạo khi user nhấn "Bắt đầu" → đảm bảo batch = data từ Start
+  // tới End, không gồm điểm trước khi user explicit start.
+  const [liveSessionRunning, setLiveSessionRunning] = useState(false);
+  const liveSessionBatchIdRef = useRef(/** @type {string | null} */ (null));
+  const liveSessionInsertedRef = useRef(0);
 
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
   // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
@@ -838,9 +738,8 @@ export function CoverageMap({ mode = "points" }) {
       rssiRange,
       snrRange,
       timeRange,
-      sortConfig,
     });
-  }, [mode, sfList, deviceId, rssiRange, snrRange, timeRange, sortConfig]);
+  }, [mode, sfList, deviceId, rssiRange, snrRange, timeRange]);
 
   // Filter pipeline: backend nhận contributor/linked_source/source +
   // (sf_list, device_id, rssi/snr/time range, sort + rank window) và AND
@@ -869,7 +768,6 @@ export function CoverageMap({ mode = "points" }) {
       rssiRange,
       snrRange,
       timeRange,
-      sortConfig,
       // Tách cache realtime ↔ static — query realtime gửi kèm `since` cursor
       // không nên pollute snapshot mà tab khác / lần switch off đọc lại.
       realtimeEnabled,
@@ -892,8 +790,6 @@ export function CoverageMap({ mode = "points" }) {
         snrMax: snrRange.max ?? undefined,
         timeFrom: timeRange.from ?? undefined,
         timeTo: timeRange.to ?? undefined,
-        sortBy: sortConfig.sortBy,
-        sortOrder: sortConfig.sortOrder,
         since,
       });
     },
@@ -914,17 +810,21 @@ export function CoverageMap({ mode = "points" }) {
     setRealtimeEnabled(false);
     setRealtimeFeatures([]);
     setLastSeenAt(null);
+    setLiveSessionSourceId(null);
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
   }, [contributor, user]);
 
   // Reset cursor + accumulator khi filter đổi giữa chừng realtime — kết quả
   // mới khác hẳn, không thể incremental từ cursor cũ. Cũng fire khi bật/tắt
-  // realtime để lần snapshot mới luôn full-fetch.
+  // realtime để lần snapshot mới luôn full-fetch. sessionStartedAt = mốc
+  // cho liveOnly filter; advance mỗi lần "session" reset.
   useEffect(() => {
     if (!realtimeEnabled) return;
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
+    sessionStartedAtRef.current = Date.now();
+    liveSessionInsertedRef.current = 0;
     setRealtimeFeatures([]);
   }, [
     realtimeEnabled,
@@ -936,8 +836,55 @@ export function CoverageMap({ mode = "points" }) {
     rssiRange,
     snrRange,
     timeRange,
-    sortConfig,
   ]);
+
+  // Live session lifecycle (mig 0031): khi user tick "Theo dõi trực tiếp" +
+  // chọn nguồn ghi (liveSessionSourceId) → tạo batch kind='live_session' để
+  // gom mọi sync trong chuyến vào 1 row "Lịch sử upload". Mỗi chu kỳ
+  // LIVE_SESSION_SYNC_MS pull upstream → batch.points_count cộng dồn. Cleanup
+  // khi tắt realtime / đổi source / unmount: clear interval; batch row còn
+  // lại để handleEndSession xử lý (success → giữ, empty → DELETE).
+  //
+  // liveSessionSourceId TÁCH HẲN khỏi linkedSourceId filter: filter điều
+  // khiển XEM data nào trên map, picker này điều khiển GHI vào source nào.
+  useEffect(() => {
+    if (!realtimeEnabled) return;
+    if (contributor !== "me") return;
+    if (liveSessionSourceId === null) return;
+    if (!liveSessionRunning) return;
+
+    let cancelled = false;
+    let intervalId = /** @type {ReturnType<typeof setInterval> | null} */ (null);
+
+    (async () => {
+      try {
+        const res = await startLiveSession(liveSessionSourceId);
+        if (cancelled) return;
+        liveSessionBatchIdRef.current = res.batch_id;
+        intervalId = setInterval(async () => {
+          const batchId = liveSessionBatchIdRef.current;
+          if (batchId === null) return;
+          try {
+            const r = await syncLiveSession(batchId);
+            if (!r.error) {
+              liveSessionInsertedRef.current += r.measurements_inserted;
+            }
+          } catch {
+            // Bỏ qua lỗi interval — handleEndSession sẽ surface qua final sync.
+          }
+        }, LIVE_SESSION_SYNC_MS);
+      } catch {
+        // Start fail (404 source không tồn tại / mất mạng) → user vẫn xem
+        // map; bấm Kết thúc sẽ báo NeedSource modal.
+        liveSessionBatchIdRef.current = null;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) clearInterval(intervalId);
+    };
+  }, [realtimeEnabled, contributor, liveSessionSourceId, liveSessionRunning]);
 
   // Merge incremental result: snapshot lần đầu (cursor null) hoặc append
   // điểm mới với dedup theo (timestamp + device_id + serving_gateway_id).
@@ -987,6 +934,14 @@ export function CoverageMap({ mode = "points" }) {
     return () => clearTimeout(timer);
   }, [realtimeEnabled, lastSeenAt]);
 
+  // Realtime OFF → reset live session picker. Batch row đã tạo (nếu có) còn
+  // trong "Lịch sử upload" với count hiện tại — user tự xoá nếu rỗng. Auto-
+  // off idle 15 phút và end button thành công cũng đi qua đây.
+  useEffect(() => {
+    if (realtimeEnabled) return;
+    setLiveSessionSourceId(null);
+  }, [realtimeEnabled]);
+
   // Tick re-render badge "Mới nhất: Ns trước" — dù không có điểm mới counter
   // vẫn cần update.
   useEffect(() => {
@@ -1014,13 +969,98 @@ export function CoverageMap({ mode = "points" }) {
     });
   }, [realtimeFeatures, realtimeEnabled, autoFollowEnabled]);
 
+  // Nút "Bắt đầu": reset counter + cursor cho chuyến mới, set running=true →
+  // effect lifecycle phía trên fire startLiveSession để tạo batch. Realtime
+  // poll vẫn chạy độc lập (xem điểm mới trên map dù chưa Start).
+  const tRealtime = strings.coverageMap.filters.realtime;
+  const handleStartSession = useCallback(() => {
+    if (liveSessionSourceId === null) return;
+    liveSessionInsertedRef.current = 0;
+    sessionCounterRef.current = 0;
+    lastPointTimestampRef.current = null;
+    sessionStartedAtRef.current = Date.now();
+    setRealtimeFeatures([]);
+    setLastSeenAt(null);
+    setLiveSessionRunning(true);
+  }, [liveSessionSourceId]);
+
+  // Nút "Kết thúc": final sync chuyến khảo sát + tổng kết. Cần batch_id
+  // (effect lifecycle đã tạo khi nhấn Bắt đầu). Total = cumulative interval
+  // inserts + final sync delta. Total > 0 → success modal, tắt running để
+  // queryKey đổi → snapshot mới. = 0 → DELETE batch (xoá row rỗng khỏi
+  // "Lịch sử upload") + empty modal. Giữ realtimeEnabled để user có thể
+  // bắt đầu chuyến mới mà không cần tick lại toggle.
+  const handleEndSession = useCallback(async () => {
+    const batchId = liveSessionBatchIdRef.current;
+    if (batchId === null) {
+      setEndModal({
+        title: tRealtime.endNeedSourceTitle,
+        body: tRealtime.endNeedSourceBody,
+      });
+      return;
+    }
+    setEndingBusy(true);
+    try {
+      const result = await syncLiveSession(batchId);
+      if (result.error) {
+        setEndModal({
+          title: tRealtime.endErrorTitle,
+          body: tRealtime.endErrorBody(result.error),
+        });
+        return;
+      }
+      const total =
+        liveSessionInsertedRef.current + result.measurements_inserted;
+      if (total > 0) {
+        setEndModal({
+          title: tRealtime.endSuccessTitle,
+          body: tRealtime.endSuccessBody(total),
+        });
+        liveSessionBatchIdRef.current = null;
+        liveSessionInsertedRef.current = 0;
+        setLiveSessionRunning(false);
+      } else {
+        try {
+          await deleteUploadBatch(batchId);
+        } catch {
+          // Cleanup best-effort — batch rỗng còn lại user có thể tự xoá.
+        }
+        liveSessionBatchIdRef.current = null;
+        liveSessionInsertedRef.current = 0;
+        setEndModal({
+          title: tRealtime.endEmptyTitle,
+          body: tRealtime.endEmptyBody,
+        });
+        setLiveSessionRunning(false);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setEndModal({
+        title: tRealtime.endErrorTitle,
+        body: tRealtime.endErrorBody(msg),
+      });
+    } finally {
+      setEndingBusy(false);
+    }
+  }, [tRealtime]);
+
   // Render source: realtime → accumulated features; static → snapshot từ
   // useQuery. EMPTY_TRAINING_ITEMS giữ ref ổn định khi data chưa có (tránh
   // `?? []` tạo array mới mỗi render gây setData effect re-fire).
+  // liveOnly: filter điểm có timestamp >= mốc session (client time vs server
+  // ISO; sai số vài giây chấp nhận được cho UX khảo sát).
   const displayedItems = useMemo(() => {
-    if (realtimeEnabled) return realtimeFeatures;
+    if (realtimeEnabled) {
+      if (liveOnlyEnabled && sessionStartedAtRef.current !== null) {
+        const start = sessionStartedAtRef.current;
+        return realtimeFeatures.filter(
+          (p) => Date.parse(p.timestamp) >= start,
+        );
+      }
+      return realtimeFeatures;
+    }
     return surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
-  }, [realtimeEnabled, realtimeFeatures, surveysQ.data]);
+  }, [realtimeEnabled, liveOnlyEnabled, realtimeFeatures, surveysQ.data]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1054,8 +1094,33 @@ export function CoverageMap({ mode = "points" }) {
     map.on("click", (e) => {
       if (mode !== "predict") return;
       const { lat, lng } = e.lngLat;
+      // Hit-test: tap trong bán kính 40px của predict marker đã có → reopen
+      // popup thay vì tạo gray pick. Radius rộng vì marker là drop-pin
+      // anchor="bottom" (lngLat ở mũi tip, bulb cao hơn ~22px) + offset popup.
+      // Defer qua rAF: addTo() đăng ký closeOnClick listener; trong cùng tick
+      // có thể race với map click event hiện tại.
+      const HIT_RADIUS_PX = 40;
+      const HIT_R2 = HIT_RADIUS_PX * HIT_RADIUS_PX;
+      for (const marker of searchMarkersRef.current) {
+        const ll = marker.getLngLat();
+        const mp = map.project([ll.lng, ll.lat]);
+        const dx = mp.x - e.point.x;
+        const dy = mp.y - e.point.y;
+        if (dx * dx + dy * dy <= HIT_R2) {
+          const popup = marker.getPopup();
+          if (popup && !popup.isOpen()) {
+            requestAnimationFrame(() => {
+              if (!popup.isOpen()) {
+                popup.setLngLat(marker.getLngLat()).addTo(map);
+              }
+            });
+          }
+          return;
+        }
+      }
       setPickedCoords({ lat, lng });
       setPredictError(null);
+      showPickMarker(lat, lng);
     });
 
     map.on("load", () => {
@@ -1516,8 +1581,9 @@ export function CoverageMap({ mode = "points" }) {
 
   // Ring toả từ mỗi gateway — MapLibre circle layer, bán kính bám km theo zoom.
   // Bán kính nhỏ hơn + period chậm hơn mappreview để CoverageMap đỡ nhiễu mắt.
-  // Radius_px tính lại mỗi frame theo map.getZoom() + center lat → bám đúng km
-  // kể cả khi user zoom/pan.
+  // Quy đổi mét→pixel làm bằng zoom expression (interpolate exponential base 2)
+  // → MapLibre tính radius ngay tại paint time với current paint zoom, không
+  // lệch 1 frame so với JS getZoom() → ring mượt khi user zoom/pan.
   // Setup idempotent (skip nếu source/layer đã tồn tại); cleanup CHỈ cancel RAF.
   // Source/layer sống cùng đời map — parent destroy map sẽ wipe — tránh race
   // condition với MapLibre teardown khi HMR / dependency re-fire.
@@ -1540,7 +1606,15 @@ export function CoverageMap({ mode = "points" }) {
         type: "circle",
         source: SRC_ID,
         paint: /** @type {any} */ ({
-          "circle-radius": 0,
+          "circle-radius": [
+            "interpolate",
+            ["exponential", 2],
+            ["zoom"],
+            0,
+            0,
+            22,
+            0,
+          ],
           "circle-color": "rgba(0,0,0,0)",
           "circle-stroke-width": 1.5,
           "circle-stroke-color": "rgba(10,61,145,0.7)",
@@ -1555,6 +1629,11 @@ export function CoverageMap({ mode = "points" }) {
     const TARGET_M = 5000;
     const PEAK_OPACITY = 0.45;
     const FADE_IN = 0.05;
+    // mPerPx_at_zoom0 = 40075016.686/256 ≈ 156543.03 (equator). Nhân cos(lat)
+    // để có mPerPx thực; bake cos(16°)≈0.961 cho VN (Đà Nẵng) — sai số ~2.7%
+    // tại Hải Phòng (~20.8°N), không thấy bằng mắt với pulse 5km.
+    const MPP_DENOM = 156543.03 * 0.961;
+    const POW2_22 = 4194304; // 2^22, biên trên zoom của expression
     const startMs = performance.now();
     const tick = (/** @type {number} */ now) => {
       if (cancelled) return;
@@ -1565,17 +1644,23 @@ export function CoverageMap({ mode = "points" }) {
       // throw "circle-radius < 0".
       const elapsed = Math.max(0, now - startMs);
       const phase = (elapsed % PERIOD_MS) / PERIOD_MS;
-      const latRad = (m.getCenter().lat * Math.PI) / 180;
-      const mPerPx =
-        (40075016.686 * Math.cos(latRad)) / (Math.pow(2, m.getZoom()) * 256);
-      // Radius tốc độ đều từ 0 → TARGET_M; max guard belt-and-suspenders.
-      const radiusPx = Math.max(0, (TARGET_M * phase) / mPerPx);
+      // Radius_px @ z=0 (a). Tại zoom z bất kỳ, exponential-base-2 interpolate
+      // giữa (0,a) và (22,a*2^22) cho đúng a*2^z = TARGET_M*phase / mPerPx(z).
+      const a = (TARGET_M * phase) / MPP_DENOM;
       // Opacity: fade-in 5% đầu (loại pop ở mép loop) + hold + drop hard 20%
       // cuối. min(ramp-up, drop-down).
       const fadeIn = Math.min(1, phase / FADE_IN);
       const fadeOut = 1 - Math.pow(phase, 4);
       const opacity = PEAK_OPACITY * Math.min(fadeIn, fadeOut);
-      m.setPaintProperty(LAYER_ID, "circle-radius", radiusPx);
+      m.setPaintProperty(LAYER_ID, "circle-radius", [
+        "interpolate",
+        ["exponential", 2],
+        ["zoom"],
+        0,
+        a,
+        22,
+        a * POW2_22,
+      ]);
       m.setPaintProperty(LAYER_ID, "circle-stroke-opacity", opacity);
       rafId = requestAnimationFrame(tick);
     };
@@ -1771,14 +1856,13 @@ export function CoverageMap({ mode = "points" }) {
     subtitle.textContent = t.popup.coords(lat, lng);
     root.appendChild(subtitle);
 
-    // Layer 1: status badge + bottleneck pill (cùng hàng).
+    // Layer 1: status badge only — bottleneck direction pill đã bỏ 2026-06-14.
     const badgeRow = document.createElement("div");
     badgeRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center";
     const badge = document.createElement("span");
     badge.style.cssText = `display:inline-block;background:${color};color:white;padding:2px 8px;border-radius:9999px;font-weight:600;font-size:11px`;
     badge.textContent = STATUS_LABEL[status] ?? status;
     badgeRow.appendChild(badge);
-    appendBottleneckPill(badgeRow, prediction.bottleneck);
     root.appendChild(badgeRow);
 
     const sentence = document.createElement("div");
@@ -1799,99 +1883,175 @@ export function CoverageMap({ mode = "points" }) {
     layer2.style.cssText =
       "display:none;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#334155;max-height:55vh;overflow-y:auto";
 
+    // 11 mục kết quả dự đoán: RSSI, SNR, PDR, can nhiễu, SF, băng thông,
+    // đa đường & che chắn, BER/FER, độ trễ, gateway, môi trường. Item 1-9
+    // ở 2-cột grid, item 10 (gateway) + 11 (môi trường) full-width.
+    const sq = prediction.signal_quality;
+    const env = prediction.environment_params;
+    const NA = t.popup.fields.unavailable;
     const rec = prediction.recommended_sf;
-    // Khi user chọn "Tự động": ẩn dòng "SF dùng" và bỏ mismatch hint vì
-    // không có SF input để so sánh.
-    const sfMismatch = !isAuto && rec !== sfUsed;
-    const envOption = t.environmentPicker.options.find(
-      (o) => o.value === environmentUsed,
+    const usedSf = env?.spreading_factor ?? sfUsed;
+
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px 12px";
+
+    grid.appendChild(
+      buildFieldCell(t.popup.fields.rssi, `${prediction.rssi_dbm.toFixed(1)} dBm`),
     );
-    const envLabel = envOption?.short ?? environmentUsed;
-    // σ_total = √(epi + ale) — Stage 1 epi=0, ale=σ_shadow² theo env_profile.
-    const sigmaDb = Math.sqrt(
-      prediction.confidence.epistemic_variance_db2 +
-        prediction.confidence.aleatoric_variance_db2,
+    grid.appendChild(
+      buildFieldCell(t.popup.fields.snr, `${prediction.snr_db.toFixed(1)} dB`),
     );
-    const techRows = document.createElement("div");
-    // RSSI/SNR tổng đã hiện chi tiết per-direction trong mini-table UL/DL
-    // bên dưới — không lặp lại ở đây để tránh trùng abstraction (philosophy
-    // ch.7: "each layer provides a different abstraction").
-    if (!isAuto) {
-      techRows.appendChild(buildLabelStrongRow(t.popup.usedSf.label, t.popup.usedSf.value(sfUsed)));
-    }
-    const recRow = document.createElement("div");
-    recRow.appendChild(document.createTextNode(`${t.popup.recommendedSf.label}: `));
-    const recStrong = document.createElement("strong");
-    recStrong.textContent = t.popup.recommendedSf.value(rec);
-    recRow.appendChild(recStrong);
-    if (sfMismatch) {
-      recRow.appendChild(document.createTextNode(" "));
-      const hint = document.createElement("span");
-      hint.style.color = "#b45309";
-      hint.textContent = t.popup.sfMismatchHint;
-      recRow.appendChild(hint);
-    }
-    techRows.appendChild(recRow);
-    techRows.appendChild(buildLabelStrongRow(t.popup.usedTxPower.label, t.popup.usedTxPower.value(txPowerUsed)));
-    techRows.appendChild(buildLabelStrongRow(t.popup.usedEnvironment.label, envLabel));
-    // path_loss_db = 0 khi BE chưa rebuild hoặc no_coverage — ẩn row để khỏi
-    // hiển thị "0 dB" lẫn lộn.
-    if (prediction.path_loss_db > 0) {
-      techRows.appendChild(
-        buildLabelStrongRow(t.popup.pathLoss.label, t.popup.pathLoss.value(prediction.path_loss_db)),
-      );
-    }
-    techRows.appendChild(buildLabelStrongRow(t.popup.errorMargin.label, t.popup.errorMargin.value(sigmaDb)));
-    techRows.appendChild(buildLabelStrongRow(t.popup.accuracy.label, t.popup.accuracy.value(sigmaDb)));
-    layer2.appendChild(techRows);
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.pdr,
+        sq ? `${(sq.pdr * 100).toFixed(1)}%` : NA,
+        sq ? t.popup.fields.pdrSub : undefined,
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.interference,
+        sq
+          ? `UL ${sq.uplink_noise_floor_dbm.toFixed(1)} · DL ${sq.downlink_noise_floor_dbm.toFixed(1)} dBm`
+          : NA,
+        sq ? t.popup.fields.interferenceSub : undefined,
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.sf,
+        `SF${usedSf}`,
+        usedSf === rec
+          ? t.popup.fields.sfMatch
+          : t.popup.fields.sfRecommended(rec),
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.bandwidth,
+        sq ? `${(sq.bandwidth_hz / 1000).toFixed(0)} kHz` : NA,
+        sq ? t.popup.fields.bandwidthSub : undefined,
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.shadowing,
+        sq ? `σ = ${sq.shadow_fading_sigma_db.toFixed(1)} dB` : NA,
+        sq ? t.popup.fields.shadowingSub : undefined,
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.berFer,
+        sq ? `${formatBer(sq.ber)} · FER ${(sq.fer * 100).toFixed(1)}%` : NA,
+        sq ? t.popup.fields.berFerSub : undefined,
+      ),
+    );
+    grid.appendChild(
+      buildFieldCell(
+        t.popup.fields.latency,
+        sq ? `≈ ${sq.time_on_air_ms.toFixed(0)} ms` : NA,
+        sq ? t.popup.fields.latencySub(sq.jitter_ms) : undefined,
+      ),
+    );
+    layer2.appendChild(grid);
 
-    // Data-link metrics (bitrate, ToA, max payload) — pure function của SF,
-    // tách section vì là "khả năng truyền dữ liệu" khác bản chất với "phủ sóng".
-    appendDataLinkSection(layer2, sfUsed);
-
-    // UL/DL table — chỉ render khi BE có trả 2 chiều (backward-compat).
-    if (prediction.uplink && prediction.downlink) {
-      appendBidirectionalSection(layer2, prediction.uplink, prediction.downlink);
-    }
-
-    const gwRow = document.createElement("div");
-    gwRow.style.cssText = "margin-top:6px";
+    // Item 10: Gateway kết nối — full-width, có link click → flyTo gateway.
     // Khi no_coverage: BE vẫn trả serving_gateway_id = candidate ít tệ nhất
     // (debug field), nhưng UX-wise treat như "không có gateway phục vụ".
     const gw =
       prediction.serving_gateway_id && prediction.coverage_status !== "no_coverage"
         ? gatewaysRef.current.find((x) => x.id === prediction.serving_gateway_id)
         : null;
+    const gwWrap = document.createElement("div");
+    gwWrap.style.cssText = "margin-top:8px";
+    const gwLabel = document.createElement("div");
+    gwLabel.style.cssText = "color:#64748b;font-size:10px;line-height:1.3";
+    gwLabel.textContent = t.popup.fields.gateway;
+    gwWrap.appendChild(gwLabel);
+    const gwValue = document.createElement("div");
+    gwValue.style.cssText = "color:#0f172a;font-weight:600;font-size:11px;margin-top:1px";
     if (gw) {
-      gwRow.appendChild(
-        document.createTextNode(`${t.popup.nearestGateway.label}: `),
-      );
       const link = document.createElement("a");
       link.href = "#";
       link.style.cssText = "color:#0369a1;text-decoration:underline";
       link.textContent = `${gw.code} — ${gw.name}`;
       link.addEventListener("click", (e) => {
         e.preventDefault();
-        mapRef.current?.flyTo({
-          center: [gw.longitude, gw.latitude],
-          zoom: 14,
-        });
+        mapRef.current?.flyTo({ center: [gw.longitude, gw.latitude], zoom: 16 });
       });
-      gwRow.appendChild(link);
+      gwValue.appendChild(link);
     } else {
-      gwRow.textContent = `${t.popup.nearestGateway.label}: ${t.popup.nearestGateway.none}`;
+      gwValue.textContent = t.popup.nearestGatewayNone;
     }
-    layer2.appendChild(gwRow);
-
-    // Khoảng cách đến serving gateway — chỉ hiển thị khi BE có wire (>0).
-    // Serving gateway = gateway có min(UL_margin, DL_margin) = "tín hiệu mạnh
-    // nhất", không phải nearest geographic.
+    gwWrap.appendChild(gwValue);
     if (gw && prediction.distance_to_serving_gateway_km > 0) {
-      const distRow = document.createElement("div");
-      distRow.style.cssText = "margin-top:2px;color:#475569;font-size:11px";
-      distRow.textContent = `${t.popup.distanceToGateway.label}: ${t.popup.distanceToGateway.value(prediction.distance_to_serving_gateway_km)}`;
-      layer2.appendChild(distRow);
+      const distSub = document.createElement("div");
+      distSub.style.cssText = "color:#94a3b8;font-size:10px;line-height:1.25;margin-top:1px";
+      distSub.textContent = `cách ${t.popup.distanceToGateway.value(prediction.distance_to_serving_gateway_km)}`;
+      gwWrap.appendChild(distSub);
     }
+    // Covering gateway count: redundancy indicator (1 = SPOF; ≥2 = diversity).
+    const coveringCount = prediction.covering_gateway_count ?? 0;
+    const coverSub = document.createElement("div");
+    coverSub.style.cssText = "color:#94a3b8;font-size:10px;line-height:1.25;margin-top:1px";
+    coverSub.textContent = `${t.popup.fields.coveringGateways}: ${coveringCount} (${t.popup.fields.coveringGatewaysSub(coveringCount)})`;
+    gwWrap.appendChild(coverSub);
+    layer2.appendChild(gwWrap);
+
+    // Item 11: Thông số môi trường — freq · TX power · env. Fallback dùng
+    // function args khi BE chưa wire environment_params (graceful degrade).
+    /** @type {Record<string, string>} */
+    const envLabelMap = t.popup.envLabel;
+    const envName = env
+      ? envLabelMap[env.environment] ?? env.environment
+      : envLabelMap[environmentUsed] ?? environmentUsed;
+    const envFreq = env?.frequency_mhz ?? DEFAULT_FREQ_MHZ;
+    const envTx = env?.tx_power_dbm ?? txPowerUsed;
+    const envWrap = document.createElement("div");
+    envWrap.style.cssText = "margin-top:8px";
+    const envLabel2 = document.createElement("div");
+    envLabel2.style.cssText = "color:#64748b;font-size:10px;line-height:1.3";
+    envLabel2.textContent = t.popup.fields.environment;
+    envWrap.appendChild(envLabel2);
+    const envValue = document.createElement("div");
+    envValue.style.cssText = "color:#0f172a;font-weight:600;font-size:11px;margin-top:1px";
+    envValue.textContent = `${envFreq} MHz · ${envTx} dBm · ${envName}`;
+    envWrap.appendChild(envValue);
+    const envSub = document.createElement("div");
+    envSub.style.cssText = "color:#94a3b8;font-size:10px;line-height:1.25;margin-top:1px";
+    envSub.textContent = t.popup.fields.environmentSub;
+    envWrap.appendChild(envSub);
+    layer2.appendChild(envWrap);
+
+    // Bottleneck root-causes — list "Bottleneck có thể xảy ra ở..." khi BE
+    // phát hiện ≥1 cause; rỗng → fallback "link healthy" (informative cho user
+    // khi STRONG).
+    const causes = prediction.bottleneck_causes ?? [];
+    const causesWrap = document.createElement("div");
+    causesWrap.style.cssText = "margin-top:8px";
+    const causesLabel = document.createElement("div");
+    causesLabel.style.cssText = "color:#64748b;font-size:10px;line-height:1.3";
+    causesLabel.textContent = t.popup.bottleneckCauses.heading;
+    causesWrap.appendChild(causesLabel);
+    if (causes.length === 0) {
+      const none = document.createElement("div");
+      none.style.cssText =
+        "color:#0f172a;font-weight:500;font-size:11px;margin-top:2px";
+      none.textContent = t.popup.bottleneckCauses.none;
+      causesWrap.appendChild(none);
+    } else {
+      const ul = document.createElement("ul");
+      ul.style.cssText =
+        "margin:2px 0 0 0;padding-left:16px;color:#0f172a;font-size:11px;line-height:1.4";
+      for (const c of causes) {
+        const li = document.createElement("li");
+        li.textContent = t.popup.bottleneckCauses[c] ?? c;
+        ul.appendChild(li);
+      }
+      causesWrap.appendChild(ul);
+    }
+    layer2.appendChild(causesWrap);
 
     appendCopyLinkButton(layer2, lat, lng);
 
@@ -1903,6 +2063,44 @@ export function CoverageMap({ mode = "points" }) {
       toggleBtn.textContent = visible
         ? t.popup.toggleLayer2.show
         : t.popup.toggleLayer2.hide;
+      // Mobile (< Tailwind `md` = 768px): legend ở góc dưới-trái dễ bị popup
+      // Layer 2 đè. Ẩn tạm khi expand, hiện lại khi collapse. Desktop/tablet
+      // không cần vì viewport đủ rộng. visible = state TRƯỚC click (true =
+      // đang mở → user vừa nhấn để đóng).
+      if (window.innerWidth < 768) {
+        const legendEl = /** @type {HTMLElement | null} */ (
+          document.querySelector("[data-map-legend]")
+        );
+        if (legendEl) {
+          legendEl.style.visibility = visible ? "" : "hidden";
+        }
+      }
+      // Khi expand: popup phình to → maplibre KHÔNG tự re-evaluate anchor nên
+      // popup tràn mép map nếu marker gần biên. Sau reflow (rAF), đo bbox
+      // popup vs map → panBy để popup nằm gọn trong viewport (giữ pad 12px).
+      // panBy([dx, dy]): positive dx → screen view dịch phải (content trái),
+      // positive dy → screen view dịch xuống (content lên).
+      if (visible) return;
+      requestAnimationFrame(() => {
+        const map = mapRef.current;
+        if (!map) return;
+        const popupEl = /** @type {HTMLElement | null} */ (
+          root.closest(".maplibregl-popup")
+        );
+        if (!popupEl) return;
+        const pRect = popupEl.getBoundingClientRect();
+        const mRect = map.getContainer().getBoundingClientRect();
+        const pad = 12;
+        const overTop = Math.max(0, mRect.top + pad - pRect.top);
+        const overBottom = Math.max(0, pRect.bottom - (mRect.bottom - pad));
+        const overLeft = Math.max(0, mRect.left + pad - pRect.left);
+        const overRight = Math.max(0, pRect.right - (mRect.right - pad));
+        const dx = overRight - overLeft;
+        const dy = overBottom - overTop;
+        if (dx !== 0 || dy !== 0) {
+          map.panBy([dx, dy], { duration: 250 });
+        }
+      });
     });
 
     return root;
@@ -1919,8 +2117,10 @@ export function CoverageMap({ mode = "points" }) {
     const map = mapRef.current;
     if (!map) return;
 
-    const color =
-      STATUS_COLOR[prediction.coverage_status] ?? STATUS_COLOR_FALLBACK;
+    // Marker + line màu theo RSSI bin (SURVEY_RSSI_BINS) — khớp legend chip
+    // ở góc dưới-trái. Popup badge bên trong vẫn dùng STATUS_COLOR vì đó là
+    // semantic label "Phủ tốt/yếu", không phải RSSI value.
+    const color = colorForRssi(prediction.rssi_dbm);
     const el = document.createElement("div");
     el.style.width = PREDICT_MARKER_STYLE.size;
     el.style.height = PREDICT_MARKER_STYLE.size;
@@ -1936,6 +2136,14 @@ export function CoverageMap({ mode = "points" }) {
     }).setDOMContent(
       buildPopupNode(lat, lng, prediction, sfUsed, isAuto, txPowerUsed, environmentUsed, label),
     );
+    // Toggle "Xem chi tiết kỹ thuật" trong buildPopupNode ẩn legend khi expand;
+    // nếu user đóng popup lúc đang expand → restore legend ở đây.
+    popup.on("close", () => {
+      const legendEl = /** @type {HTMLElement | null} */ (
+        document.querySelector("[data-map-legend]")
+      );
+      if (legendEl) legendEl.style.visibility = "";
+    });
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat])
@@ -1980,6 +2188,42 @@ export function CoverageMap({ mode = "points" }) {
   }, [buildPopupNode]);
   // Phụ thuộc buildPopupNode (đã stable nhờ useCallback ở trên).
 
+  // Pin tạm: dot xám neutral, no rotation. Hiển thị tại vị trí user pick để xác
+  // nhận trước khi predict. Zoom 16 ≈ ~500m radius view tại vĩ độ Đà Nẵng.
+  const showPickMarker = useCallback(
+    /** @param {number} lat @param {number} lng */
+    (lat, lng) => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (pickMarkerRef.current) {
+        pickMarkerRef.current.setLngLat([lng, lat]);
+      } else {
+        const el = document.createElement("div");
+        el.style.width = "14px";
+        el.style.height = "14px";
+        el.style.borderRadius = "50%";
+        el.style.background = "#334155";
+        el.style.border = "3px solid white";
+        el.style.boxShadow = "0 0 6px rgba(0,0,0,0.5)";
+        pickMarkerRef.current = new maplibregl.Marker({
+          element: el,
+          anchor: "center",
+        })
+          .setLngLat([lng, lat])
+          .addTo(map);
+      }
+      map.flyTo({ center: [lng, lat], zoom: 16 });
+    },
+    [],
+  );
+
+  const hidePickMarker = useCallback(() => {
+    if (pickMarkerRef.current) {
+      pickMarkerRef.current.remove();
+      pickMarkerRef.current = null;
+    }
+  }, []);
+
   const clearAllSearchMarkers = useCallback(() => {
     for (const m of searchMarkersRef.current) m.remove();
     searchMarkersRef.current = [];
@@ -1992,7 +2236,9 @@ export function CoverageMap({ mode = "points" }) {
       });
     }
     setPredictMarkerCount(0);
-  }, []);
+    hidePickMarker();
+    setPickedCoords(null);
+  }, [hidePickMarker]);
 
   // Initial URL deep-link: predict 1 lần sau khi map mount.
   // Chỉ tab "Dự đoán điểm" mới tiêu thụ URL state — tab "Bản đồ điểm đo" và
@@ -2000,6 +2246,10 @@ export function CoverageMap({ mode = "points" }) {
   // ?lat=&lng= (do tab predict ghi sẵn từ lần dự đoán trước).
   useEffect(() => {
     if (mode !== "predict") return;
+    // Gate by mapLoaded: drawSearchMarker dùng mapRef.current, silent-return
+    // nếu map chưa load → marker bị mất khi tab-switch (URL vẫn còn ?lat=&lng=
+    // nên effect fire ngay, nhưng map chưa sẵn sàng).
+    if (!mapLoaded) return;
     if (deepLinkConsumedRef.current) return;
     const url = initialUrlRef.current;
     if (!url) return;
@@ -2016,6 +2266,9 @@ export function CoverageMap({ mode = "points" }) {
         // Deep-link không serialize tx_power/environment → fallback defaults
         // (14 dBm outdoor) khớp BE behavior khi field None trong PredictRequest.
         drawSearchMarker(url.lat, url.lng, prediction, DEFAULT_SF, true, DEFAULT_TX_POWER_DBM, "outdoor");
+        // Flow predict thường zoom 16 qua showPickMarker; deep-link không đi
+        // qua bước đó nên zoom thủ công cho khớp UX (gateway link cũng dùng 16).
+        mapRef.current?.flyTo({ center: [url.lng, url.lat], zoom: 16 });
       })
       .catch((e) => {
         console.error("Deep-link predict failed:", e);
@@ -2023,13 +2276,13 @@ export function CoverageMap({ mode = "points" }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, drawSearchMarker]);
+  }, [mode, mapLoaded, drawSearchMarker]);
 
   /**
-   * Address sub-tab callback: BE đã trả lat/lng + prediction → set picked
-   * coords (để URL state + sub-tab "1 điểm" thấy điểm cuối), drawSearchMarker
-   * append marker mới (giữ marker cũ — tương tự click thêm điểm), flyTo zoom
-   * 14. Marker label = display_name để phân biệt nhiều địa chỉ trên map.
+   * Address sub-tab callback: BE trả lat/lng + prediction nhưng FE chỉ dùng
+   * lat/lng để pin tạm + zoom 500m. Prediction discard — user phải bấm
+   * "Dự đoán" ở sub-tab "Click chọn" để xem kết quả (cho phép chọn lại
+   * outdoor/indoor trước khi predict). Auto-switch sub-tab để show nút.
    *
    * @param {{
    *   lat: number,
@@ -2041,21 +2294,53 @@ export function CoverageMap({ mode = "points" }) {
   const handleAddressResolved = useCallback(
     (r) => {
       setPickedCoords({ lat: r.lat, lng: r.lng });
-      drawSearchMarker(
-        r.lat,
-        r.lng,
-        r.prediction,
-        DEFAULT_SF,
-        true,
-        DEFAULT_TX_POWER_DBM,
-        "outdoor",
-        r.displayName,
-      );
-      writeUrlState(r.lat, r.lng);
-      mapRef.current?.flyTo({ center: [r.lng, r.lat], zoom: 14 });
+      setPredictError(null);
+      showPickMarker(r.lat, r.lng);
+      setPredictSubTab("single");
     },
-    [drawSearchMarker],
+    [showPickMarker],
   );
+
+  // Nút "Dùng GPS": navigator.geolocation.getCurrentPosition → setPickedCoords
+  // + showPickMarker (đã flyTo zoom 16). Map error.code → string Việt:
+  //   1 = PERMISSION_DENIED (user từ chối).
+  //   2 = POSITION_UNAVAILABLE (GPS off / signal yếu).
+  //   3 = TIMEOUT (vượt 15s).
+  // enableHighAccuracy=true để ưu tiên GPS thực thay vì IP geolocation;
+  // maximumAge=60000 reuse cache vị trí cũ nếu user spam click. HTTPS-only
+  // API → localhost dev OK, deploy phải https (đã có tunnel/CDN).
+  const tPredict = strings.coverageMap.predictPanel;
+  const handleUseGps = useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setGpsError(tPredict.gpsUnsupported);
+      return;
+    }
+    setGpsBusy(true);
+    setGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setPickedCoords({ lat, lng });
+        setPredictError(null);
+        showPickMarker(lat, lng);
+        setGpsBusy(false);
+      },
+      (err) => {
+        const msg =
+          err.code === 1
+            ? tPredict.gpsPermissionDenied
+            : err.code === 2
+              ? tPredict.gpsUnavailable
+              : err.code === 3
+                ? tPredict.gpsTimeout
+                : tPredict.gpsGenericError;
+        setGpsError(msg);
+        setGpsBusy(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
+    );
+  }, [showPickMarker, tPredict]);
 
   /**
    * Predict mode: chạy prediction từ pickedCoords + environment, vẽ marker
@@ -2085,6 +2370,7 @@ export function CoverageMap({ mode = "points" }) {
         DEFAULT_TX_POWER_DBM,
         environment,
       );
+      hidePickMarker();
       writeUrlState(lat, lng);
     } catch (e) {
       console.error("Predict submit failed:", e);
@@ -2142,39 +2428,72 @@ export function CoverageMap({ mode = "points" }) {
         )}
         */}
 
-        {/* Live badge: chỉ hiện khi realtime mode đang ON ở tab "me". Đặt
-            top-center vì panel filter chiếm góc top-left và view-mode toggle
-            chiếm top-right. */}
+        {/* Badge chuyến khảo sát trực tiếp: top-center khi realtime ON +
+            contributor=me + mode=points. 2 trạng thái:
+            - chưa Bắt đầu (running=false): nút Bắt đầu (disabled khi chưa
+              chọn nguồn).
+            - đang chạy (running=true): LIVE + counter + lastSeen + Kết thúc.
+            Pointer-events-auto để nút click được. */}
         {realtimeEnabled && contributor === "me" && mode === "points" && (
-          <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
-              <span className="font-semibold text-red-700">
-                {t.filters.realtime.liveBadge}
-              </span>
-            </div>
-            <div className="text-slate-600">
-              {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
-            </div>
-            <div className="text-slate-500">
-              {t.filters.realtime.lastSeenLabel}:{" "}
-              {formatLastSeenLabel(
-                lastSeenAt,
-                nowTick,
-                t.filters.realtime,
-              )}
-            </div>
+          <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
+            {liveSessionRunning && (
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                  <span className="font-semibold text-red-700">
+                    {t.filters.realtime.liveBadge}
+                  </span>
+                </div>
+                <div className="text-slate-600">
+                  {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
+                </div>
+                <div className="text-slate-500">
+                  {t.filters.realtime.lastSeenLabel}:{" "}
+                  {formatLastSeenLabel(
+                    lastSeenAt,
+                    nowTick,
+                    t.filters.realtime,
+                  )}
+                </div>
+              </div>
+            )}
+            {liveSessionRunning ? (
+              <button
+                type="button"
+                onClick={handleEndSession}
+                disabled={endingBusy}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                {endingBusy
+                  ? t.filters.realtime.ending
+                  : t.filters.realtime.endButton}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartSession}
+                disabled={liveSessionSourceId === null}
+                title={
+                  liveSessionSourceId === null
+                    ? t.filters.realtime.startNeedSourceHint
+                    : undefined
+                }
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                {t.filters.realtime.startButton}
+              </button>
+            )}
           </div>
         )}
 
-        {/* Container anchor cả trên + dưới: `bottom-44` (=11rem) chừa zone
-            cho legend ở góc dưới-trái. `pointer-events-none` để vùng trống
-            (khi panel collapsed) không chặn map click; children tự bật lại.
-            Mobile (<md): full-width-ish, top-anchored, `bottom-36` (=9rem=144px)
-            để chừa chỗ cho legend ở bottom-left không bị panel đè. `right-14`
-            (=56px) chừa chỗ cho NavigationControl + view-mode toggle ở top-right
-            không bị panel che. */}
-        <div className="pointer-events-none absolute z-10 flex flex-col gap-2 top-1 bottom-36 left-2 right-14 [&>*]:pointer-events-auto md:top-3 md:bottom-52 md:left-3 md:right-auto">
+        {/* Container anchor cả trên + dưới. `pointer-events-none` để vùng
+            trống (khi panel collapsed) không chặn map click; children tự bật
+            lại. `right-14` (=56px) chừa chỗ cho NavigationControl +
+            view-mode toggle ở top-right không bị panel che.
+            Bottom buffer chừa zone cho MapLegend (bottom-10 = 40px + ~120px
+            chip+counts) — bump lên `bottom-48` (=192px) mobile / `md:bottom-64`
+            (=256px) để filter panel mở full không bị legend đè ở mép dưới. */}
+        <div className="pointer-events-none absolute z-10 flex flex-col gap-2 top-1 bottom-48 left-2 right-14 [&>*]:pointer-events-auto md:top-3 md:bottom-64 md:left-3 md:right-auto">
           {mode === "predict" ? (
             !predictPanelOpen ? (
               <button
@@ -2298,6 +2617,36 @@ export function CoverageMap({ mode = "points" }) {
                         </div>
                       </fieldset>
 
+                      <button
+                        type="button"
+                        onClick={handleUseGps}
+                        disabled={gpsBusy}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                          className="h-3.5 w-3.5"
+                          aria-hidden
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M10 2a.75.75 0 01.75.75v.764a6.5 6.5 0 015.736 5.736h.764a.75.75 0 010 1.5h-.764a6.5 6.5 0 01-5.736 5.736v.764a.75.75 0 01-1.5 0v-.764a6.5 6.5 0 01-5.736-5.736H2.75a.75.75 0 010-1.5h.764A6.5 6.5 0 019.25 3.514V2.75A.75.75 0 0110 2zM5 10a5 5 0 1010 0 5 5 0 00-10 0zm5-2a2 2 0 100 4 2 2 0 000-4z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                        {gpsBusy
+                          ? t.predictPanel.gpsLocating
+                          : t.predictPanel.gpsButton}
+                      </button>
+
+                      {gpsError && (
+                        <div className="text-[11px] text-red-600">
+                          {gpsError}
+                        </div>
+                      )}
+
                       {!pickedCoords && (
                         <div className="text-[11px] leading-snug text-slate-500">
                           {t.predictPanel.hint}
@@ -2342,33 +2691,77 @@ export function CoverageMap({ mode = "points" }) {
               </div>
             )
           ) : mode === "points" ? (
-            <PointsFilterPanel
-              user={user}
-              contributor={contributor}
-              onContributorChange={setContributor}
-              linkedSourceId={linkedSourceId}
-              onLinkedSourceChange={setLinkedSourceId}
-              deviceId={deviceId}
-              onDeviceIdChange={setDeviceId}
-              sourceType={sourceType}
-              onSourceTypeChange={setSourceType}
-              sfList={sfList}
-              onSfListChange={setSfList}
-              rssiRange={rssiRange}
-              onRssiRangeChange={setRssiRange}
-              snrRange={snrRange}
-              onSnrRangeChange={setSnrRange}
-              timeRange={timeRange}
-              onTimeRangeChange={setTimeRange}
-              sortConfig={sortConfig}
-              onSortConfigChange={setSortConfig}
-              realtimeEnabled={realtimeEnabled}
-              onRealtimeEnabledChange={setRealtimeEnabled}
-              autoFollowEnabled={autoFollowEnabled}
-              onAutoFollowEnabledChange={setAutoFollowEnabled}
-              connectionLinesEnabled={showConnectionLines}
-              onConnectionLinesEnabledChange={setShowConnectionLines}
-            />
+            // Layout 2 cột: icons-column (left) stacked vertical, panels-column
+            // (right) render body khi tương ứng open. Tách icon ra cột riêng
+            // để mở 1 panel không push icon của panel còn lại xuống — tránh
+            // layout shift gây nhầm khi click qua lại.
+            <div className="flex max-h-full min-h-0 items-start gap-2">
+              <div className="flex flex-col gap-2 shrink-0">
+                <PointsFilterToggleBtn
+                  open={pointsFilterOpen}
+                  onToggle={() => setPointsFilterOpen((v) => !v)}
+                />
+                {/* Realtime toggle luôn hiển thị (kể cả guest). Body kiểm
+                    tra login trước khi cho tick "Bật theo dõi trực tiếp". */}
+                <RealtimeToggleBtn
+                  open={realtimePanelOpen}
+                  onToggle={() => setRealtimePanelOpen((v) => !v)}
+                  realtimeEnabled={realtimeEnabled}
+                />
+              </div>
+              {(pointsFilterOpen || realtimePanelOpen) && (
+                <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col gap-2 md:w-64 md:flex-initial">
+                  {pointsFilterOpen && (
+                    <PointsFilterBody
+                      user={user}
+                      contributor={contributor}
+                      onContributorChange={setContributor}
+                      linkedSourceId={linkedSourceId}
+                      onLinkedSourceChange={setLinkedSourceId}
+                      deviceId={deviceId}
+                      onDeviceIdChange={setDeviceId}
+                      sourceType={sourceType}
+                      onSourceTypeChange={setSourceType}
+                      sfList={sfList}
+                      onSfListChange={setSfList}
+                      rssiRange={rssiRange}
+                      onRssiRangeChange={setRssiRange}
+                      snrRange={snrRange}
+                      onSnrRangeChange={setSnrRange}
+                      timeRange={timeRange}
+                      onTimeRangeChange={setTimeRange}
+                      connectionLinesEnabled={showConnectionLines}
+                      onConnectionLinesEnabledChange={setShowConnectionLines}
+                    />
+                  )}
+                  {realtimePanelOpen && (
+                    <RealtimeBody
+                      user={user}
+                      onRequestLogin={onRequestLogin}
+                      realtimeEnabled={realtimeEnabled}
+                      onRealtimeEnabledChange={(v) => {
+                        setRealtimeEnabled(v);
+                        // Live session start effect + badge UI gate
+                        // `contributor === "me"` — auto-switch khi bật để
+                        // tránh silent fail nếu user đang xem community/all.
+                        if (v) setContributor("me");
+                        // Untick mid-session: clear running để re-tick không
+                        // tạo batch mới chồng lên batch cũ chưa close (batch
+                        // cũ vẫn còn DB, user xoá tay ở "Lịch sử upload").
+                        else setLiveSessionRunning(false);
+                      }}
+                      autoFollowEnabled={autoFollowEnabled}
+                      onAutoFollowEnabledChange={setAutoFollowEnabled}
+                      liveOnlyEnabled={liveOnlyEnabled}
+                      onLiveOnlyEnabledChange={setLiveOnlyEnabled}
+                      liveSessionSourceId={liveSessionSourceId}
+                      onLiveSessionSourceIdChange={setLiveSessionSourceId}
+                      liveSessionActive={liveSessionRunning}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           ) : mode === "heatmap" ? (
             // Tab "Bản đồ phủ sóng": tạm ẩn minsf — chỉ render EstimatePanel.
             // Khi bật lại, restore conditional `coverageViewMode === "minsf"`
@@ -2388,7 +2781,7 @@ export function CoverageMap({ mode = "points" }) {
             phủ sóng" vì RSSI band không áp dụng cho min-SF map (đã có
             legend riêng trong MinSFPanel). */}
         {mode !== "heatmap" && (
-          <div className="absolute bottom-10 left-2 z-10">
+          <div className="absolute bottom-10 left-2 z-10" data-map-legend>
             <MapLegend
               gatewayCount={gatewaysQ.data?.total}
               surveyCount={mode === "points" ? surveysQ.data?.total : null}
@@ -2407,6 +2800,14 @@ export function CoverageMap({ mode = "points" }) {
             <div className="font-semibold">{t.tileErrorTitle}</div>
             <div className="mt-1">{tileError}</div>
           </div>
+        )}
+
+        {endModal && (
+          <AlertModal
+            title={endModal.title}
+            body={endModal.body}
+            onClose={() => setEndModal(null)}
+          />
         )}
       </div>
     </div>

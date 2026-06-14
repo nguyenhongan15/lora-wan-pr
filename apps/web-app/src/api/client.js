@@ -42,10 +42,32 @@ export const LinkBudget = z.object({
   status: z.enum(["strong", "marginal", "weak", "no_coverage"]),
 });
 
+// Signal-quality bundle (BE v1.6+) — PDR/BER/FER suy từ SNR margin, ToA/jitter
+// từ Semtech AN1200.13, noise floor UL = per-gateway calibrated. Optional để
+// graceful degrade với BE chưa rebuild.
+export const SignalQuality = z.object({
+  pdr: z.number().min(0).max(1),
+  ber: z.number().nonnegative(),
+  fer: z.number().min(0).max(1),
+  bandwidth_hz: z.number().int().positive(),
+  time_on_air_ms: z.number().nonnegative(),
+  jitter_ms: z.number().nonnegative(),
+  shadow_fading_sigma_db: z.number().nonnegative(),
+  uplink_noise_floor_dbm: z.number(),
+  downlink_noise_floor_dbm: z.number(),
+});
+
+export const EnvironmentParams = z.object({
+  frequency_mhz: z.number().positive(),
+  tx_power_dbm: z.number(),
+  environment: z.enum(["outdoor", "indoor", "indoor_deep"]),
+  spreading_factor: z.number().int().min(7).max(12),
+});
+
 export const Prediction = z.object({
   // rssi_dbm/snr_db giữ nghĩa = downlink (backward compat); coverage_status =
-  // worst-of(uplink, downlink). Field uplink/downlink/bottleneck là optional
-  // để gracefully degrade với BE chưa rebuild.
+  // worst-of(uplink, downlink). Field uplink/downlink là optional để gracefully
+  // degrade với BE chưa rebuild.
   rssi_dbm: z.number(),
   snr_db: z.number(),
   coverage_status: z.enum(["strong", "marginal", "weak", "no_coverage"]),
@@ -55,13 +77,30 @@ export const Prediction = z.object({
   recommended_sf: z.number().int().min(7).max(12),
   uplink: LinkBudget.optional(),
   downlink: LinkBudget.optional(),
-  bottleneck: z.enum(["uplink", "downlink", "both_ok"]).optional(),
   // Path loss tổng (basic transmission + BEL nếu có); UL/DL đối xứng. Default 0
   // để graceful degrade với BE chưa rebuild.
   path_loss_db: z.number().default(0),
   // Khoảng cách target → serving gateway (km). Serving GW chọn theo
   // min(UL_margin, DL_margin) = "gateway tín hiệu mạnh nhất" — không phải nearest.
   distance_to_serving_gateway_km: z.number().nonnegative().default(0),
+  signal_quality: SignalQuality.optional(),
+  environment_params: EnvironmentParams.optional(),
+  // Số gateway phủ sóng được trong 30 km (status != no_coverage). 1 = single
+  // point of failure, ≥2 = diversity. Default 0 cho graceful degrade.
+  covering_gateway_count: z.number().int().nonnegative().default(0),
+  // Root-cause flags của bottleneck — danh sách nguyên nhân khả năng làm link
+  // yếu. Rỗng = link healthy. Default [] cho graceful degrade với BE cũ.
+  bottleneck_causes: z
+    .array(
+      z.enum([
+        "path_loss_high",
+        "snr_low",
+        "interference",
+        "tx_power_cap",
+        "sf_mismatch",
+      ]),
+    )
+    .default([]),
 });
 
 export const ProblemDetails = z.object({
@@ -78,6 +117,8 @@ export const ProblemDetails = z.object({
  * @typedef {z.infer<typeof PredictRequest>} PredictRequestT
  * @typedef {z.infer<typeof Prediction>} PredictionT
  * @typedef {z.infer<typeof LinkBudget>} LinkBudgetT
+ * @typedef {z.infer<typeof SignalQuality>} SignalQualityT
+ * @typedef {z.infer<typeof EnvironmentParams>} EnvironmentParamsT
  * @typedef {z.infer<typeof ProblemDetails>} ProblemDetailsT
  */
 
@@ -448,8 +489,6 @@ export async function lookupCoverageBatch(req, signal) {
 
 /**
  * @typedef {"community" | "me" | `user/${string}`} ContributorMode
- * @typedef {"timestamp" | "rssi" | "snr"} SortBy
- * @typedef {"asc" | "desc"} SortOrder
  *
  * GET /api/v1/survey/training — backend resolver: edge/filters.py.
  *   contributor=community (default): public map; backend filter
@@ -477,8 +516,6 @@ export async function lookupCoverageBatch(req, signal) {
  *   timeFrom?: string,
  *   timeTo?: string,
  *   since?: string,
- *   sortBy?: SortBy,
- *   sortOrder?: SortOrder,
  *   rankFrom?: number,
  *   rankTo?: number,
  * }=} opts
@@ -512,12 +549,6 @@ export async function listSurveyTraining(bbox, opts) {
   if (opts?.timeFrom) url.searchParams.set("time_from", opts.timeFrom);
   if (opts?.timeTo) url.searchParams.set("time_to", opts.timeTo);
   if (opts?.since) url.searchParams.set("since", opts.since);
-  if (opts?.sortBy && opts.sortBy !== "timestamp") {
-    url.searchParams.set("sort_by", opts.sortBy);
-  }
-  if (opts?.sortOrder && opts.sortOrder !== "desc") {
-    url.searchParams.set("sort_order", opts.sortOrder);
-  }
   if (opts?.rankFrom != null) url.searchParams.set("rank_from", String(opts.rankFrom));
   if (opts?.rankTo != null) url.searchParams.set("rank_to", String(opts.rankTo));
 

@@ -28,6 +28,8 @@ from lora_coverage_api.edge import deps
 from lora_coverage_api.edge.app import create_app
 from lora_coverage_api.infrastructure.db import make_engine
 
+pytestmark = pytest.mark.integration
+
 _TEST_GATEWAY_CODE = "test-pred-danang"
 
 
@@ -126,7 +128,6 @@ def test_predict_near_danang_gateway(client: TestClient, _seed_danang_gateway: N
     assert body["confidence"]["method"] == "physics"
     assert body["model_version"].startswith("stage1-")
     # Bidirectional fields
-    assert body["bottleneck"] in ("uplink", "downlink", "both_ok")
     for direction in ("uplink", "downlink"):
         link = body[direction]
         assert link["status"] in ("strong", "marginal", "weak", "no_coverage")
@@ -200,4 +201,3 @@ def test_predict_accepts_device_overrides_within_bounds(
     assert r.status_code == 200, r.text
     body = r.json()
     assert "uplink" in body and "downlink" in body
-    assert body["bottleneck"] in ("uplink", "downlink", "both_ok")

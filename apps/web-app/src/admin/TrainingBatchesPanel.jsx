@@ -134,9 +134,27 @@ function BatchRow({ item, onDelete }) {
     : "—";
   const approvedAt = new Date(item.latest_approved_at).toLocaleString("vi-VN");
   const deleted = !!item.batch_deleted_at;
+  const roleKey = item.uploader_is_super_admin
+    ? "super_admin"
+    : item.uploader_is_admin
+      ? "admin"
+      : "user";
+  const roleBadgeClass =
+    roleKey === "super_admin"
+      ? "bg-violet-100 text-violet-800"
+      : roleKey === "admin"
+        ? "bg-sky-100 text-sky-800"
+        : "bg-slate-100 text-slate-700";
   return (
     <tr className="border-t border-slate-200">
       <td className="py-1 pr-3 text-slate-700">{item.uploader_email ?? "—"}</td>
+      <td className="py-1 pr-3">
+        <span
+          className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${roleBadgeClass}`}
+        >
+          {t.roleLabel[roleKey]}
+        </span>
+      </td>
       <td className="py-1 pr-3 text-slate-700">{kindLabel}</td>
       <td className="py-1 pr-3 text-slate-700">
         {item.filename ?? "—"}

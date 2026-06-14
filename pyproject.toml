@@ -94,4 +94,10 @@ asyncio_mode = "auto"
 testpaths = [
     "services/api-service/tests",
 ]
-addopts = "-ra --strict-markers --strict-config"
+# `integration` test cần DB sống + tốn nhiều phút (vd. rebuild pipeline ~17min).
+# Default skip để `uv run pytest` ở root pre-push chạy nhanh; opt-in qua
+# `uv run pytest -m integration` khi muốn chạy thật.
+addopts = "-ra --strict-markers --strict-config -m 'not integration'"
+markers = [
+    "integration: yêu cầu DATABASE_URL trỏ tới DB sống + migrations đã apply; skip default",
+]

@@ -11,7 +11,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, Header
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from ..application.address_service import (
     AddressResolutionService,
@@ -236,14 +236,30 @@ def _extract_bearer(authorization: str | None) -> str:
     return parts[1].strip()
 
 
+_TOUCH_LAST_SEEN = text(
+    # Throttle: chi UPDATE neu last_seen_at cu hon 30s — tranh hammer DB tren
+    # burst request. Atomic single round-trip, ROW UPDATE chi xay ra khi can.
+    "UPDATE auth.users SET last_seen_at = now() "
+    "WHERE id = :id AND ("
+    "  last_seen_at IS NULL OR last_seen_at < now() - interval '30 seconds'"
+    ")"
+)
+
+
 def current_user(
     identity: Annotated[IdentityService, Depends(identity_service)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn."""
+    """FastAPI dependency: resolve User từ Bearer token, raise nếu sai/hết hạn.
+
+    Side-effect: touch `users.last_seen_at` (throttle 30s) → admin stats
+    "User online" count distinct users active trong 5 phut gan nhat.
+    """
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
-        return identity.current_user(conn, token)
+        user = identity.current_user(conn, token)
+        conn.execute(_TOUCH_LAST_SEEN, {"id": user.id})
+    return user
 
 
 def current_user_optional(
@@ -260,7 +276,9 @@ def current_user_optional(
         return None
     token = _extract_bearer(authorization)
     with _engine().begin() as conn:
-        return identity.current_user(conn, token)
+        user = identity.current_user(conn, token)
+        conn.execute(_TOUCH_LAST_SEEN, {"id": user.id})
+    return user
 
 
 def require_admin(user: Annotated[User, Depends(current_user)]) -> User:

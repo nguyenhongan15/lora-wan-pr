@@ -108,7 +108,7 @@ export const strings = {
         },
         {
           num: "F · 03",
-          title: "Dự đoán tín hiệu tại vị trí cụ thể",
+          title: "Dự đoán tín hiệu tại vị trí cụ thể (lỗi-đang fix)",
           desc: "Chọn vị trí trên bản đồ hoặc nhập địa chỉ địa điểm trên địa bàn thành phố Đà Nẵng, hệ thống sẽ phân tích và đưa ra kết quả dự đoán về chất lượng tín hiệu tại vị trí đó.",
           cta: "Mở Dự đoán",
           target: "predict",
@@ -116,11 +116,11 @@ export const strings = {
         },
         {
           num: "F · 04",
-          title: "Tra cứu theo địa chỉ hoặc GPS",
-          desc: "Nhập địa chỉ - hệ thống geocode qua chuỗi Nominatim / VietMap / Goong / Google rồi dự đoán RSSI/SNR/SF tại điểm đó. Cũng hỗ trợ lấy vị trí GPS hiện tại của trình duyệt.",
-          cta: "Mở Tra cứu địa chỉ",
-          target: "predict",
-          mockUrl: "lora-estimate-map/#page=predict",
+          title: "Theo dõi trực tiếp chuyến đi khảo sát",
+          desc: "Liên kết với ChirpStack webhook để tự động cập nhật điểm đo mới nhất lên bản đồ khi đang khảo sát thực địa. Theo dõi tiến trình khảo sát theo thời gian thực.",
+          cta: "Xem ngay",
+          target: "map",
+          mockUrl: "lora-estimate-map/#page=map",
         },
         {
           num: "F · 05",
@@ -260,98 +260,80 @@ export const strings = {
       gatewayAddressLoading: "Đang tải địa chỉ…",
       gatewayAddressError: "Không lấy được địa chỉ",
       searchStatus: "Trạng thái",
-      // Sai số (1σ ~68% CI) + Độ chính xác (95% CI ~1.96σ) — tính từ σ²
-      // shadow fading của môi trường (urban σ=8, suburban σ=6, rural σ=4).
-      errorMargin: {
-        label: "Sai số",
-        /** @param {number} sigmaDb */
-        value: (sigmaDb) => `±${sigmaDb.toFixed(1)} dB (1σ)`,
-      },
-      accuracy: {
-        label: "Độ chính xác (95%)",
-        /** @param {number} sigmaDb */
-        value: (sigmaDb) => `±${(1.96 * sigmaDb).toFixed(1)} dB`,
-      },
       // Header cho popup ở tab "Dự đoán điểm".
       predictTitle: "Điểm dự đoán",
       /** @param {number} lat @param {number} lng */
       coords: (lat, lng) => `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
       // Layer 1 — câu giải thích ngắn cho end-user (per business-logic §4.2).
       layer1Sentence: {
-        strong: "Phủ sóng tốt — gateway gần, link ổn định.",
-        marginal: "Phủ tạm — link healthy nhưng SNR sát ngưỡng. Vẫn dùng được.",
-        weak: "Phủ yếu — gần ngưỡng sensitivity. Nên nâng SF hoặc đặt thêm gateway.",
-        no_coverage: "Không phủ — không có gateway trong tầm.",
+        strong: "Phủ sóng tốt — tín hiệu mạnh, truyền nhận ổn định, ít mất gói.",
+        marginal: "Phủ sóng trung bình — vẫn dùng được nhưng tỉ lệ rớt gói tăng khi có nhiễu hoặc vật cản.",
+        weak: "Phủ sóng yếu — sát ngưỡng thu của gateway, dễ mất gói. Nên tăng SF hoặc đặt thêm gateway gần hơn.",
+        no_coverage: "Không có sóng — không có gateway nào đủ tín hiệu trong phạm vi phục vụ tại vị trí này.",
       },
-      // Layer 2 — chi tiết kỹ thuật cho engineer (P1/P2).
-      usedSf: {
-        label: "SF dùng",
-        /** @param {number} sf */
-        value: (sf) => `SF${sf}`,
+      // Layer 2 — 11 mục kết quả dự đoán (RSSI, SNR, PDR, can nhiễu, SF,
+      // băng thông, đa đường & che chắn, BER/FER, độ trễ, gateway, môi trường).
+      fields: {
+        rssi: "Cường độ tín hiệu RSSI",
+        snr: "Tỷ số tín hiệu/nhiễu SNR",
+        pdr: "Tỷ lệ thành công gói tin (PDR)",
+        pdrSub: "ước lượng từ SNR margin",
+        interference: "Mức can nhiễu",
+        interferenceSub: "noise floor UL · DL",
+        sf: "Hệ số trải phổ SF",
+        sfMatch: "khớp khuyến nghị",
+        /** @param {number} rec */
+        sfRecommended: (rec) => `khuyến nghị: SF${rec}`,
+        bandwidth: "Băng thông",
+        bandwidthSub: "AS923-2 mặc định",
+        shadowing: "Đa đường & che chắn",
+        shadowingSub: "σ log-normal shadowing",
+        berFer: "Tỷ lệ lỗi BER / FER",
+        berFerSub: "LoRa CSS waterfall theo SNR margin",
+        latency: "Độ trễ & biến động",
+        /** @param {number} jitterMs */
+        latencySub: (jitterMs) => `biến động ±${jitterMs.toFixed(0)} ms`,
+        gateway: "Gateway kết nối",
+        coveringGateways: "Số gateway phủ sóng",
+        /** @param {number} n */
+        coveringGatewaysSub: (n) =>
+          n === 0
+            ? "không gateway nào đủ tín hiệu"
+            : n === 1
+              ? "chỉ 1 gateway — single point of failure"
+              : `${n} gateway — có dự phòng`,
+        environment: "Thông số môi trường",
+        environmentSub: "tần số · công suất TX · loại môi trường",
+        unavailable: "BE chưa hỗ trợ",
       },
-      usedTxPower: {
-        label: "Công suất phát",
-        /** @param {number} dbm */
-        value: (dbm) => `${dbm} dBm`,
-      },
-      usedEnvironment: {
-        label: "Môi trường",
-      },
-      // Path loss tổng (basic + BEL nếu có). Hữu ích để engineer debug:
-      // RSSI thấp vì terrain hay vì building entry loss.
-      pathLoss: {
-        label: "Suy hao đường truyền",
-        /** @param {number} db */
-        value: (db) => `${db.toFixed(1)} dB`,
+      envLabel: {
+        outdoor: "Ngoài trời",
+        indoor: "Trong nhà",
+        indoor_deep: "Trong nhà (sâu)",
       },
       // Khoảng cách target → serving gateway (gateway có tín hiệu mạnh nhất,
       // chọn theo min(UL_margin, DL_margin), không phải nearest geographic).
       distanceToGateway: {
-        label: "Khoảng cách đến gateway",
         /** @param {number} km */
         value: (km) => (km < 1 ? `${(km * 1000).toFixed(0)} m` : `${km.toFixed(2)} km`),
       },
-      // Block thông số đường truyền dữ liệu LoRaWAN (bitrate, ToA, max payload)
-      // — pure function của SF, BW=125kHz, CR=4/5 (AS923-2 DT=0).
-      dataLink: {
-        sectionTitle: "Đường truyền dữ liệu",
-        bitrate: "Tốc độ",
-        timeOnAir: "Thời gian phát 23 B",
-        maxPayload: "Payload tối đa",
-        /** @param {number} bytes */
-        maxPayloadValue: (bytes) => `${bytes} byte`,
-      },
-      recommendedSf: {
-        label: "SF khuyến nghị",
-        /** @param {number} sf */
-        value: (sf) => `SF${sf}`,
-      },
-      sfMismatchHint: "(khác SF dùng)",
-      nearestGateway: {
-        label: "Gateway phục vụ",
-        none: "không xác định",
-      },
+      nearestGatewayNone: "không xác định",
       toggleLayer2: {
         show: "Xem chi tiết kỹ thuật ▾",
         hide: "Ẩn chi tiết ▴",
       },
-      // Bottleneck pill ở Layer 1 — siêu ngắn để fit cạnh status badge.
-      bottleneckShort: {
-        uplink: "Bottleneck: Up Link",
-        downlink: "Bottleneck: Down Link",
-        both_ok: "Cân bằng 2 chiều",
-      },
-      // UL/DL mini-table trong Layer 2.
-      bidir: {
-        sectionTitle: "Dự đoán 2 chiều",
-        ul: "UL(device→GW)",
-        dl: "DL(GW→device)",
-        colDir: "",
-        colRssi: "RSSI",
-        colSnr: "SNR",
-        colMargin: "Margin",
-        /** @param {number} db */
-        marginValue: (db) => `${db >= 0 ? "+" : ""}${db.toFixed(1)} dB`,
+      // 5 root-cause flag — "Bottleneck có thể xảy ra ở…" + nhãn dài cho từng cause.
+      bottleneckCauses: {
+        heading: "Bottleneck có thể xảy ra ở…",
+        none: "Không phát hiện nguyên nhân rõ rệt — link healthy.",
+        path_loss_high: "Suy hao đường truyền lớn (path loss > 140 dB)",
+        snr_low: "Tỷ số tín hiệu/nhiễu sát ngưỡng decode (SNR margin < 3 dB)",
+        interference:
+          "Can nhiễu đồng kênh — noise floor uplink cao hơn nhiễu nhiệt ≥ 7 dB",
+        tx_power_cap:
+          "Công suất phát đã chạm trần AS923-2 (14 dBm) mà uplink vẫn là chiều yếu",
+        sf_mismatch:
+          "Hệ số trải phổ chọn thấp hơn mức khuyến nghị — đổi sang SF khuyến nghị để cải thiện",
       },
       copyLink: {
         label: "Sao chép liên kết",
@@ -469,11 +451,22 @@ export const strings = {
       },
       realtime: {
         sectionLabel: "Theo dõi trực tiếp",
+        panelToggle: {
+          open: "Mở bảng theo dõi trực tiếp",
+          close: "Đóng bảng theo dõi",
+          title: "Theo dõi trực tiếp",
+        },
+        loginRequiredHint:
+          "Bạn cần đăng nhập để bật theo dõi trực tiếp. Bấm để đăng nhập.",
+        loginRequiredCta: "Đăng nhập để tiếp tục",
         toggleLabel: "Bật theo dõi trực tiếp",
         toggleHint:
           "Tự cập nhật điểm đo từ thiết bị mỗi vài giây. Tự tắt sau 15 phút không có gói tin mới.",
         autoFollowLabel: "Tự theo dõi vị trí",
         autoFollowHint: "Tự dịch bản đồ tới điểm đo mới nhất.",
+        liveOnlyLabel: "Chỉ hiện dữ liệu trực tiếp",
+        liveOnlyHint:
+          "Ẩn các điểm đo cũ, chỉ hiển thị điểm ghi được trong chuyến khảo sát hiện tại.",
         liveBadge: "● TRỰC TIẾP",
         lastSeenLabel: "Mới nhất",
         lastSeenNever: "chưa có",
@@ -483,6 +476,31 @@ export const strings = {
         lastSeenMinutesAgo: (m) => `${m} phút trước`,
         /** @param {number} n */
         sessionCounter: (n) => `Đã ghi ${n} điểm`,
+        startButton: "Bắt đầu",
+        startNeedSourceHint: "Chọn nguồn dữ liệu ở panel filter trước khi bắt đầu.",
+        endButton: "Kết thúc",
+        ending: "Đang đồng bộ…",
+        endSuccessTitle: "Hoàn tất chuyến khảo sát",
+        /** @param {number} n */
+        endSuccessBody: (n) =>
+          `Đã đồng bộ ${n} điểm đo mới vào bản đồ của bạn. Mở "Quản lý dữ liệu" để xem batch vừa tạo.`,
+        endEmptyTitle: "Không có điểm đo mới",
+        endEmptyBody:
+          "Không có điểm đo nào mới được ghi nhận trong chuyến khảo sát này.",
+        endErrorTitle: "Không thể kết thúc",
+        /** @param {string} err */
+        endErrorBody: (err) =>
+          `Đồng bộ thất bại: ${err}. Bạn có thể thử lại sau hoặc đồng bộ thủ công ở trang "Nguồn dữ liệu".`,
+        endNeedSourceTitle: "Chọn nguồn dữ liệu",
+        endNeedSourceBody:
+          'Hãy chọn nguồn dữ liệu để ghi chuyến khảo sát ngay dưới ô "Bật theo dõi trực tiếp" rồi bấm "Kết thúc".',
+        sourcePickerLabel: "Nguồn ghi dữ liệu chuyến này",
+        sourcePickerHint:
+          "Điểm đo trong chuyến sẽ được đồng bộ về 1 batch mới của nguồn này.",
+        sourcePickerPlaceholder: "— Chưa chọn nguồn —",
+        sourcePickerNoActive:
+          "Chưa có nguồn nào ở trạng thái Đang dùng. Vào trang Nguồn dữ liệu để thêm/bật.",
+        sourcePickerErrorLoad: "Không tải được danh sách nguồn.",
       },
       timeRange: {
         legend: "Khoảng thời gian",
@@ -491,18 +509,6 @@ export const strings = {
           "24h": "24 giờ qua",
           "7d": "7 ngày qua",
           "30d": "30 ngày qua",
-        },
-      },
-      sort: {
-        legend: "Sắp xếp",
-        sortBy: {
-          timestamp: "Thời gian",
-          rssi: "RSSI",
-          snr: "SNR",
-        },
-        sortOrder: {
-          desc: "Mạnh → yếu",
-          asc: "Yếu → mạnh",
         },
       },
       rssi: {
@@ -533,11 +539,20 @@ export const strings = {
       submitting: "Đang dự đoán…",
       error: "Dự đoán thất bại — thử lại.",
       clearAll: "Xoá tất cả điểm dự đoán",
+      gpsButton: "Dùng vị trí của tôi (GPS)",
+      gpsLocating: "Đang định vị…",
+      gpsPermissionDenied:
+        "Trình duyệt từ chối quyền truy cập vị trí. Bật quyền vị trí cho trang này rồi thử lại.",
+      gpsUnavailable:
+        "Không lấy được vị trí. Kiểm tra GPS thiết bị / kết nối mạng rồi thử lại.",
+      gpsTimeout: "Quá thời gian định vị. Thử lại ở nơi thoáng (gần cửa sổ).",
+      gpsUnsupported: "Trình duyệt không hỗ trợ định vị GPS.",
+      gpsGenericError: "Định vị GPS lỗi không xác định.",
       addressTab: {
         label: "Địa chỉ",
         placeholder: "VD: 32 Cao Thắng, Hải Châu, Đà Nẵng",
         hint: "Nhập địa chỉ cụ thể vị trí cần dự đoán.",
-        submit: "Tìm và dự đoán",
+        submit: "Tìm vị trí",
         submitting: "Đang tra cứu…",
         error: "Tra cứu thất bại — thử lại.",
       },
@@ -579,40 +594,44 @@ export const strings = {
   predictionView: {
     title: "Kết quả dự đoán",
     fields: {
-      rssi: "RSSI",
-      snr: "SNR",
-      confidence: "Confidence",
-      recommendedSf: "SF khuyến nghị",
-      gateway: "Gateway phục vụ",
+      rssi: "Cường độ tín hiệu thu (RSSI)",
+      snr: "Tỷ lệ tín hiệu trên nhiễu (SNR)",
+      pdr: "Tỷ lệ thành công gói tin (PDR)",
+      pdrSub: "ước lượng từ SNR margin (LoRa CSS)",
+      interference: "Mức độ can nhiễu",
+      interferenceSub: "noise floor UL per-gateway · DL thermal",
+      sf: "Hệ số trải phổ (SF)",
+      /** @param {number} recommended */
+      sfRecommended: (recommended) => `khuyến nghị: SF${recommended}`,
+      sfMatch: "khuyến nghị: phù hợp",
+      bandwidth: "Băng thông",
+      bandwidthSub: "kênh AS923-2 mặc định",
+      shadowing: "Đa đường & che chắn",
+      shadowingSub: "σ log-normal shadowing",
+      berFer: "Tỷ lệ lỗi bit/khung (BER/FER)",
+      berFerSub: "LoRa CSS waterfall theo SNR margin",
+      latency: "Độ trễ & biến động",
+      /** @param {number} jitterMs */
+      latencySub: (jitterMs) => `biến động ±${jitterMs.toFixed(0)} ms`,
+      gateway: "Gateway kết nối",
+      environment: "Thông số môi trường ảnh hưởng",
+      environmentSub: "tần số · công suất TX · loại môi trường",
+      unavailable: "BE chưa hỗ trợ",
     },
     layer1Sentence: {
-      strong: "Phủ sóng tốt — gateway gần, link ổn định.",
+      strong: "Phủ sóng tốt — tín hiệu mạnh, truyền nhận ổn định, ít mất gói.",
       marginal:
-        "Phủ tạm — link healthy nhưng SNR sát ngưỡng. Vẫn dùng được.",
+        "Phủ sóng trung bình — vẫn dùng được nhưng tỉ lệ rớt gói tăng khi có nhiễu hoặc vật cản.",
       weak:
-        "Phủ yếu — gần ngưỡng sensitivity. Nên nâng SF hoặc đặt thêm gateway.",
-      no_coverage: "Không phủ — không có gateway trong tầm.",
-    },
-    toggleLayer2: {
-      show: "Xem chi tiết kỹ thuật ▾",
-      hide: "Ẩn chi tiết ▴",
+        "Phủ sóng yếu — sát ngưỡng thu của gateway, dễ mất gói. Nên tăng SF hoặc đặt thêm gateway gần hơn.",
+      no_coverage:
+        "Không có sóng — không có gateway nào đủ tín hiệu trong phạm vi phục vụ tại vị trí này.",
     },
     gatewayNone: "không xác định",
-    // Bidirectional link budget block
-    bidirectional: {
-      sectionTitle: "Cân bằng 2 chiều",
-      directionUplink: "Lên (device → gateway)",
-      directionDownlink: "Xuống (gateway → device)",
-      colRssi: "RSSI",
-      colSnr: "SNR",
-      colMargin: "Margin",
-      colStatus: "Trạng thái",
-      bottleneckLabel: "Nghẽn",
-      bottleneck: {
-        uplink: "Uplink — device TX/anten là điểm yếu.",
-        downlink: "Downlink — device RX là điểm yếu.",
-        both_ok: "Cân bằng — cả 2 chiều đều khoẻ.",
-      },
+    environmentLabel: {
+      outdoor: "Ngoài trời",
+      indoor: "Trong nhà",
+      indoor_deep: "Trong nhà (sâu)",
     },
   },
 
@@ -671,6 +690,35 @@ export const strings = {
     etagMissingTitle: "Không thể lưu",
     ifMatchLabel: "If-Match",
     modalCloseAria: "Đóng",
+    tabs: {
+      manage: "Quản lý gateway",
+      pending: "Gateway chờ duyệt",
+      create: "Tạo mới gateway",
+    },
+    pending: {
+      title: "Gateway chờ duyệt",
+      loading: "Đang tải…",
+      listError: "Không tải được danh sách gateway chờ duyệt.",
+      emptyState: "Không có gateway nào đang chờ duyệt.",
+      tableHeaders: [
+        "STT",
+        "Code",
+        "Tên",
+        "Lat",
+        "Lon",
+        "Tần số",
+        "Nguồn",
+        "Người đóng góp",
+        "Gửi lúc",
+        "",
+      ],
+      approveButton: "Phê duyệt",
+      rejectButton: "Từ chối",
+      approving: "Đang duyệt…",
+      rejecting: "Đang từ chối…",
+      approveSuccess: "Đã phê duyệt. {n} điểm đo được liên kết.",
+      rejectNotePrompt: "Lý do từ chối (tùy chọn):",
+    },
   },
 
   auth: {
@@ -785,6 +833,7 @@ export const strings = {
       gatewaysHeading: "Quản lý gateway",
       trainingHeading: "Dữ liệu đã duyệt",
       retrainHeading: "Mô hình ML",
+      notificationsHeading: "Thông báo",
       sidebar: {
         stats: "Tổng quan",
         review: "Phê duyệt",
@@ -794,17 +843,34 @@ export const strings = {
         sync: "Đồng bộ nguồn",
         rebuild: "Bản đồ ước lượng",
         retrain: "Mô hình ML",
+        notifications: "Thông báo",
       },
     },
     stats: {
       loading: "Đang tải thống kê…",
       userCount: "Tổng user",
-      activeUserCount: "User đang hoạt động",
-      linkedSourceCount: "Nguồn đã liên kết",
+      onlineUserCount: "User online",
       activeSourceCount: "Đang đóng góp",
       gatewayCount: "Gateway",
       measurementCount: "Điểm đo (training)",
       pendingReviewCount: "Chờ duyệt",
+    },
+    dashboard: {
+      sectionTitle: "Dashboard biểu đồ",
+      sectionSubtitle:
+        "Mỗi chart có dropdown chọn bucket riêng (tuần/tháng/năm).",
+      bucketWeek: "Theo tuần (12 tuần)",
+      bucketMonth: "Theo tháng (12 tháng)",
+      bucketYear: "Theo năm (5 năm)",
+      chartVisitsTitle: "Lượt truy cập website",
+      chartSignupsTitle: "User tạo tài khoản mới",
+      chartTrainingTitle: "Điểm đo vào bản đồ chung",
+      chartTopGwTitle: "Top 5 gateway có nhiều điểm đo nhất",
+      loading: "Đang tải dữ liệu…",
+      errorLoad: "Không tải được dữ liệu chart.",
+      empty: "Chưa có dữ liệu.",
+      yAxisCount: "Số lượng",
+      gatewayLabel: "Gateway",
     },
     review: {
       loading: "Đang tải hàng chờ duyệt…",
@@ -890,6 +956,8 @@ export const strings = {
       loading: "Đang tải danh sách người dùng…",
       empty: "Chưa có người dùng nào.",
       errorLoad: "Không tải được danh sách người dùng.",
+      searchPlaceholder: "Tìm theo email…",
+      searchEmpty: "Không có user nào khớp với từ khoá.",
       headers: ["Email", "Đóng góp", "Vai trò", "Trạng thái", "Ngày tạo", ""],
       selfBadge: "Bạn",
       adminBadge: "Admin",
@@ -950,7 +1018,7 @@ export const strings = {
         "Không gateway nào có gói tin mới — toàn bộ skipped, map giữ nguyên.",
       historyHeading: "Lịch sử rebuild",
       historyEmpty: "Chưa có lần rebuild nào.",
-      historyHeaders: ["Thời điểm", "Trạng thái", "Rebuilt", "Skipped", "Lỗi"],
+      historyHeaders: ["Thời điểm", "Hoàn thành", "Trạng thái", "Rebuilt", "Skipped", "Lỗi"],
       perGwHeading: "Chi tiết theo gateway",
       perGwHeaders: ["Gateway", "Trạng thái", "Ghi chú"],
       perGwStatus: {
@@ -975,6 +1043,7 @@ export const strings = {
       errorLoad: "Không tải được danh sách batch.",
       headers: [
         "Người gửi",
+        "Vai trò",
         "Loại",
         "Tên file / nguồn",
         "Upload lúc",
@@ -989,8 +1058,14 @@ export const strings = {
         json: "JSON",
         sync_lpwanmapper: "LPWAN Mapper",
         sync_chirpstack: "ChirpStack",
+        live_session: "Chuyến khảo sát",
       },
       kindUnknown: "Không rõ",
+      roleLabel: {
+        super_admin: "Super admin",
+        admin: "Admin",
+        user: "Người dùng",
+      },
       legacyHint:
         "Batch legacy (trước 2026-06-11) không trace được — đã ẩn khỏi danh sách.",
       confirm: {
@@ -1040,12 +1115,40 @@ export const strings = {
         ml_service_reload: "Hot-reload ml-service",
       },
       artifactLabel: "Artifact",
-      historyHeading: "5 lần retrain gần nhất",
+      historyHeading: "Toàn bộ lịch sử retrain",
       historyEmpty: "Chưa có lần retrain nào.",
-      historyHeaders: ["Thời điểm", "Trạng thái", "Số điểm", "RMSE", "Lỗi"],
+      historyHeaders: ["Thời điểm train", "Thời điểm hoàn thành", "Trạng thái", "Số điểm", "RMSE", "Báo cáo", "Lỗi"],
+      reportHeading: "Báo cáo",
+      reportView: "Xem",
+      reportDownloadPdf: "Tải PDF",
+      reportEmpty: "—",
+      reportOpenFailed: "Không mở được báo cáo.",
+      reportDownloadFailed: "Không tải được PDF.",
       errorRequest: "Không tạo được job retrain.",
-      csvGapWarning:
-        "⚠ Lưu ý: pipeline retrain hiện đọc từ CSV preprocessed `devices_history_full.csv`, chưa nối trực tiếp với ts.survey_training. Nên xoá batch + retrain có thể KHÔNG làm thay đổi joblib output. Đây là gap đã biết, đang chờ wire data-flow.",
+      
+    },
+    notifications: {
+      title: "Nhắc rebuild & retrain",
+      subtitle:
+        "Khi số điểm đo mới (đã duyệt vào ts.survey_training) vượt ngưỡng kể từ lần chạy thành công gần nhất, hệ thống sẽ nhắc admin chạy lại để bản đồ và mô hình ML phản ánh dữ liệu mới.",
+      loading: "Đang tải trạng thái dữ liệu…",
+      errorLoad: "Không tải được trạng thái dữ liệu.",
+      rebuildCardTitle: "Bản đồ ước lượng",
+      retrainCardTitle: "Mô hình ML",
+      /** @param {number} n @param {number} threshold */
+      newPoints: (n, threshold) =>
+        `Có ${n.toLocaleString("vi-VN")} điểm đo mới (ngưỡng ${threshold}).`,
+      lastRunNever: "Chưa chạy lần nào.",
+      /** @param {string} iso */
+      lastRunAt: (iso) => `Lần chạy thành công gần nhất: ${new Date(iso).toLocaleString("vi-VN")}.`,
+      okMessage: "Dữ liệu mới chưa vượt ngưỡng — chưa cần chạy lại.",
+      warnMessage:
+        "Đã vượt ngưỡng. Nên chạy lại để cập nhật bản đồ / mô hình theo dữ liệu mới nhất.",
+      btnRebuild: "Rebuild ngay",
+      btnRetrain: "Retrain ngay",
+      btnPending: "Đang enqueue…",
+      enqueuedToast: "Đã enqueue job — mở tab tương ứng để theo dõi tiến độ.",
+      errorEnqueue: "Không tạo được job.",
     },
     errors: {
       errorCodeLabel: "Mã lỗi",
@@ -1343,6 +1446,7 @@ export const strings = {
     json: "JSON",
     sync_lpwanmapper: "Đồng bộ Lpwanmapper",
     sync_chirpstack: "Đồng bộ ChirpStack",
+    live_session: "Chuyến khảo sát",
   },
 
   // Nhãn trạng thái batch — dùng chung 2 bảng trên.

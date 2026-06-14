@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-12T11:02:29Z",
+  "generated_at": "2026-06-14T16:12:38Z",
   "grid_m": 50.0,
   "bbox": {
     "lat_min": 15.8,
@@ -27,11 +27,11 @@
     "enabled": true,
     "scope": "per_gw",
     "max_link_km": 50.0,
-    "n_points": 10107,
-    "n_points_in_grid": 10107,
-    "n_cells_overlaid": 2388,
-    "n_gw_with_data": 12,
-    "n_gw_overlaid": 12
+    "n_points": 10520,
+    "n_points_in_grid": 10520,
+    "n_cells_overlaid": 2633,
+    "n_gw_with_data": 13,
+    "n_gw_overlaid": 13
   },
   "rssi_bins": [
     {
@@ -101,7 +101,7 @@
         "sub_ny": 1107,
         "sub_nx": 1140
       },
-      "elapsed_s": 328.1,
+      "elapsed_s": 320.3,
       "n_finite": 1261980,
       "n_total": 1261980,
       "per_gw_geojson": "per_gw/7276ff000b031aec.geojson"
@@ -118,7 +118,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 327.9,
+      "elapsed_s": 320.0,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/7276ff002e0507da.geojson"
@@ -135,7 +135,7 @@
         "sub_ny": 1115,
         "sub_nx": 1143
       },
-      "elapsed_s": 330.7,
+      "elapsed_s": 323.8,
       "n_finite": 1274445,
       "n_total": 1274445,
       "per_gw_geojson": "per_gw/7276ff002e06029f.geojson"
@@ -152,7 +152,7 @@
         "sub_ny": 1102,
         "sub_nx": 1196
       },
-      "elapsed_s": 346.9,
+      "elapsed_s": 341.6,
       "n_finite": 1317992,
       "n_total": 1317992,
       "per_gw_geojson": "per_gw/7276ff002e061f5b.geojson"
@@ -169,14 +169,14 @@
         "sub_ny": 1007,
         "sub_nx": 1086
       },
-      "elapsed_s": 261.7,
+      "elapsed_s": 264.7,
       "n_finite": 1093602,
       "n_total": 1093602,
       "per_gw_geojson": "per_gw/7276ff002e062cf2.geojson"
     },
     {
       "code": "a840411eebb44150",
-      "name": "DNIIT GW b44150",
+      "name": "Dragino C2.209",
       "lat": 16.0740984,
       "lon": 108.15253,
       "noise_floor_dbm": -102.80000305175781,
@@ -186,14 +186,14 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 315.5,
+      "elapsed_s": 321.1,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a840411eebb44150.geojson"
     },
     {
       "code": "a84041ffff1ec39f",
-      "name": "DNIIT GW 1ec39f",
+      "name": "Dragino indoor 01",
       "lat": 16.0741086,
       "lon": 108.1525171,
       "noise_floor_dbm": -97.5,
@@ -203,7 +203,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 314.3,
+      "elapsed_s": 320.2,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a84041ffff1ec39f.geojson"
@@ -220,14 +220,14 @@
         "sub_ny": 1105,
         "sub_nx": 1136
       },
-      "elapsed_s": 314.7,
+      "elapsed_s": 318.9,
       "n_finite": 1255280,
       "n_total": 1255280,
       "per_gw_geojson": "per_gw/a84041ffff1ee248.geojson"
     },
     {
       "code": "ac1f09fffe00ab20",
-      "name": "DNIIT GW 00ab20",
+      "name": "DF_Binh Thuan",
       "lat": 16.05469,
       "lon": 108.22009,
       "noise_floor_dbm": null,
@@ -237,7 +237,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 336.1,
+      "elapsed_s": 353.2,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab20.geojson"
@@ -254,14 +254,14 @@
         "sub_ny": 1024,
         "sub_nx": 1091
       },
-      "elapsed_s": 259.0,
+      "elapsed_s": 275.0,
       "n_finite": 1117184,
       "n_total": 1117184,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab25.geojson"
     },
     {
       "code": "ac1f09fffe06fcf2",
-      "name": "DNIIT GW 06fcf2",
+      "name": "DF_GW_2_NongSon",
       "lat": 16.054765682623003,
       "lon": 108.21985626414313,
       "noise_floor_dbm": null,
@@ -271,7 +271,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 339.6,
+      "elapsed_s": 357.1,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe06fcf2.geojson"
@@ -288,7 +288,7 @@
         "sub_ny": 1115,
         "sub_nx": 1146
       },
-      "elapsed_s": 317.9,
+      "elapsed_s": 332.5,
       "n_finite": 1277790,
       "n_total": 1277790,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd629.geojson"
@@ -305,7 +305,7 @@
         "sub_ny": 1015,
         "sub_nx": 1158
       },
-      "elapsed_s": 292.7,
+      "elapsed_s": 287.9,
       "n_finite": 1175370,
       "n_total": 1175370,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd63b.geojson"
@@ -322,7 +322,7 @@
         "sub_ny": 1102,
         "sub_nx": 1143
       },
-      "elapsed_s": 313.4,
+      "elapsed_s": 307.7,
       "n_finite": 1259586,
       "n_total": 1259586,
       "per_gw_geojson": "per_gw/ac1f09fffe168f85.geojson"
@@ -339,7 +339,7 @@
         "sub_ny": 1104,
         "sub_nx": 1141
       },
-      "elapsed_s": 299.7,
+      "elapsed_s": 294.7,
       "n_finite": 1259664,
       "n_total": 1259664,
       "per_gw_geojson": "per_gw/c795b211a13c6b34.geojson"

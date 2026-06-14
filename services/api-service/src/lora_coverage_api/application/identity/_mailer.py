@@ -74,6 +74,17 @@ class Mailer(Protocol):
         note: str | None,
     ) -> None: ...
 
+    def send_admin_self_contribution_published(
+        self,
+        to_email: str,
+        *,
+        contributor_email: str,
+        uploaded_at: datetime,
+        approved_count: int,
+        earliest_timestamp: datetime,
+        latest_timestamp: datetime,
+    ) -> None: ...
+
 
 class MailerError(Exception):
     """Lỗi gửi mail — SMTP timeout, auth fail, hostname không resolve.

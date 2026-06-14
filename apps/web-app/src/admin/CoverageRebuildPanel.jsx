@@ -236,6 +236,11 @@ function HistoryView({ query }) {
                 <td className="py-1 pr-2 text-slate-600">
                   {new Date(j.triggered_at).toLocaleString("vi-VN")}
                 </td>
+                <td className="py-1 pr-2 text-slate-600">
+                  {j.finished_at
+                    ? new Date(j.finished_at).toLocaleString("vi-VN")
+                    : "—"}
+                </td>
                 <td className="py-1 pr-2">
                   <StatusBadge status={j.status} />
                 </td>

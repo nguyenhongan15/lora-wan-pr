@@ -53,6 +53,24 @@ export const ESTIMATE_RSSI_BAND_COLORS = Object.fromEntries(
 );
 
 /**
+ * Match RSSI (dBm) → color từ SURVEY_RSSI_BINS (legend dùng chung).
+ * Convention bin: `low <= rssi < high`; `low=null` = không giới hạn dưới,
+ * `high=null` = không giới hạn trên. Fallback bin 0 (xanh lạnh nhất) nếu
+ * không match — chỉ xảy ra khi BINS bị tách thiếu khoảng.
+ *
+ * @param {number} rssi
+ * @returns {string} hex color
+ */
+export function colorForRssi(rssi) {
+  for (const bin of SURVEY_RSSI_BINS) {
+    const lowOk = bin.low === null || rssi >= bin.low;
+    const highOk = bin.high === null || rssi < bin.high;
+    if (lowOk && highOk) return bin.color;
+  }
+  return SURVEY_RSSI_BINS[0].color;
+}
+
+/**
  * Build maplibre `step` expression cho circle-color từ SURVEY_RSSI_BINS.
  * Contract maplibre: `["step", input, base, stop1, color1, stop2, color2, ...]`
  * — `base` là color khi input < stop1; sau đó với mỗi (stop_i, color_i) thì

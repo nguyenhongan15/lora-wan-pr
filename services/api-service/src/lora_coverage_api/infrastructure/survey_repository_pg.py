@@ -231,9 +231,10 @@ class PgSurveyRepository:
 
         if contributor.mode == "community":
             # CSV upload có linked_source_id NULL — LEFT JOIN để không loại;
-            # khi row có linked_source thì phải status='active'. Promotion gate
-            # đã ép submitted_for_community=true nên không cần re-check ở đây.
-            where.append("(t.linked_source_id IS NULL OR ls.status = 'active')")
+            # với linked_source: whitelist ('active','paused'). `paused` = tạm
+            # ngừng ingest packet mới, KHÔNG đồng nghĩa ẩn data cũ đã duyệt.
+            # Promotion gate đã ép submitted_for_community=true.
+            where.append("(t.linked_source_id IS NULL OR ls.status IN ('active', 'paused'))")
             where.append("u.disabled = false")
             where_sql = "WHERE " + " AND ".join(where)
             # Tie-breaker: timestamp DESC để khi rssi/snr trùng giá trị, OFFSET

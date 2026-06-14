@@ -49,19 +49,36 @@ from ..sources import (
     UnknownSourceTypeError,
     get_adapter,
 )
-from ..uploads import UploadKind, create_upload_batch, set_batch_points_count
-from ._upsert import upsert_device, upsert_gateway, upsert_measurement
+from ..uploads import (
+    UploadKind,
+    add_batch_points_count,
+    create_upload_batch,
+    set_batch_points_count,
+)
+from ._upsert import (
+    lookup_existing_gateway,
+    upsert_device,
+    upsert_gateway,
+    upsert_gateway_quarantine,
+    upsert_measurement,
+)
 
 logger = structlog.get_logger("lora_coverage_api.sync")
 
 
 @dataclass(frozen=True)
 class SyncResult:
-    """Per-source result. `error is None` ↔ success."""
+    """Per-source result. `error is None` ↔ success.
+
+    `gateways_quarantined` (mig 0029): số gateway mới đẩy vào quarantine chờ
+    admin duyệt. KHÔNG cộng vào gateways_inserted (counter cũ chỉ đếm rows
+    vào geo.gateways trực tiếp) để UI/log phân biệt hai con đường.
+    """
 
     linked_source_id: UUID
     gateways_inserted: int
     gateways_updated: int
+    gateways_quarantined: int
     measurements_inserted: int
     measurements_updated: int
     devices_inserted: int
@@ -169,11 +186,17 @@ class SyncService:
         *,
         user: User,
         linked_source_id: UUID,
+        reuse_batch_id: UUID | None = None,
     ) -> SyncResult:
         """Pull 1 source. KHÔNG raise (trừ LinkedSourceNotFoundError → 404).
 
         Status update + audit log được commit cùng transaction của caller —
         caller dùng `engine.begin()` đảm bảo atomic.
+
+        `reuse_batch_id` (live session): caller đã tạo batch trước (kind=
+        'live_session') → skip create batch trong sync, dùng luôn batch_id
+        đó cho `_ingest_measurements`. Mỗi sync incremental tiếp tục append
+        row mới vào cùng batch thay vì tạo batch riêng.
         """
         params = {"id": linked_source_id, "user_id": user.id}
         row = conn.execute(_LOCK_OWNED_ROW, params).one_or_none()
@@ -187,6 +210,7 @@ class SyncService:
                 linked_source_id=linked_source_id,
                 gateways_inserted=0,
                 gateways_updated=0,
+                gateways_quarantined=0,
                 devices_inserted=0,
                 devices_updated=0,
                 measurements_inserted=0,
@@ -195,7 +219,7 @@ class SyncService:
                 error=_LOCKED_ERR_TAG,
             )
 
-        return self._run_locked(conn, user_id=user.id, row=row)
+        return self._run_locked(conn, user_id=user.id, row=row, reuse_batch_id=reuse_batch_id)
 
     # ── orchestration ────────────────────────────────────────────────────
 
@@ -215,7 +239,14 @@ class SyncService:
 
     # ── core (assumes row already locked) ────────────────────────────────
 
-    def _run_locked(self, conn: Connection, *, user_id: UUID, row: Any) -> SyncResult:
+    def _run_locked(
+        self,
+        conn: Connection,
+        *,
+        user_id: UUID,
+        row: Any,
+        reuse_batch_id: UUID | None = None,
+    ) -> SyncResult:
         started = time.monotonic()
         ls_id = row.id
         source_type = row.source_type
@@ -239,23 +270,27 @@ class SyncService:
                 error=_DECRYPT_ERR_TAG,
                 log=log,
                 started=started,
-                counts=(0, 0, 0, 0, 0, 0),
+                counts=(0, 0, 0, 0, 0, 0, 0),
             )
 
         # Batch tracking (mig 0024): tạo batch row ngay trước measurement
         # ingest. Nếu source_type không có trong _SYNC_KIND (vd test source
         # tương lai), bỏ batch — data vẫn vào quarantine, chỉ không hiện
         # trong "Quản lý dữ liệu" UI. Filename = ISO timestamp click cho UX.
-        batch_id: UUID | None = None
-        kind = _SYNC_KIND.get(source_type)
-        if kind is not None:
-            batch_id, _ = create_upload_batch(
-                conn,
-                user_id=user_id,
-                kind=kind,
-                filename=datetime.now(UTC).isoformat(),
-                linked_source_id=ls_id,
-            )
+        # Live session (mig 0031): caller đã tạo batch kind='live_session'
+        # từ trước → skip create, reuse batch_id để gom mọi sync incremental
+        # vào 1 batch chung cho cả chuyến khảo sát.
+        batch_id: UUID | None = reuse_batch_id
+        if batch_id is None:
+            kind = _SYNC_KIND.get(source_type)
+            if kind is not None:
+                batch_id, _ = create_upload_batch(
+                    conn,
+                    user_id=user_id,
+                    kind=kind,
+                    filename=datetime.now(UTC).isoformat(),
+                    linked_source_id=ls_id,
+                )
 
         try:
             adapter = get_adapter(source_type)
@@ -263,6 +298,7 @@ class SyncService:
             (
                 gw_inserted,
                 gw_updated,
+                gw_quarantined,
                 gw_uuid_by_external,
                 gw_coords_by_external,
             ) = _ingest_gateways(
@@ -303,15 +339,20 @@ class SyncService:
                 error=err,
                 log=log,
                 started=started,
-                counts=(0, 0, 0, 0, 0, 0),
+                counts=(0, 0, 0, 0, 0, 0, 0),
             )
 
         # Cache points_count trên batch row để UI khỏi đếm lại. m_updated
         # không tính (rows đã thuộc batch cũ — first-writer-wins ở
         # _QUARANTINE_UPSERT_SQL). Sync 0 row mới vẫn để batch row tồn tại
         # với count=0 → "Lịch sử upload" log đầy đủ mỗi lần click.
+        # Live session: reuse batch → cộng dồn delta (mỗi sync chu kỳ append
+        # m_inserted rows mới vào cùng batch); sync 1 lần dùng set thường.
         if batch_id is not None:
-            set_batch_points_count(conn, batch_id=batch_id, count=m_inserted)
+            if reuse_batch_id is not None:
+                add_batch_points_count(conn, batch_id=batch_id, delta=m_inserted)
+            else:
+                set_batch_points_count(conn, batch_id=batch_id, count=m_inserted)
 
         return self._finalise(
             conn,
@@ -320,7 +361,15 @@ class SyncService:
             error=None,
             log=log,
             started=started,
-            counts=(gw_inserted, gw_updated, m_inserted, m_updated, dev_inserted, dev_updated),
+            counts=(
+                gw_inserted,
+                gw_updated,
+                gw_quarantined,
+                m_inserted,
+                m_updated,
+                dev_inserted,
+                dev_updated,
+            ),
         )
 
     def _decrypt(self, blob: bytes) -> dict[str, str]:
@@ -335,10 +384,10 @@ class SyncService:
         error: str | None,
         log: Any,
         started: float,
-        counts: tuple[int, int, int, int, int, int],
+        counts: tuple[int, int, int, int, int, int, int],
     ) -> SyncResult:
         now = datetime.now(UTC)
-        gw_ins, gw_upd, m_ins, m_upd, dev_ins, dev_upd = counts
+        gw_ins, gw_upd, gw_q, m_ins, m_upd, dev_ins, dev_upd = counts
         conn.execute(
             _UPDATE_SYNC_META,
             {
@@ -354,6 +403,7 @@ class SyncService:
                 "source_sync_completed",
                 gateways_inserted=gw_ins,
                 gateways_updated=gw_upd,
+                gateways_quarantined=gw_q,
                 measurements_inserted=m_ins,
                 measurements_updated=m_upd,
                 devices_inserted=dev_ins,
@@ -371,6 +421,7 @@ class SyncService:
             linked_source_id=ls_id,
             gateways_inserted=gw_ins,
             gateways_updated=gw_upd,
+            gateways_quarantined=gw_q,
             measurements_inserted=m_ins,
             measurements_updated=m_upd,
             devices_inserted=dev_ins,
@@ -391,27 +442,60 @@ def _ingest_gateways(
     source_type: str,
     user_id: UUID,
     ls_id: UUID,
-) -> tuple[int, int, dict[str, UUID], dict[str, tuple[float, float]]]:
-    inserted = updated = 0
+) -> tuple[int, int, int, dict[str, UUID], dict[str, tuple[float, float]]]:
+    """Split flow (mig 0029):
+
+    * Gateway EUI đã có trong geo.gateways VÀ cùng contributor (hoặc legacy
+      NULL) → upsert geo.gateways path cũ. gw_uuid lấy từ RETURNING.
+    * Gateway EUI đã có nhưng khác contributor → KHÔNG cướp. Vẫn map
+      gw_uuid để measurement của user này có FK serving_gateway đúng
+      (gateway hardware đã approve sẵn, chỉ tên/vị trí thuộc owner gốc).
+    * Gateway EUI mới hoàn toàn → quarantine path. gw_uuid_by_external
+      KHÔNG ghi (FK measurement = None); coords vẫn ghi để distance filter
+      hoạt động — tránh ingest measurement xa >MAX_GATEWAY_DISTANCE_KM kể
+      cả khi gateway chưa duyệt.
+    """
+    inserted = updated = quarantined = 0
     uuid_by_external: dict[str, UUID] = {}
     coords_by_external: dict[str, tuple[float, float]] = {}
     for rec in adapter.fetch_gateways(handle):
         if not isinstance(rec, GatewayRecord):  # defensive
             continue
-        status, gw_uuid = upsert_gateway(
-            conn,
-            rec,
-            source_type=source_type,
-            contributor_user_id=user_id,
-            linked_source_id=ls_id,
-        )
-        uuid_by_external[rec.external_id] = gw_uuid
-        coords_by_external[rec.external_id] = (rec.latitude, rec.longitude)
-        if status == "inserted":
-            inserted += 1
+        existing = lookup_existing_gateway(conn, code=rec.external_id)
+        if existing is None:
+            # New EUI → quarantine
+            _, _q_id, _review_status = upsert_gateway_quarantine(
+                conn,
+                rec,
+                source_type=source_type,
+                contributor_user_id=user_id,
+                linked_source_id=ls_id,
+            )
+            quarantined += 1
+            coords_by_external[rec.external_id] = (rec.latitude, rec.longitude)
+            continue
+
+        existing_id, existing_contributor = existing
+        same_owner = existing_contributor is None or existing_contributor == user_id
+        if same_owner:
+            status, gw_uuid = upsert_gateway(
+                conn,
+                rec,
+                source_type=source_type,
+                contributor_user_id=user_id,
+                linked_source_id=ls_id,
+            )
+            if status == "inserted":
+                inserted += 1
+            else:
+                updated += 1
+            uuid_by_external[rec.external_id] = gw_uuid
         else:
-            updated += 1
-    return inserted, updated, uuid_by_external, coords_by_external
+            # Khác owner: KHÔNG upsert (SQL cũng sẽ chặn metadata change).
+            # Chỉ map gw_uuid để measurement vẫn có FK hợp lệ.
+            uuid_by_external[rec.external_id] = existing_id
+        coords_by_external[rec.external_id] = (rec.latitude, rec.longitude)
+    return inserted, updated, quarantined, uuid_by_external, coords_by_external
 
 
 def _ingest_devices(
@@ -492,6 +576,7 @@ def _ingest_measurements(
             rec,
             source_type=source_type,
             serving_gateway_id=gw_uuid,
+            serving_gateway_eui=rec.serving_gateway_external_id,
             uploader_id=user_id,
             contributor_user_id=user_id,
             linked_source_id=ls_id,

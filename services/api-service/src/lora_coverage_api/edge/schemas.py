@@ -55,6 +55,38 @@ class LinkBudgetResponse(BaseModel):
     status: Literal["strong", "marginal", "weak", "no_coverage"]
 
 
+class SignalQualityResponse(BaseModel):
+    """Các chỉ số chất lượng tín hiệu suy ra cho UI "Dự đoán điểm".
+
+    PDR/BER/FER suy từ SNR margin (LoRa CSS waterfall) → tự cập nhật khi Stage 2
+    ML shift SNR. ToA/jitter/bandwidth là MAC-layer params đối xứng UL/DL.
+    Noise floor: UL = per-gateway calibrated; DL = thermal -117 dBm.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pdr: float = Field(..., ge=0, le=1)
+    ber: float = Field(..., ge=0)
+    fer: float = Field(..., ge=0, le=1)
+    bandwidth_hz: int = Field(..., gt=0)
+    time_on_air_ms: float = Field(..., ge=0)
+    jitter_ms: float = Field(..., ge=0)
+    shadow_fading_sigma_db: float = Field(..., ge=0)
+    uplink_noise_floor_dbm: float
+    downlink_noise_floor_dbm: float
+
+
+class EnvironmentParamsResponse(BaseModel):
+    """Echo "Thông số môi trường ảnh hưởng" — input đã dùng để tính prediction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    frequency_mhz: float
+    tx_power_dbm: float
+    environment: Literal["outdoor", "indoor", "indoor_deep"]
+    spreading_factor: int = Field(..., ge=7, le=12)
+
+
 class PredictionResponse(BaseModel):
     # rssi_dbm/snr_db giữ nghĩa = downlink để backward compat (clients vẽ marker
     # từ field này). coverage_status = worst-of(uplink, downlink).
@@ -67,11 +99,27 @@ class PredictionResponse(BaseModel):
     recommended_sf: int = Field(..., ge=7, le=12)
     uplink: LinkBudgetResponse
     downlink: LinkBudgetResponse
-    bottleneck: Literal["uplink", "downlink", "both_ok"]
     # Path loss tổng (basic transmission loss + BEL nếu có); UL/DL đối xứng.
     path_loss_db: float = 0.0
     # Khoảng cách haversine target → serving gateway (km). 0.0 = no serving GW.
     distance_to_serving_gateway_km: float = 0.0
+    # Chỉ số chất lượng tín hiệu + tham số môi trường (UI "Dự đoán điểm").
+    signal_quality: SignalQualityResponse
+    environment_params: EnvironmentParamsResponse
+    # Số gateway có status != NO_COVERAGE trong 30 km radius (redundancy metric).
+    # 1 = single point of failure; ≥2 = diversity. 0 hợp lệ khi NO_COVERAGE.
+    covering_gateway_count: int = Field(default=0, ge=0)
+    # Root-cause flags của bottleneck — 5 cause compute được từ Stage 1/2 + Target.
+    # Rỗng = không cause nào chạm threshold (link healthy hoặc cân bằng).
+    bottleneck_causes: list[
+        Literal[
+            "path_loss_high",
+            "snr_low",
+            "interference",
+            "tx_power_cap",
+            "sf_mismatch",
+        ]
+    ] = Field(default_factory=list)
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -248,7 +296,7 @@ class CsvUploadResponse(BaseModel):
 # suy ra ở backend (UploadBatchSummary.status), FE không tự tính.
 
 
-UploadKindLiteral = Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack"]
+UploadKindLiteral = Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack", "live_session"]
 BatchStatusLiteral = Literal["private", "pending", "public", "rejected", "deleted"]
 
 
@@ -565,6 +613,7 @@ class SyncResultResponse(BaseModel):
     linked_source_id: UUID
     gateways_inserted: int = Field(..., ge=0)
     gateways_updated: int = Field(..., ge=0)
+    gateways_quarantined: int = Field(..., ge=0)
     measurements_inserted: int = Field(..., ge=0)
     measurements_updated: int = Field(..., ge=0)
     devices_inserted: int = Field(..., ge=0)
@@ -582,6 +631,25 @@ class SyncReportResponse(BaseModel):
     total: int = Field(..., ge=0)
     successes: int = Field(..., ge=0)
     failures: int = Field(..., ge=0)
+
+
+# ── Live session (mig 0031 — theo dõi trực tiếp) ──────────────────────────
+# 1 chuyến khảo sát = 1 batch kind='live_session'. Start tạo batch, mỗi sync
+# chu kỳ tái sử dụng batch_id để gom rows vào cùng row "Lịch sử upload".
+
+
+class LiveSessionStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    linked_source_id: UUID
+
+
+class LiveSessionStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    linked_source_id: UUID
+    started_at: datetime
 
 
 # ── Admin (plan-auth-v1 §3.5, §11 step 8) ─────────────────────────────────
@@ -637,8 +705,8 @@ class AdminStatsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_count: int = Field(..., ge=0)
-    active_user_count: int = Field(..., ge=0)
-    linked_source_count: int = Field(..., ge=0)
+    # "User online" — distinct users co last_seen_at trong 5 phut gan nhat.
+    online_user_count: int = Field(..., ge=0)
     active_source_count: int = Field(..., ge=0)
     gateway_count: int = Field(..., ge=0)
     measurement_count: int = Field(..., ge=0)
@@ -777,7 +845,9 @@ class TrainingBatchItem(BaseModel):
     batch_id: UUID
     uploader_id: UUID
     uploader_email: str | None
-    kind: Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack"] | None
+    uploader_is_admin: bool = False
+    uploader_is_super_admin: bool = False
+    kind: Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack", "live_session"] | None
     filename: str | None
     uploaded_at: datetime | None
     promoted_count: int = Field(..., ge=0)
@@ -828,9 +898,110 @@ class MlRetrainJobResponse(BaseModel):
     metrics: dict[str, Any]
     error_text: str | None
     celery_task_id: str | None
+    report_dir: str | None = None
 
 
 class MlRetrainJobListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[MlRetrainJobResponse]
+
+
+class DataFreshnessResponse(BaseModel):
+    """Đếm điểm đo training đã thêm kể từ lần rebuild / retrain thành công gần
+    nhất. Frontend hiển thị banner nhắc admin chạy khi vượt ngưỡng.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: int
+    last_rebuild_finished_at: datetime | None
+    new_points_since_rebuild: int
+    needs_rebuild: bool
+    last_retrain_finished_at: datetime | None
+    new_points_since_retrain: int
+    needs_retrain: bool
+
+
+class TimeseriesPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bucket_start: datetime
+    count: int
+
+
+class TimeseriesResponse(BaseModel):
+    """Time-series chart cho admin dashboard. Buckets đầy đủ (kể cả 0)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric: Literal["visits", "signups", "training_points"]
+    bucket: Literal["week", "month", "year"]
+    items: list[TimeseriesPoint]
+
+
+class TopGatewayItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gateway_code: str
+    name: str | None
+    training_count: int
+
+
+class TopGatewayResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[TopGatewayItem]
+
+
+# ── Gateway moderation (mig 0029) ───────────────────────────────────────
+
+
+class PendingGatewayResponse(BaseModel):
+    """1 gateway chờ admin duyệt (geo.gateway_quarantine row pending_review)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    code: str
+    name: str
+    latitude: float
+    longitude: float
+    altitude_m: float
+    frequency_mhz: float
+    source_type: str
+    contributor_user_id: UUID | None
+    contributor_email: str | None
+    linked_source_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PendingGatewayListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PendingGatewayResponse]
+    total: int = Field(..., ge=0)
+
+
+class GatewayRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class GatewayApproveResponse(BaseModel):
+    """Trả id geo.gateways mới + số measurement backfill được FK."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quarantine_id: UUID
+    gateway_id: UUID
+    measurements_backfilled: int = Field(..., ge=0)
+
+
+class GatewayRejectResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quarantine_id: UUID
+    review_status: Literal["rejected"]

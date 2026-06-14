@@ -25,10 +25,12 @@ from ..schemas import (
     CoverageBatchRequest,
     CoverageBatchResponse,
     CoverageLookupResponse,
+    EnvironmentParamsResponse,
     LinkBudgetResponse,
     PredictionResponse,
     PredictRequest,
     ResolvedAddressResponse,
+    SignalQualityResponse,
 )
 
 router = APIRouter(prefix="/api/v1/coverage", tags=["coverage"])
@@ -151,9 +153,27 @@ def _to_prediction_response(p: object) -> PredictionResponse:
             margin_db=p.downlink_margin_db,  # type: ignore[attr-defined]
             status=p.downlink_status.value,  # type: ignore[attr-defined]
         ),
-        bottleneck=p.bottleneck,  # type: ignore[attr-defined]
         path_loss_db=p.path_loss_db,  # type: ignore[attr-defined]
         distance_to_serving_gateway_km=p.distance_to_serving_gateway_km,  # type: ignore[attr-defined]
+        signal_quality=SignalQualityResponse(
+            pdr=p.pdr,  # type: ignore[attr-defined]
+            ber=p.ber,  # type: ignore[attr-defined]
+            fer=p.fer,  # type: ignore[attr-defined]
+            bandwidth_hz=p.bandwidth_hz,  # type: ignore[attr-defined]
+            time_on_air_ms=p.time_on_air_ms,  # type: ignore[attr-defined]
+            jitter_ms=p.jitter_ms,  # type: ignore[attr-defined]
+            shadow_fading_sigma_db=p.shadow_fading_sigma_db,  # type: ignore[attr-defined]
+            uplink_noise_floor_dbm=p.uplink_noise_floor_dbm,  # type: ignore[attr-defined]
+            downlink_noise_floor_dbm=p.downlink_noise_floor_dbm,  # type: ignore[attr-defined]
+        ),
+        environment_params=EnvironmentParamsResponse(
+            frequency_mhz=p.frequency_mhz,  # type: ignore[attr-defined]
+            tx_power_dbm=p.tx_power_dbm,  # type: ignore[attr-defined]
+            environment=p.environment,  # type: ignore[attr-defined]
+            spreading_factor=p.spreading_factor,  # type: ignore[attr-defined]
+        ),
+        covering_gateway_count=p.covering_gateway_count,  # type: ignore[attr-defined]
+        bottleneck_causes=list(p.bottleneck_causes),  # type: ignore[attr-defined]
     )
 
 

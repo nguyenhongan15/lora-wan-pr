@@ -5,21 +5,24 @@ backend ở `infrastructure/itu/`. File này chỉ giữ:
 
   - `PathLossModel` Protocol — interface mọi Stage chia sẻ (Stage 1/2/3/4).
   - `EnvironmentProfile` — shadow-fading σ cho Confidence aleatoric.
-  - Link-budget helpers (Friis Pr = Pt + Gt + Gr - PL, classify, SF margin,
-    bottleneck UL/DL). Stage1ItuModel + future Stage models reuse.
+  - Link-budget helpers (Friis Pr = Pt + Gt + Gr - PL, classify, SF margin).
+    Stage1ItuModel + future Stage models reuse.
+  - Signal-quality estimators (PDR, BER, Time-on-Air) cho UI dự đoán chi tiết.
 
 Pure math, không I/O. Khi caller cần PL number, gọi `model.predict(...)`.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from ..domain.coverage import (
+    AS923_DEVICE_TX_POWER_CAP_DBM,
+    BottleneckCause,
     CoverageStatus,
     Gateway,
-    LinkBottleneck,
     Prediction,
     Target,
 )
@@ -71,9 +74,6 @@ _STATUS_RANK: dict[CoverageStatus, int] = {
     CoverageStatus.MARGINAL: 2,
     CoverageStatus.STRONG: 3,
 }
-
-# Ngưỡng dB chênh margin để coi là "cân bằng" giữa UL và DL.
-_BOTTLENECK_TIE_THRESHOLD_DB = 1.0
 
 # 3 dB margin trên SF limit để đảm bảo decode tin cậy (LoRa SNR có jitter).
 _SF_MARGIN_DB = 3.0
@@ -208,15 +208,127 @@ def resolve_sensitivity(provided: float | None, defaults_table: dict[int, float]
     return defaults_table[sf] if provided is None else provided
 
 
-def resolve_bottleneck(ul: LinkBudget, dl: LinkBudget) -> LinkBottleneck:
-    """Bottleneck = chiều có margin nhỏ hơn. "both_ok" khi cân bằng và đều STRONG."""
+# ── Signal-quality estimators (UI dự đoán chi tiết) ──────────────────────
+# Worst-SNR-margin = min(UL, DL) (SNR − SF_limit). Stage 1 tính từ link budget;
+# orchestrator recompute sau Stage 2 ML residual shift SNR đồng đều.
+
+
+def estimate_pdr(worst_snr_margin_db: float) -> float:
+    """Sigmoid xấp xỉ PDR theo SNR margin trên ngưỡng SF.
+
+    Calibration qualitative theo LoRa CSS waterfall curve:
+      margin = +6 dB → ~99% (link ổn định)
+      margin =  0 dB → ~62% (sát mép decode)
+      margin = -6 dB → ~3%  (gần như mất gói)
+    Slope 0.5 cover dải practical [-10, +10] dB.
+    """
+    return 1.0 / (1.0 + math.exp(-(worst_snr_margin_db - 1.0) * 0.5))
+
+
+def estimate_ber(worst_snr_margin_db: float) -> float:
+    """Xấp xỉ BER theo SNR margin (LoRa CSS waterfall).
+
+    Piecewise — class-based đủ cho UI hiển thị "10⁻³ / 10⁻⁴" thay vì float chính
+    xác (LoRa CSS BER exact đòi mô hình kênh chi tiết).
+    """
+    if worst_snr_margin_db >= 6:
+        return 1e-6
+    if worst_snr_margin_db >= 3:
+        return 1e-4
+    if worst_snr_margin_db >= 0:
+        return 1e-3
+    if worst_snr_margin_db >= -3:
+        return 1e-2
+    return 1e-1
+
+
+def time_on_air_ms(
+    sf: int,
+    *,
+    payload_bytes: int = 20,
+    bw_hz: int = 125_000,
+    cr_index: int = 1,
+    explicit_header: bool = True,
+) -> float:
+    """LoRa Time-on-Air (ms) — Semtech AN1200.13 §4.
+
+    Default: 20 B payload (LoRaWAN MAC + 10 B user), BW 125 kHz, CR 4/5,
+    explicit header, low-data-rate optimize auto-on cho SF ≥ 11.
+    """
+    low_dr_opt = sf >= 11
+    de = 1 if low_dr_opt else 0
+    h_bit = 0 if explicit_header else 1  # 0 = explicit (no implicit header bit)
+    crc = 1
+    t_sym_s = (2**sf) / bw_hz
+    n_preamble = 8
+    numerator = 8 * payload_bytes - 4 * sf + 28 + 16 * crc - 20 * h_bit
+    denom = 4 * (sf - 2 * de)
+    payload_symb = 8 + max(math.ceil(numerator / denom) * (cr_index + 4), 0)
+    toa_s = (n_preamble + 4.25) * t_sym_s + payload_symb * t_sym_s
+    return float(toa_s * 1000.0)
+
+
+# ── Bottleneck root-cause detection ──────────────────────────────────────
+# Threshold đặt conservative để giảm false-positive: chỉ flag khi tín hiệu
+# rõ ràng (vd PL > 140 dB là thực sự lớn cho LoRa 923 MHz; NF lệch ≥ 7 dB
+# so thermal là interference-dominated thật).
+_PATH_LOSS_HIGH_THRESHOLD_DB = 140.0
+_SNR_LOW_MARGIN_THRESHOLD_DB = 3.0
+_INTERFERENCE_NF_DELTA_THRESHOLD_DB = 7.0
+
+
+def detect_bottleneck_causes(prediction: Prediction, target: Target) -> tuple[BottleneckCause, ...]:
+    """Phát hiện root cause của bottleneck từ Prediction + Target.
+
+    Trả tuple để giữ Prediction frozen + hashable. Rỗng = không cause nào
+    chạm threshold (link healthy hoặc các yếu tố cân bằng).
+
+    5 cause:
+      - path_loss_high: PL > 140 dB.
+      - snr_low: min(UL,DL) SNR margin trên SF limit < 3 dB.
+      - interference: UL noise floor cao hơn thermal -117 ≥ 7 dB.
+      - tx_power_cap: TX = AS923-2 cap (14 dBm) AND UL margin ≤ DL margin
+        (UL là chiều yếu hơn → không nâng được TX nữa).
+      - sf_mismatch: SF user dùng < recommended_sf.
+
+    FE hiển thị dưới dạng "Bottleneck có thể xảy ra ở …" — danh sách khả năng,
+    không khẳng định nguyên nhân duy nhất.
+    """
+    causes: list[BottleneckCause] = []
+
+    if prediction.path_loss_db > _PATH_LOSS_HIGH_THRESHOLD_DB:
+        causes.append("path_loss_high")
+
+    sf_limit = SF_SNR_LIMITS_DB[target.spreading_factor]
+    worst_snr_margin = min(
+        prediction.uplink_snr_db - sf_limit,
+        prediction.downlink_snr_db - sf_limit,
+    )
+    if worst_snr_margin < _SNR_LOW_MARGIN_THRESHOLD_DB:
+        causes.append("snr_low")
+
+    nf_delta = prediction.uplink_noise_floor_dbm - NOISE_FLOOR_DBM_125KHZ
+    if nf_delta >= _INTERFERENCE_NF_DELTA_THRESHOLD_DB:
+        causes.append("interference")
+
     if (
-        abs(ul.margin_db - dl.margin_db) <= _BOTTLENECK_TIE_THRESHOLD_DB
-        and ul.status == CoverageStatus.STRONG
-        and dl.status == CoverageStatus.STRONG
+        target.tx_power_dbm >= AS923_DEVICE_TX_POWER_CAP_DBM
+        and prediction.uplink_margin_db <= prediction.downlink_margin_db
     ):
-        return "both_ok"
-    return "uplink" if ul.margin_db <= dl.margin_db else "downlink"
+        causes.append("tx_power_cap")
+
+    if target.spreading_factor < prediction.recommended_sf:
+        causes.append("sf_mismatch")
+
+    return tuple(causes)
+
+
+def estimate_jitter_ms(toa_ms: float) -> float:
+    """Jitter ước lượng ≈ 5% ToA — LoRaWAN MAC random backoff sau collision.
+
+    Conservative; thực tế jitter còn phụ thuộc duty-cycle wait (~1% region).
+    """
+    return toa_ms * 0.05
 
 
 class PathLossModel(Protocol):

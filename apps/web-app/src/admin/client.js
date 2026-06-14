@@ -65,8 +65,7 @@ export const SyncReport = z.object({
 
 export const AdminStats = z.object({
   user_count: z.number().int().nonnegative(),
-  active_user_count: z.number().int().nonnegative(),
-  linked_source_count: z.number().int().nonnegative(),
+  online_user_count: z.number().int().nonnegative(),
   active_source_count: z.number().int().nonnegative(),
   gateway_count: z.number().int().nonnegative(),
   measurement_count: z.number().int().nonnegative(),
@@ -152,8 +151,10 @@ export const TrainingBatchItem = z.object({
   batch_id: z.string().uuid(),
   uploader_id: z.string().uuid(),
   uploader_email: z.string().nullable(),
+  uploader_is_admin: z.boolean().default(false),
+  uploader_is_super_admin: z.boolean().default(false),
   kind: z
-    .enum(["csv", "json", "sync_lpwanmapper", "sync_chirpstack"])
+    .enum(["csv", "json", "sync_lpwanmapper", "sync_chirpstack", "live_session"])
     .nullable(),
   filename: z.string().nullable(),
   uploaded_at: z.string().nullable(),
@@ -190,10 +191,76 @@ export const MlRetrainJob = z.object({
   metrics: z.record(z.any()),
   error_text: z.string().nullable(),
   celery_task_id: z.string().nullable(),
+  report_dir: z.string().nullable().optional(),
 });
 
 export const MlRetrainJobList = z.object({
   items: z.array(MlRetrainJob),
+});
+
+export const DataFreshness = z.object({
+  threshold: z.number().int(),
+  last_rebuild_finished_at: z.string().nullable(),
+  new_points_since_rebuild: z.number().int(),
+  needs_rebuild: z.boolean(),
+  last_retrain_finished_at: z.string().nullable(),
+  new_points_since_retrain: z.number().int(),
+  needs_retrain: z.boolean(),
+});
+
+export const TimeseriesPoint = z.object({
+  bucket_start: z.string(),
+  count: z.number().int(),
+});
+
+export const TimeseriesResponseSchema = z.object({
+  metric: z.enum(["visits", "signups", "training_points"]),
+  bucket: z.enum(["week", "month", "year"]),
+  items: z.array(TimeseriesPoint),
+});
+
+export const TopGatewayItem = z.object({
+  gateway_code: z.string(),
+  name: z.string().nullable(),
+  training_count: z.number().int(),
+});
+
+export const TopGatewayResponseSchema = z.object({
+  items: z.array(TopGatewayItem),
+});
+
+// ── Gateway moderation (geo.gateway_quarantine) ──────────────────────────
+
+export const PendingGateway = z.object({
+  id: z.string().uuid(),
+  code: z.string(),
+  name: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  altitude_m: z.number(),
+  frequency_mhz: z.number(),
+  source_type: z.string(),
+  contributor_user_id: z.string().uuid().nullable(),
+  contributor_email: z.string().nullable(),
+  linked_source_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const PendingGatewayList = z.object({
+  items: z.array(PendingGateway),
+  total: z.number().int().nonnegative(),
+});
+
+export const GatewayApprove = z.object({
+  quarantine_id: z.string().uuid(),
+  gateway_id: z.string().uuid(),
+  measurements_backfilled: z.number().int().nonnegative(),
+});
+
+export const GatewayReject = z.object({
+  quarantine_id: z.string().uuid(),
+  review_status: z.literal("rejected"),
 });
 
 /**
@@ -217,6 +284,13 @@ export const MlRetrainJobList = z.object({
  * @typedef {z.infer<typeof MlRetrainEnqueue>} MlRetrainEnqueueT
  * @typedef {z.infer<typeof MlRetrainJob>} MlRetrainJobT
  * @typedef {z.infer<typeof MlRetrainJobList>} MlRetrainJobListT
+ * @typedef {z.infer<typeof DataFreshness>} DataFreshnessT
+ * @typedef {z.infer<typeof TimeseriesResponseSchema>} TimeseriesResponseT
+ * @typedef {z.infer<typeof TopGatewayResponseSchema>} TopGatewayResponseT
+ * @typedef {z.infer<typeof PendingGateway>} PendingGatewayT
+ * @typedef {z.infer<typeof PendingGatewayList>} PendingGatewayListT
+ * @typedef {z.infer<typeof GatewayApprove>} GatewayApproveT
+ * @typedef {z.infer<typeof GatewayReject>} GatewayRejectT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -548,4 +622,120 @@ export async function listRecentMlRetrains() {
   );
   if (!res.ok) await _throwProblem(res);
   return MlRetrainJobList.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/ml/retrain/{job_id}/report — HTML báo cáo (inline, ảnh
+ * embed base64). authFetch để gắn Bearer; trả blob caller tự handle (open
+ * trong tab mới qua object URL).
+ *
+ * @param {string} jobId UUID
+ * @returns {Promise<Blob>}
+ */
+export async function fetchMlRetrainReportHtml(jobId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/ml/retrain/${jobId}/report`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return res.blob();
+}
+
+/**
+ * GET /api/v1/admin/ml/retrain/{job_id}/report.pdf — PDF báo cáo.
+ *
+ * @param {string} jobId UUID
+ * @returns {Promise<Blob>}
+ */
+export async function fetchMlRetrainReportPdf(jobId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/ml/retrain/${jobId}/report.pdf`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return res.blob();
+}
+
+/**
+ * GET /api/v1/admin/notifications/data-freshness — đếm điểm đo training mới
+ * kể từ rebuild + retrain succeeded gần nhất.
+ * @returns {Promise<DataFreshnessT>}
+ */
+export async function getDataFreshness() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/notifications/data-freshness`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return DataFreshness.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/stats/timeseries — time-series cho chart Tổng quan.
+ * @param {"visits"|"signups"|"training_points"} metric
+ * @param {"week"|"month"|"year"} bucket
+ * @returns {Promise<TimeseriesResponseT>}
+ */
+export async function getStatsTimeseries(metric, bucket) {
+  const url = new URL(`${API_BASE_URL}/api/v1/admin/stats/timeseries`);
+  url.searchParams.set("metric", metric);
+  url.searchParams.set("bucket", bucket);
+  const res = await authFetch(url.toString());
+  if (!res.ok) await _throwProblem(res);
+  return TimeseriesResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/stats/top-gateways — top 5 gateway theo số điểm đo training.
+ * @returns {Promise<TopGatewayResponseT>}
+ */
+export async function getTopGateways() {
+  const res = await authFetch(`${API_BASE_URL}/api/v1/admin/stats/top-gateways`);
+  if (!res.ok) await _throwProblem(res);
+  return TopGatewayResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /api/v1/admin/gateway-contributions/pending — gateway chờ duyệt
+ * (geo.gateway_quarantine review_status='pending_review').
+ * @returns {Promise<PendingGatewayListT>}
+ */
+export async function listPendingGateways() {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/gateway-contributions/pending`,
+  );
+  if (!res.ok) await _throwProblem(res);
+  return PendingGatewayList.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/gateway-contributions/{quarantine_id}/approve —
+ * promote quarantine row → geo.gateways, backfill measurement FK.
+ * @param {string} quarantineId UUID
+ * @returns {Promise<GatewayApproveT>}
+ */
+export async function approveGateway(quarantineId) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/gateway-contributions/${quarantineId}/approve`,
+    { method: "POST" },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return GatewayApprove.parse(await res.json());
+}
+
+/**
+ * POST /api/v1/admin/gateway-contributions/{quarantine_id}/reject —
+ * giữ row trong quarantine với review_status='rejected'.
+ * @param {string} quarantineId UUID
+ * @param {string|null} [note]
+ * @returns {Promise<GatewayRejectT>}
+ */
+export async function rejectGateway(quarantineId, note = null) {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/v1/admin/gateway-contributions/${quarantineId}/reject`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note }),
+    },
+  );
+  if (!res.ok) await _throwProblem(res);
+  return GatewayReject.parse(await res.json());
 }

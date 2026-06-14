@@ -183,6 +183,9 @@ services:
     volumes:
       # DEM tiles (Copernicus GLO-30 GeoTIFF) cho Stage 1 ITU-R P.1812. Read-only.
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
+      # Báo cáo huấn luyện ML do celery-worker ghi (mount RW phía worker).
+      # api-service serve qua GET /admin/ml/retrain/{id}/report* — chỉ đọc.
+      - ./reports:/app/reports:ro
     # Bind loopback only — prod cần reverse proxy (nginx) trên host hoặc
     # cùng compose forward 443/80 → 8000. Dev local: localhost:8000 vẫn ok.
     # Cú pháp "8000:8000" cũ = bind 0.0.0.0 → ai có IP VPS đều gọi thẳng
@@ -286,6 +289,12 @@ services:
       # Worker gọi ml-service /admin/reload sau khi retrain_ml_model atomic-swap
       # joblib xong. Default trỏ vào service ml-service trong docker network.
       STAGE2_PREDICT_BASE_URL: ${STAGE2_PREDICT_BASE_URL:-http://ml-service:8001}
+      # ML retrain hold-out eval (eval_extra_trees_holdout.py) cần DEM +
+      # OSM landuse lookup giống ml-service. Khi miss → script render_report
+      # skip phần hold-out + ghi cảnh báo vào báo cáo.
+      LORA_DB_URL: postgresql://${POSTGRES_USER:-lora_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}@db:5432/${POSTGRES_DB:-lora_coverage}
+      LORA_REFERENCE_DEM_DIRECTORY: /data/dem
+      LORA_OSM_LANDUSE_DIRECTORY: /app/osm
     volumes:
       - ${LORA_DATA_DIR:-E:/DATN/lora-data}:/data:ro
       # Bind-mount script + output dir (precompute_rssi_heatmap.py qua subprocess).
@@ -295,7 +304,15 @@ services:
       # RW vì admin retrain_ml task ghi extra_trees_model.joblib.new + rename.
       - ./services/ml-service/data:/app/services/ml-service/data:rw
       # CSV preprocessed dùng để train_extra_trees.py (retrain_ml Celery task).
-      - ./services/ml-service/reference_wireless:/app/services/ml-service/reference_wireless:ro
+      # RW vì build_training_csv.py rebuild CSV từ ts.survey_training trước khi train.
+      - ./services/ml-service/reference_wireless:/app/services/ml-service/reference_wireless:rw
+      # OSM landuse polygons cho hold-out eval (compute_link_features).
+      - ./data/osm:/app/osm:ro
+      # Báo cáo huấn luyện ML — Celery worker ghi vào reports/retrain-{job_id}/.
+      - ./reports:/app/reports:rw
+      # ml-service src để worker subprocess import lora_ml_predict.processing
+      # (compute_link_features) cho hold-out eval.
+      - ./services/ml-service/src:/app/services/ml-service/src:ro
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
     command:

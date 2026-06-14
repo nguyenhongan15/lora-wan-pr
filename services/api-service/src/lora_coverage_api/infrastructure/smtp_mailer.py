@@ -194,6 +194,44 @@ class SmtpMailer(Mailer):
         )
         self._send(msg, error_message="Không gửi được email thông báo từ chối")
 
+    def send_admin_self_contribution_published(
+        self,
+        to_email: str,
+        *,
+        contributor_email: str,
+        uploaded_at: datetime,
+        approved_count: int,
+        earliest_timestamp: datetime,
+        latest_timestamp: datetime,
+    ) -> None:
+        msg = EmailMessage()
+        msg["Subject"] = (
+            f"[LoRa Coverage] Admin {contributor_email} vừa đóng góp "
+            f"{approved_count} điểm — đã tự động duyệt"
+        )
+        msg["From"] = f"{self._from_name} <{self._from_email}>"
+        msg["To"] = to_email
+        upload_ts = uploaded_at.strftime("%Y-%m-%d %H:%M UTC")
+        range_label = _format_time_range(earliest_timestamp, latest_timestamp)
+        msg.set_content(
+            _ADMIN_SELF_PUBLISH_PLAIN_BODY.format(
+                contributor=contributor_email,
+                upload_ts=upload_ts,
+                count=approved_count,
+                range=range_label,
+            )
+        )
+        msg.add_alternative(
+            _ADMIN_SELF_PUBLISH_HTML_BODY.format(
+                contributor=contributor_email,
+                upload_ts=upload_ts,
+                count=approved_count,
+                range=range_label,
+            ),
+            subtype="html",
+        )
+        self._send(msg, error_message="Không gửi được email thông báo auto-publish")
+
     def _send(self, msg: EmailMessage, *, error_message: str) -> None:
         try:
             with smtplib.SMTP(self._host, self._port, timeout=self._timeout) as server:
@@ -303,6 +341,26 @@ class NoOpMailer(Mailer):
             earliest=earliest_timestamp.isoformat(),
             latest=latest_timestamp.isoformat(),
             note=note,
+        )
+
+    def send_admin_self_contribution_published(
+        self,
+        to_email: str,
+        *,
+        contributor_email: str,
+        uploaded_at: datetime,
+        approved_count: int,
+        earliest_timestamp: datetime,
+        latest_timestamp: datetime,
+    ) -> None:
+        logger.warning(
+            "noop_mailer_admin_self_contribution_published",
+            to_email=to_email,
+            contributor_email=contributor_email,
+            uploaded_at=uploaded_at.isoformat(),
+            approved_count=approved_count,
+            earliest=earliest_timestamp.isoformat(),
+            latest=latest_timestamp.isoformat(),
         )
 
 
@@ -452,6 +510,42 @@ _REJECT_BATCH_HTML_BODY = """\
     {note_row}
   </table>
   <p style="color: #666; font-size: 14px;">Các điểm đo bị từ chối sẽ không được dùng để huấn luyện mô hình phủ sóng. Bạn có thể upload lại với dữ liệu mới — chúng tôi luôn hoan nghênh đóng góp.</p>
+</body>
+</html>
+"""
+
+
+_ADMIN_SELF_PUBLISH_PLAIN_BODY = """Thông báo từ LoRa Coverage Đà Nẵng.
+
+Tài khoản admin {contributor} vừa đóng góp dữ liệu đo cho dataset cộng đồng.
+Vì là tài khoản admin (mặc định tin cậy), {count} điểm đã được TỰ ĐỘNG DUYỆT
+và đưa thẳng vào bản đồ chung — KHÔNG đi qua hàng đợi review.
+
+  - Người đóng góp: {contributor}
+  - Upload lúc:      {upload_ts}
+  - Số điểm:         {count}
+  - Khoảng đo:       {range}
+
+Email này được gửi tới (1) admin đóng góp và (2) super admin để lưu vết.
+Nếu phát hiện dữ liệu sai, có thể xoá thủ công ở mục "Dữ liệu đã duyệt"
+trong trang Admin.
+"""
+
+
+_ADMIN_SELF_PUBLISH_HTML_BODY = """\
+<!DOCTYPE html>
+<html lang="vi">
+<body style="font-family: -apple-system, system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #1a1a1a;">
+  <h2 style="color: #1a73e8;">Đóng góp dữ liệu — đã tự động duyệt</h2>
+  <p>Tài khoản admin <strong>{contributor}</strong> vừa đóng góp dữ liệu đo cho dataset cộng đồng LoRa Coverage Đà Nẵng.</p>
+  <p>Vì là tài khoản admin (mặc định tin cậy), <strong>{count}</strong> điểm đã được <strong>tự động duyệt</strong> và đưa thẳng vào bản đồ chung — không đi qua hàng đợi review.</p>
+  <table style="border-collapse: collapse; margin: 16px 0; font-size: 14px;">
+    <tr><td style="padding: 4px 12px 4px 0; color: #666;">Người đóng góp:</td><td style="padding: 4px 0;"><strong>{contributor}</strong></td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; color: #666;">Upload lúc:</td><td style="padding: 4px 0;"><strong>{upload_ts}</strong></td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; color: #666;">Số điểm:</td><td style="padding: 4px 0;"><strong>{count}</strong></td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; color: #666;">Khoảng đo:</td><td style="padding: 4px 0;"><strong>{range}</strong></td></tr>
+  </table>
+  <p style="color: #666; font-size: 13px;">Email này được gửi tới (1) admin đóng góp và (2) super admin để lưu vết. Nếu phát hiện dữ liệu sai, có thể xoá thủ công ở mục "Dữ liệu đã duyệt" trong trang Admin.</p>
 </body>
 </html>
 """

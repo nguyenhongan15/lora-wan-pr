@@ -15,6 +15,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../auth/client.js";
 import {
   enqueueMlRetrain,
+  fetchMlRetrainReportHtml,
+  fetchMlRetrainReportPdf,
   getMlRetrainJob,
   listRecentMlRetrains,
 } from "./client.js";
@@ -96,6 +98,58 @@ export function MLRetrainPanel() {
   );
 }
 
+// Mở HTML báo cáo trong tab mới. Authentication bằng Bearer → không dùng anchor
+// trực tiếp được; phải fetch blob rồi tạo object URL. Trình duyệt giữ blob sau
+// khi tab phụ load, revoke sau 60s để tránh leak.
+async function openReportHtml(jobId) {
+  try {
+    const blob = await fetchMlRetrainReportHtml(jobId);
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    alert(t.reportOpenFailed);
+  }
+}
+
+async function downloadReportPdf(jobId) {
+  try {
+    const blob = await fetchMlRetrainReportPdf(jobId);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bao-cao-ml-${jobId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    alert(t.reportDownloadFailed);
+  }
+}
+
+/** @param {{ jobId: string }} props */
+function ReportActions({ jobId }) {
+  return (
+    <div className="inline-flex gap-1">
+      <button
+        type="button"
+        onClick={() => openReportHtml(jobId)}
+        className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+      >
+        {t.reportView}
+      </button>
+      <button
+        type="button"
+        onClick={() => downloadReportPdf(jobId)}
+        className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+      >
+        {t.reportDownloadPdf}
+      </button>
+    </div>
+  );
+}
+
 /** @param {{ job: import("./client.js").MlRetrainJobT }} props */
 function JobStatusView({ job }) {
   const statusLabel = {
@@ -125,6 +179,7 @@ function JobStatusView({ job }) {
         {job.status === "succeeded" && (
           <span className="text-slate-600">{t.summary(job.rows_trained)}</span>
         )}
+        {isDone && job.report_dir && <ReportActions jobId={job.id} />}
       </div>
 
       {job.error_text && (
@@ -220,6 +275,11 @@ function HistoryView({ query }) {
                   <td className="py-1 pr-2 text-slate-600">
                     {new Date(j.triggered_at).toLocaleString("vi-VN")}
                   </td>
+                  <td className="py-1 pr-2 text-slate-600">
+                    {j.finished_at
+                      ? new Date(j.finished_at).toLocaleString("vi-VN")
+                      : "—"}
+                  </td>
                   <td className="py-1 pr-2">
                     <StatusBadge status={j.status} />
                   </td>
@@ -227,6 +287,13 @@ function HistoryView({ query }) {
                     {j.rows_trained ?? ""}
                   </td>
                   <td className="py-1 pr-2 font-mono text-slate-700">{rmse}</td>
+                  <td className="py-1 pr-2">
+                    {j.report_dir ? (
+                      <ReportActions jobId={j.id} />
+                    ) : (
+                      <span className="text-slate-400">{t.reportEmpty}</span>
+                    )}
+                  </td>
                   <td className="py-1 pr-2 text-red-700">
                     {j.error_text ? j.error_text.split("\n")[0].slice(0, 80) : ""}
                   </td>

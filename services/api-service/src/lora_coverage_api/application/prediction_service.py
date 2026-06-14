@@ -20,12 +20,19 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Literal
 
-from ..domain.coverage import Confidence, ConfidenceMethod, CoverageStatus, Prediction, Target
+from ..domain.coverage import Confidence, ConfidenceMethod, Prediction, Target
 from ..domain.errors import PredictionUnavailable
 from ..domain.result import Err, Ok, Result
-from .path_loss import classify, recommend_sf, status_worse_of
+from .path_loss import (
+    SF_SNR_LIMITS_DB,
+    classify,
+    detect_bottleneck_causes,
+    estimate_ber,
+    estimate_pdr,
+    recommend_sf,
+    status_worse_of,
+)
 from .repositories import CoverageQuery, GatewayDirectory
 from .stage2 import Stage2Predictor
 
@@ -104,18 +111,13 @@ class PredictionOrchestrator:
         dl_status = classify(dl_rssi, dl_snr, sf)
         coverage_status = status_worse_of(ul_status, dl_status)
         worst_snr = ul_snr if ul_margin <= dl_margin else dl_snr
-        # Bottleneck: margin diff không đổi sau shift đồng đều, nhưng status có
-        # thể chuyển sang STRONG cho cả 2 chiều → "both_ok" eligible. Logic
-        # khớp resolve_bottleneck(); inline để tránh construct LinkBudget tạm.
-        bottleneck: Literal["uplink", "downlink", "both_ok"]
-        if (
-            abs(ul_margin - dl_margin) <= 1.0
-            and ul_status == CoverageStatus.STRONG
-            and dl_status == CoverageStatus.STRONG
-        ):
-            bottleneck = "both_ok"
-        else:
-            bottleneck = "uplink" if ul_margin <= dl_margin else "downlink"
+
+        # Stage 2 ML residual shift SNR đồng đều → PDR/BER/FER cập nhật theo
+        # margin mới; ToA/jitter/bandwidth/shadow σ/noise floor/env không đổi.
+        sf_limit = SF_SNR_LIMITS_DB[sf]
+        worst_snr_margin_new = min(ul_snr - sf_limit, dl_snr - sf_limit)
+        pdr_new = estimate_pdr(worst_snr_margin_new)
+        ber_new = estimate_ber(worst_snr_margin_new)
 
         refined = dataclasses.replace(
             pred,
@@ -123,7 +125,6 @@ class PredictionOrchestrator:
             snr_db=dl_snr,
             coverage_status=coverage_status,
             recommended_sf=recommend_sf(worst_snr),
-            bottleneck=bottleneck,
             uplink_rssi_dbm=ul_rssi,
             uplink_snr_db=ul_snr,
             uplink_margin_db=ul_margin,
@@ -134,5 +135,14 @@ class PredictionOrchestrator:
             downlink_status=dl_status,
             model_version=f"{pred.model_version}+{stage2_out.model_version}",
             confidence=refined_confidence,
+            pdr=round(pdr_new, 4),
+            ber=ber_new,
+            fer=round(1.0 - pdr_new, 4),
+        )
+        # Re-detect causes vì Stage 2 đã shift SNR/recommended_sf → snr_low &
+        # sf_mismatch có thể flip; path_loss/interference/tx_power_cap không
+        # đổi (PL & NF bất biến sau residual).
+        refined = dataclasses.replace(
+            refined, bottleneck_causes=detect_bottleneck_causes(refined, target)
         )
         return Ok(refined)

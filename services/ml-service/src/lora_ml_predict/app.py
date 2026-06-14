@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -227,7 +228,10 @@ async def admin_reload(
             detail=f"Model artifact not found at {settings.model_path}",
         )
     try:
-        request.app.state.model = joblib.load(path)
+        # joblib.load là blocking I/O + CPU deserialize (~10-15s cho 122MB
+        # Extra Trees 1500-tree). Chạy trong thread để không block event loop
+        # — /healthz + /residual vẫn responsive trong khi reload.
+        request.app.state.model = await asyncio.to_thread(joblib.load, path)
         request.app.state.is_model_active = True
         logger.info(f"Model hot-reloaded from {settings.model_path}")
         return {"status": "ok", "model_path": str(path), "model_version": settings.model_version}

@@ -45,6 +45,7 @@ export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
   });
 
   const [pending, setPending] = useState(/** @type {PendingAction | null} */ (null));
+  const [search, setSearch] = useState("");
 
   const patchM = useMutation({
     mutationFn: (
@@ -103,8 +104,23 @@ export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
     );
   }
 
+  const needle = search.trim().toLowerCase();
+  const filteredItems = needle
+    ? q.data.items.filter((u) => u.email.toLowerCase().includes(needle))
+    : q.data.items;
+
   return (
     <>
+      <div className="mb-3">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={t.searchPlaceholder}
+          className="w-full max-w-xs rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+        />
+      </div>
+
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
@@ -120,17 +136,28 @@ export function AdminUsersTable({ currentUserId, canManageAdmin = false }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
-            {q.data.items.map((u) => (
-              <UserRow
-                key={u.id}
-                user={u}
-                isSelf={u.id === currentUserId}
-                canManageAdmin={canManageAdmin}
-                onAction={(field, nextValue) =>
-                  setPending({ user: u, field, nextValue })
-                }
-              />
-            ))}
+            {filteredItems.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={t.headers.length}
+                  className="px-3 py-4 text-center text-sm text-slate-500"
+                >
+                  {t.searchEmpty}
+                </td>
+              </tr>
+            ) : (
+              filteredItems.map((u) => (
+                <UserRow
+                  key={u.id}
+                  user={u}
+                  isSelf={u.id === currentUserId}
+                  canManageAdmin={canManageAdmin}
+                  onAction={(field, nextValue) =>
+                    setPending({ user: u, field, nextValue })
+                  }
+                />
+              ))
+            )}
           </tbody>
         </table>
       </div>

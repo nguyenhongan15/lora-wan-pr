@@ -53,5 +53,4 @@ class FakePathLossModel:
             downlink_snr_db=snr,
             downlink_margin_db=margin,
             downlink_status=status,
-            bottleneck="both_ok",
         )

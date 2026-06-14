@@ -175,8 +175,8 @@ def test_predict_top_level_rssi_equals_downlink_rssi_for_backward_compat() -> No
     assert p.snr_db == p.downlink_snr_db
 
 
-def test_predict_uplink_stronger_when_gateway_tx_lower_than_device() -> None:
-    """Gateway TX yếu (10 dBm) + device TX max (14 dBm) → DL yếu hơn UL → bottleneck=downlink.
+def test_predict_uplink_margin_higher_when_gateway_tx_lower_than_device() -> None:
+    """Gateway TX yếu (10 dBm) + device TX max (14 dBm) → DL margin < UL margin.
 
     noise_floor_dbm=-117 (= DL thermal) để UL và DL chia sẻ NF — chỉ còn TX
     asymmetry tạo chênh margin. Default NF=-104 cho UL sẽ làm SNR-bound siết
@@ -189,11 +189,10 @@ def test_predict_uplink_stronger_when_gateway_tx_lower_than_device() -> None:
     p = m.predict(tgt, gw)
 
     assert p.uplink_margin_db > p.downlink_margin_db
-    assert p.bottleneck == "downlink"
 
 
-def test_predict_uplink_weaker_when_device_tx_lower_than_gateway() -> None:
-    """Gateway TX cao (27 dBm) + device 14 dBm → UL yếu hơn → bottleneck=uplink."""
+def test_predict_uplink_margin_lower_when_device_tx_lower_than_gateway() -> None:
+    """Gateway TX cao (27 dBm) + device 14 dBm → UL margin < DL margin."""
     m = _model()
     gw = _gateway(tx_power_dbm=27.0, antenna_gain_dbi=6.0)
     tgt = _target(16.10, 108.25, sf=10, tx_power_dbm=14.0, tx_antenna_gain_dbi=0.0)
@@ -201,14 +200,13 @@ def test_predict_uplink_weaker_when_device_tx_lower_than_gateway() -> None:
     p = m.predict(tgt, gw)
 
     assert p.uplink_margin_db < p.downlink_margin_db
-    assert p.bottleneck == "uplink"
 
 
-def test_predict_bottleneck_both_ok_when_balanced_and_strong() -> None:
-    """Cự ly gần + Pt/Gt/Gr/sens/NF đối xứng hai chiều → UL≈DL margin & STRONG → both_ok.
+def test_predict_balanced_link_strong_both_directions() -> None:
+    """Cự ly gần + Pt/Gt/Gr/sens/NF đối xứng hai chiều → UL≈DL margin & STRONG.
 
     noise_floor_dbm=-117 để UL share NF với DL (thermal). Mặc định UL fallback
-    -104 sẽ làm UL margin (SNR-bound) thấp hơn DL → flip thành "uplink".
+    -104 sẽ làm UL margin (SNR-bound) thấp hơn DL.
     """
     m = _model()
     gw = _gateway(tx_power_dbm=14.0, antenna_gain_dbi=2.0, noise_floor_dbm=-117.0)
@@ -227,7 +225,6 @@ def test_predict_bottleneck_both_ok_when_balanced_and_strong() -> None:
 
     assert p.uplink_status == CoverageStatus.STRONG
     assert p.downlink_status == CoverageStatus.STRONG
-    assert p.bottleneck == "both_ok"
 
 
 def test_predict_coverage_status_takes_worst_of_uplink_and_downlink() -> None:

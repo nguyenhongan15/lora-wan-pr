@@ -19,12 +19,15 @@ Self-protection: PATCH /admin/users/{id} với id == admin.id → 400
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from ...application.identity import (
@@ -65,15 +68,25 @@ from ..schemas import (
     CoverageRebuildEnqueueResponse,
     CoverageRebuildJobListResponse,
     CoverageRebuildJobResponse,
+    DataFreshnessResponse,
+    GatewayApproveResponse,
+    GatewayRejectRequest,
+    GatewayRejectResponse,
     MlRetrainEnqueueResponse,
     MlRetrainJobListResponse,
     MlRetrainJobResponse,
     PendingContributionListResponse,
     PendingContributionResponse,
+    PendingGatewayListResponse,
+    PendingGatewayResponse,
     PendingReviewBatchListResponse,
     PendingReviewBatchResponse,
     SyncReportResponse,
     SyncResultResponse,
+    TimeseriesPoint,
+    TimeseriesResponse,
+    TopGatewayItem,
+    TopGatewayResponse,
     TrainingBatchDeleteResponse,
     TrainingBatchItem,
     TrainingBatchListResponse,
@@ -130,8 +143,14 @@ _DELETE_USER = text("""
 # chưa quá lớn). Future: materialised view nếu cần.
 _STATS_QUERIES = {
     "user_count": "SELECT COUNT(*) FROM auth.users",
-    "active_user_count": "SELECT COUNT(*) FROM auth.users WHERE disabled = false",
-    "linked_source_count": "SELECT COUNT(*) FROM auth.linked_sources",
+    # "User online" = distinct user co last_seen_at trong 5 phut gan nhat.
+    # current_user() dep touch last_seen_at (throttle 30s) tren moi authenticated
+    # request — count theo user, khong theo session (1 user 2 tab = 1).
+    "online_user_count": (
+        "SELECT COUNT(*) FROM auth.users "
+        "WHERE last_seen_at > now() - interval '5 minutes' "
+        "AND is_admin = false"
+    ),
     "active_source_count": ("SELECT COUNT(*) FROM auth.linked_sources WHERE status = 'active'"),
     "gateway_count": "SELECT COUNT(*) FROM geo.gateways",
     # ts.survey_training là hypertable training (đã accept) — quarantine
@@ -153,6 +172,7 @@ def _sync_to_response(r: SyncResult) -> SyncResultResponse:
         linked_source_id=r.linked_source_id,
         gateways_inserted=r.gateways_inserted,
         gateways_updated=r.gateways_updated,
+        gateways_quarantined=r.gateways_quarantined,
         measurements_inserted=r.measurements_inserted,
         measurements_updated=r.measurements_updated,
         devices_inserted=r.devices_inserted,
@@ -418,6 +438,33 @@ def list_batch_rows(
     )
 
 
+def _invalidate_rebuild_for_gateways(conn: Any, gateway_ids: Iterable[UUID]) -> None:
+    """Đặt last_rebuild_at = NULL cho các trạm bị ảnh hưởng bởi mutate điểm đo.
+
+    Lý do: rebuild_coverage_map dùng `MAX(timestamp) > last_rebuild_at` để
+    skip gateway "không có data mới". Logic giả định data chỉ tăng theo thời
+    gian — sai ở 2 chỗ:
+      * Admin xoá batch → MAX(timestamp) không tăng (có khi giảm) → rebuild
+        SKIP dù điểm đo đã đổi.
+      * Admin duyệt batch chứa timestamp historical (upload CSV survey cũ) →
+        MAX có thể không vượt qua last_rebuild_at → cũng SKIP.
+
+    Đặt NULL → rebuild query ép coi như "chưa từng dựng" (vế
+    `last_rebuild_at IS NULL` ở rebuild_coverage.py:87) → lần Rebuild kế tiếp
+    luôn trigger. Sau khi dựng xong, task tự ghi lại `last_rebuild_at = now()`.
+
+    Gọi trong cùng transaction với mutate để atomic — nếu mutate rollback thì
+    invalidate cũng rollback.
+    """
+    ids = [gid for gid in gateway_ids if gid is not None]
+    if not ids:
+        return
+    conn.execute(
+        text("UPDATE geo.gateways SET last_rebuild_at = NULL WHERE id = ANY(:ids)"),
+        {"ids": ids},
+    )
+
+
 @router.post(
     "/contributions/batches/approve",
     response_model=BatchReviewResponse,
@@ -440,6 +487,9 @@ def approve_batch(
             uploader_id=body.uploader_id,
             uploaded_at=body.uploaded_at,
             reviewer_id=admin.id,
+        )
+        _invalidate_rebuild_for_gateways(
+            conn, {p.serving_gateway_id for p in approved if p.serving_gateway_id}
         )
 
     if not approved:
@@ -577,6 +627,8 @@ def approve_contribution(
         # sang 'approved' nên _GET_PENDING_BY_ID (filter pending_review) sẽ miss.
         detail = get_pending_review(conn, contribution_id)
         ok = approve_pending_contribution(conn, trust, qid=contribution_id, reviewer_id=admin.id)
+        if ok and detail and detail.serving_gateway_id:
+            _invalidate_rebuild_for_gateways(conn, [detail.serving_gateway_id])
     if not ok:
         raise HTTPException(
             status_code=404,
@@ -605,6 +657,220 @@ def approve_contribution(
             )
 
     return ContributionReviewResponse(id=contribution_id, review_status="approved")
+
+
+# ── Gateway moderation (mig 0029) ───────────────────────────────────────
+# Gateway từ sync (lpwanmapper/chirpstack) ban đầu chỉ vào geo.gateway_quarantine.
+# Admin duyệt → INSERT geo.gateways + backfill FK measurement có cùng EUI.
+# Admin trực tiếp tạo (form "Tạo mới gateway") → bypass quarantine, INSERT
+# thẳng geo.gateways (admin đã trusted).
+
+_LIST_PENDING_GATEWAYS = text("""
+    SELECT
+        q.id, q.code, q.name,
+        ST_Y(q.location::geometry) AS latitude,
+        ST_X(q.location::geometry) AS longitude,
+        q.altitude_m, q.frequency_mhz, q.source_type,
+        q.contributor_user_id, q.linked_source_id,
+        q.created_at, q.updated_at,
+        u.email AS contributor_email
+    FROM geo.gateway_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    WHERE q.review_status = 'pending_review'
+    ORDER BY q.created_at DESC
+""")
+
+_COUNT_PENDING_GATEWAYS = text(
+    "SELECT COUNT(*)::int AS total "
+    "FROM geo.gateway_quarantine WHERE review_status = 'pending_review'"
+)
+
+_GET_PENDING_GATEWAY = text("""
+    SELECT q.id, q.code, q.name,
+           ST_Y(q.location::geometry) AS latitude,
+           ST_X(q.location::geometry) AS longitude,
+           q.altitude_m, q.frequency_mhz, q.source_type,
+           q.contributor_user_id, q.linked_source_id,
+           q.review_status
+    FROM geo.gateway_quarantine q
+    WHERE q.id = :qid
+""")
+
+# Promote quarantine row → geo.gateways. INSERT...SELECT đảm bảo atomic.
+# ON CONFLICT (code) DO NOTHING: phòng race nếu admin click 2 lần hoặc EUI
+# đã tồn tại trong geo.gateways từ luồng khác (vd seed). Promoter sau đó
+# UPDATE quarantine review_status + lưu promoted_gateway_id.
+_PROMOTE_GATEWAY = text("""
+    INSERT INTO geo.gateways (
+        code, name, location, altitude_m, frequency_mhz,
+        external_id, source_type, contributor_user_id, linked_source_id
+    )
+    SELECT
+        q.code, q.name, q.location, q.altitude_m, q.frequency_mhz,
+        q.external_id, q.source_type, q.contributor_user_id, q.linked_source_id
+    FROM geo.gateway_quarantine q
+    WHERE q.id = :qid
+    ON CONFLICT (code) DO NOTHING
+    RETURNING id
+""")
+
+_RESOLVE_GATEWAY_ID_FOR_QUARANTINE = text("""
+    SELECT g.id
+    FROM geo.gateway_quarantine q
+    JOIN geo.gateways g ON g.code = q.code
+    WHERE q.id = :qid
+""")
+
+_MARK_GATEWAY_APPROVED = text("""
+    UPDATE geo.gateway_quarantine
+    SET review_status = 'approved',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now(),
+        promoted_gateway_id = :gw_id
+    WHERE id = :qid AND review_status = 'pending_review'
+""")
+
+_MARK_GATEWAY_REJECTED = text("""
+    UPDATE geo.gateway_quarantine
+    SET review_status = 'rejected',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now(),
+        review_note = :note
+    WHERE id = :qid AND review_status = 'pending_review'
+    RETURNING id
+""")
+
+# Backfill measurement FK: rows ngoài ts.survey_quarantine có
+# serving_gateway_eui = code mới + serving_gateway_id NULL → set FK.
+# survey_training cũng update để các bản ghi đã promote trước được liên kết
+# về gateway mới (trường hợp hiếm: measurement promote trước khi gateway
+# duyệt; ngày nay validator yêu cầu serving_gateway_id non-null nên không
+# xảy ra, nhưng defensive).
+_BACKFILL_QUARANTINE_FK = text("""
+    UPDATE ts.survey_quarantine
+    SET serving_gateway_id = :gw_id
+    WHERE serving_gateway_eui = :code AND serving_gateway_id IS NULL
+""")
+
+
+def _pending_gw_to_response(row: Any) -> PendingGatewayResponse:
+    return PendingGatewayResponse(
+        id=row.id,
+        code=row.code,
+        name=row.name,
+        latitude=row.latitude,
+        longitude=row.longitude,
+        altitude_m=row.altitude_m,
+        frequency_mhz=row.frequency_mhz,
+        source_type=row.source_type,
+        contributor_user_id=row.contributor_user_id,
+        contributor_email=row.contributor_email,
+        linked_source_id=row.linked_source_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get(
+    "/gateway-contributions/pending",
+    response_model=PendingGatewayListResponse,
+)
+def list_pending_gateways(
+    admin: Annotated[User, Depends(require_admin)],
+) -> PendingGatewayListResponse:
+    """List gateway chờ admin duyệt (geo.gateway_quarantine review_status=pending)."""
+    with _engine().begin() as conn:
+        rows = conn.execute(_LIST_PENDING_GATEWAYS).all()
+        total = conn.execute(_COUNT_PENDING_GATEWAYS).scalar_one()
+    return PendingGatewayListResponse(
+        items=[_pending_gw_to_response(r) for r in rows],
+        total=int(total),
+    )
+
+
+@router.post(
+    "/gateway-contributions/{quarantine_id}/approve",
+    response_model=GatewayApproveResponse,
+)
+def approve_gateway(
+    quarantine_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> GatewayApproveResponse:
+    """Approve: INSERT geo.gateways từ quarantine + backfill measurement FK."""
+    with _engine().begin() as conn:
+        existing = conn.execute(_GET_PENDING_GATEWAY, {"qid": quarantine_id}).one_or_none()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Gateway quarantine không tồn tại.")
+        if existing.review_status != "pending_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Gateway đã ở trạng thái {existing.review_status}, không thể duyệt lại.",
+            )
+
+        # INSERT geo.gateways; CONFLICT (code) → row đã có (race or pre-existing).
+        promoted = conn.execute(_PROMOTE_GATEWAY, {"qid": quarantine_id}).one_or_none()
+        if promoted is not None:
+            gw_id = promoted.id
+        else:
+            # ON CONFLICT DO NOTHING → resolve id của row hiện hữu.
+            gw_id = conn.execute(
+                _RESOLVE_GATEWAY_ID_FOR_QUARANTINE, {"qid": quarantine_id}
+            ).scalar_one()
+
+        conn.execute(
+            _MARK_GATEWAY_APPROVED,
+            {"qid": quarantine_id, "reviewer_id": admin.id, "gw_id": gw_id},
+        )
+        backfill = conn.execute(
+            _BACKFILL_QUARANTINE_FK,
+            {"gw_id": gw_id, "code": existing.code},
+        )
+        backfilled = backfill.rowcount or 0
+
+    logger.info(
+        "admin_gateway_approved",
+        admin_id=str(admin.id),
+        quarantine_id=str(quarantine_id),
+        gateway_id=str(gw_id),
+        code=existing.code,
+        measurements_backfilled=backfilled,
+    )
+
+    return GatewayApproveResponse(
+        quarantine_id=quarantine_id,
+        gateway_id=gw_id,
+        measurements_backfilled=backfilled,
+    )
+
+
+@router.post(
+    "/gateway-contributions/{quarantine_id}/reject",
+    response_model=GatewayRejectResponse,
+)
+def reject_gateway(
+    quarantine_id: UUID,
+    body: GatewayRejectRequest,
+    admin: Annotated[User, Depends(require_admin)],
+) -> GatewayRejectResponse:
+    """Reject gateway quarantine — giữ row làm audit."""
+    with _engine().begin() as conn:
+        result = conn.execute(
+            _MARK_GATEWAY_REJECTED,
+            {"qid": quarantine_id, "reviewer_id": admin.id, "note": body.note},
+        ).one_or_none()
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Gateway quarantine không tồn tại hoặc đã được xử lý.",
+        )
+
+    logger.info(
+        "admin_gateway_rejected",
+        admin_id=str(admin.id),
+        quarantine_id=str(quarantine_id),
+    )
+    return GatewayRejectResponse(quarantine_id=quarantine_id, review_status="rejected")
 
 
 # ── Coverage map rebuild (admin "Rebuild bản đồ ước lượng") ─────────────
@@ -754,6 +1020,7 @@ _LIST_TRAINING_BATCHES = text("""
         t.batch_id,
         b.user_id AS uploader_id,
         u.email AS uploader_email,
+        u.is_admin AS uploader_is_admin,
         b.kind,
         b.filename,
         b.uploaded_at,
@@ -764,7 +1031,7 @@ _LIST_TRAINING_BATCHES = text("""
     LEFT JOIN me.upload_batches b ON b.id = t.batch_id
     LEFT JOIN auth.users u ON u.id = b.user_id
     WHERE t.batch_id IS NOT NULL
-    GROUP BY t.batch_id, b.user_id, u.email, b.kind, b.filename,
+    GROUP BY t.batch_id, b.user_id, u.email, u.is_admin, b.kind, b.filename,
              b.uploaded_at, b.deleted_at
     ORDER BY latest_approved_at DESC
 """)
@@ -793,6 +1060,7 @@ def list_training_batches(
     Note: chỉ trả batch có `batch_id` không NULL trong training. Row legacy
     từ trước migration 0024 (~13k row) không xuất hiện ở đây.
     """
+    super_email = get_settings().super_admin_email.lower()
     with _engine().begin() as conn:
         rows = conn.execute(_LIST_TRAINING_BATCHES).all()
     return TrainingBatchListResponse(
@@ -801,6 +1069,10 @@ def list_training_batches(
                 batch_id=r.batch_id,
                 uploader_id=r.uploader_id,
                 uploader_email=r.uploader_email,
+                uploader_is_admin=bool(r.uploader_is_admin),
+                uploader_is_super_admin=(
+                    r.uploader_email is not None and r.uploader_email.lower() == super_email
+                ),
                 kind=r.kind,
                 filename=r.filename,
                 uploaded_at=r.uploaded_at,
@@ -833,7 +1105,20 @@ def delete_training_batch(
     sang bản đồ ước lượng + ML model.
     """
     with _engine().begin() as conn:
+        # Lấy tập gw bị ảnh hưởng TRƯỚC khi DELETE — sau DELETE là mất dấu.
+        affected = (
+            conn.execute(
+                text(
+                    "SELECT DISTINCT serving_gateway_id FROM ts.survey_training "
+                    "WHERE batch_id = :id AND serving_gateway_id IS NOT NULL"
+                ),
+                {"id": batch_id},
+            )
+            .scalars()
+            .all()
+        )
         result = conn.execute(_DELETE_TRAINING_FOR_BATCH, {"batch_id": batch_id})
+        _invalidate_rebuild_for_gateways(conn, affected)
     deleted = result.rowcount or 0
     if deleted == 0:
         raise HTTPException(
@@ -862,17 +1147,18 @@ _INSERT_RETRAIN_JOB = text("""
 
 _SELECT_RETRAIN_JOB = text("""
     SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
-           rows_trained, artifact_path, metrics, error_text, celery_task_id
+           rows_trained, artifact_path, metrics, error_text, celery_task_id,
+           report_dir
     FROM audit.ml_retrain_jobs
     WHERE id = :id
 """)
 
 _LIST_RETRAIN_JOBS = text("""
     SELECT id, status, triggered_by, triggered_at, started_at, finished_at,
-           rows_trained, artifact_path, metrics, error_text, celery_task_id
+           rows_trained, artifact_path, metrics, error_text, celery_task_id,
+           report_dir
     FROM audit.ml_retrain_jobs
     ORDER BY triggered_at DESC
-    LIMIT 5
 """)
 
 
@@ -889,6 +1175,7 @@ def _row_to_retrain_response(r: Any) -> MlRetrainJobResponse:
         metrics=dict(r.metrics or {}),
         error_text=r.error_text,
         celery_task_id=r.celery_task_id,
+        report_dir=r.report_dir,
     )
 
 
@@ -926,7 +1213,7 @@ def enqueue_ml_retrain(
 def list_recent_ml_retrains(
     admin: Annotated[User, Depends(require_admin)],
 ) -> MlRetrainJobListResponse:
-    """5 lần retrain gần nhất — frontend hiển thị lịch sử."""
+    """Toàn bộ lịch sử retrain (mới → cũ) — frontend hiển thị lịch sử đầy đủ."""
     with _engine().begin() as conn:
         rows = conn.execute(_LIST_RETRAIN_JOBS).all()
     return MlRetrainJobListResponse(items=[_row_to_retrain_response(r) for r in rows])
@@ -946,3 +1233,250 @@ def get_ml_retrain(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} không tồn tại.")
     return _row_to_retrain_response(row)
+
+
+# Reports thư mục mount RO trong api-service (xem docker-compose.yml).
+_REPORTS_ROOT = Path("/app/reports")
+
+
+def _resolve_report_path(job_id: UUID, filename: str) -> Path:
+    """Resolve + validate path tránh path-traversal (../../etc/passwd).
+
+    Strict: filename không được chứa '/' / '\\' / '..'; path resolved phải
+    nằm trong reports/retrain-{id}/ tương ứng.
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Tên file không hợp lệ.")
+    base = _REPORTS_ROOT / f"retrain-{job_id}"
+    candidate = (base / filename).resolve()
+    try:
+        candidate.relative_to(base.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Đường dẫn ngoài phạm vi báo cáo.") from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy {filename}.")
+    return candidate
+
+
+@router.get("/ml/retrain/{job_id}/report")
+def get_ml_retrain_report(
+    job_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> FileResponse:
+    """Xem báo cáo HTML trực tiếp (inline). FE mở qua iframe / new tab."""
+    path = _resolve_report_path(job_id, "summary.html")
+    return FileResponse(path, media_type="text/html; charset=utf-8")
+
+
+@router.get("/ml/retrain/{job_id}/report.pdf")
+def get_ml_retrain_report_pdf(
+    job_id: UUID,
+    admin: Annotated[User, Depends(require_admin)],
+) -> FileResponse:
+    """Tải PDF báo cáo. Filename gợi ý cho browser download dialog."""
+    path = _resolve_report_path(job_id, "report.pdf")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"bao-cao-ml-{job_id}.pdf",
+    )
+
+
+@router.get("/ml/retrain/{job_id}/assets/{filename}")
+def get_ml_retrain_report_asset(
+    job_id: UUID,
+    filename: str,
+    admin: Annotated[User, Depends(require_admin)],
+) -> FileResponse:
+    """Serve PNG/JSON từ thư mục báo cáo (img inline trong summary.html).
+
+    Template HTML dùng img src relative `<filename>` (cùng folder); browser
+    load HTML qua `GET .../report` và fetch img qua URL tương đối, FastAPI
+    route phải khớp. Endpoint này là cách rõ ràng (whitelist extension); FE
+    cũng có thể gọi để fetch trực tiếp.
+
+    WeasyPrint render PDF với base_url = thư mục báo cáo, tự đọc PNG cùng
+    folder mà KHÔNG đi qua route này.
+    """
+    if not filename.lower().endswith((".png", ".json", ".svg", ".jpg", ".jpeg")):
+        raise HTTPException(status_code=400, detail="Định dạng file không được phép.")
+    path = _resolve_report_path(job_id, filename)
+    media = (
+        "image/png"
+        if filename.lower().endswith(".png")
+        else ("application/json" if filename.lower().endswith(".json") else "image/svg+xml")
+    )
+    return FileResponse(path, media_type=media)
+
+
+# ── Notifications: nhắc admin rebuild + retrain khi có data mới ────────
+# Đếm row training đã promote sau finished_at của job succeeded gần nhất.
+# Không có job nào succeeded → count toàn bộ ts.survey_training (state nguội,
+# chưa rebuild lần nào).
+
+_NOTIFY_DATA_FRESHNESS_THRESHOLD = 100
+
+_LAST_SUCCEEDED_REBUILD_AT = text("""
+    SELECT finished_at
+    FROM audit.coverage_rebuild_jobs
+    WHERE status = 'succeeded' AND finished_at IS NOT NULL
+    ORDER BY finished_at DESC
+    LIMIT 1
+""")
+
+_LAST_SUCCEEDED_RETRAIN_AT = text("""
+    SELECT finished_at
+    FROM audit.ml_retrain_jobs
+    WHERE status = 'succeeded' AND finished_at IS NOT NULL
+    ORDER BY finished_at DESC
+    LIMIT 1
+""")
+
+_COUNT_TRAINING_SINCE = text("""
+    SELECT COUNT(*)::bigint AS c
+    FROM ts.survey_training
+    WHERE :since IS NULL OR promoted_at > :since
+""")
+
+
+@router.get(
+    "/notifications/data-freshness",
+    response_model=DataFreshnessResponse,
+)
+def get_data_freshness(
+    admin: Annotated[User, Depends(require_admin)],
+) -> DataFreshnessResponse:
+    """Đếm điểm đo training mới kể từ lần rebuild / retrain succeeded gần nhất."""
+    with _engine().begin() as conn:
+        last_rebuild = conn.execute(_LAST_SUCCEEDED_REBUILD_AT).scalar_one_or_none()
+        last_retrain = conn.execute(_LAST_SUCCEEDED_RETRAIN_AT).scalar_one_or_none()
+        new_since_rebuild = int(
+            conn.execute(_COUNT_TRAINING_SINCE, {"since": last_rebuild}).scalar_one()
+        )
+        new_since_retrain = int(
+            conn.execute(_COUNT_TRAINING_SINCE, {"since": last_retrain}).scalar_one()
+        )
+    threshold = _NOTIFY_DATA_FRESHNESS_THRESHOLD
+    return DataFreshnessResponse(
+        threshold=threshold,
+        last_rebuild_finished_at=last_rebuild,
+        new_points_since_rebuild=new_since_rebuild,
+        needs_rebuild=new_since_rebuild > threshold,
+        last_retrain_finished_at=last_retrain,
+        new_points_since_retrain=new_since_retrain,
+        needs_retrain=new_since_retrain > threshold,
+    )
+
+
+# ── Tổng quan dashboard: time-series + top gateway ──────────────────────
+# 3 metric:
+#   * visits          → SUM(count) FROM audit.daily_visits
+#   * signups         → COUNT(*) FROM auth.users   (theo created_at)
+#   * training_points → COUNT(*) FROM ts.survey_training (theo promoted_at)
+#
+# 3 bucket: week (12 buckets), month (12 buckets), year (5 buckets).
+# Mỗi query LEFT JOIN với generate_series để bucket trống vẫn trả 0.
+
+_BUCKET_CONFIG: dict[str, dict[str, str]] = {
+    "week": {"interval": "1 week", "count": "11"},
+    "month": {"interval": "1 month", "count": "11"},
+    "year": {"interval": "1 year", "count": "4"},
+}
+
+_METRIC_SOURCE: dict[str, dict[str, str]] = {
+    "visits": {
+        "from": "audit.daily_visits d",
+        "ts_col": "d.day::timestamptz",
+        "agg": "COALESCE(SUM(d.count), 0)::bigint",
+    },
+    "signups": {
+        "from": "auth.users d",
+        "ts_col": "d.created_at",
+        "agg": "COUNT(d.id)::bigint",
+    },
+    "training_points": {
+        "from": "ts.survey_training d",
+        "ts_col": "d.promoted_at",
+        "agg": "COUNT(d.id)::bigint",
+    },
+}
+
+
+def _build_timeseries_sql(metric: str, bucket: str) -> str:
+    """Build SQL với bucket = date_trunc + generate_series. KHÔNG có user input,
+    chỉ chọn từ whitelist → safe khỏi SQL injection."""
+    cfg = _BUCKET_CONFIG[bucket]
+    src = _METRIC_SOURCE[metric]
+    interval = cfg["interval"]
+    n = cfg["count"]
+    return f"""
+        WITH buckets AS (
+            SELECT generate_series(
+                date_trunc('{bucket}', current_date) - interval '{n} {bucket}s',
+                date_trunc('{bucket}', current_date),
+                interval '{interval}'
+            ) AS bucket_start
+        )
+        SELECT b.bucket_start, {src["agg"]} AS count
+        FROM buckets b
+        LEFT JOIN {src["from"]}
+          ON {src["ts_col"]} >= b.bucket_start
+         AND {src["ts_col"]} <  b.bucket_start + interval '{interval}'
+        GROUP BY b.bucket_start
+        ORDER BY b.bucket_start
+    """
+
+
+@router.get(
+    "/stats/timeseries",
+    response_model=TimeseriesResponse,
+)
+def get_stats_timeseries(
+    admin: Annotated[User, Depends(require_admin)],
+    metric: str = Query(..., pattern="^(visits|signups|training_points)$"),
+    bucket: str = Query(..., pattern="^(week|month|year)$"),
+) -> TimeseriesResponse:
+    """Time-series cho chart Tổng quan. Buckets đầy đủ kể cả 0."""
+    sql = text(_build_timeseries_sql(metric, bucket))
+    with _engine().begin() as conn:
+        rows = conn.execute(sql).all()
+    return TimeseriesResponse(
+        metric=metric,
+        bucket=bucket,
+        items=[
+            TimeseriesPoint(bucket_start=r.bucket_start, count=int(r._mapping["count"]))
+            for r in rows
+        ],
+    )
+
+
+_TOP_GATEWAYS = text("""
+    SELECT g.code AS gateway_code, g.name, COUNT(*)::bigint AS training_count
+    FROM ts.survey_training t
+    JOIN geo.gateways g ON g.id = t.serving_gateway_id
+    GROUP BY g.code, g.name
+    ORDER BY training_count DESC
+    LIMIT 5
+""")
+
+
+@router.get(
+    "/stats/top-gateways",
+    response_model=TopGatewayResponse,
+)
+def get_top_gateways(
+    admin: Annotated[User, Depends(require_admin)],
+) -> TopGatewayResponse:
+    """Top 5 gateway theo số điểm đo trong ts.survey_training."""
+    with _engine().begin() as conn:
+        rows = conn.execute(_TOP_GATEWAYS).all()
+    return TopGatewayResponse(
+        items=[
+            TopGatewayItem(
+                gateway_code=r.gateway_code,
+                name=r.name,
+                training_count=int(r.training_count),
+            )
+            for r in rows
+        ],
+    )

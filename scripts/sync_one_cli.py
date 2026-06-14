@@ -132,6 +132,7 @@ def main() -> int:
                     m,
                     source_type=_SOURCE_TYPE,
                     serving_gateway_id=gw_id,
+                    serving_gateway_eui=m.serving_gateway_external_id,
                     uploader_id=_SERVICE_UPLOADER,
                 )
                 m_counts[status] += 1

@@ -28,7 +28,7 @@ from sqlalchemy import Connection, text
 
 logger = structlog.get_logger("lora_coverage_api.uploads.batches")
 
-UploadKind = Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack"]
+UploadKind = Literal["csv", "json", "sync_lpwanmapper", "sync_chirpstack", "live_session"]
 
 BatchStatus = Literal["private", "pending", "public", "rejected", "deleted"]
 
@@ -88,6 +88,14 @@ _UPDATE_POINTS_COUNT = text(
     """
     UPDATE me.upload_batches
     SET points_count = :count
+    WHERE id = :batch_id
+    """
+)
+
+_INCREMENT_POINTS_COUNT = text(
+    """
+    UPDATE me.upload_batches
+    SET points_count = points_count + :delta
     WHERE id = :batch_id
     """
 )
@@ -274,6 +282,13 @@ def create_upload_batch(
 def set_batch_points_count(conn: Connection, *, batch_id: UUID, count: int) -> None:
     """Cập nhật cache count sau khi biết số rows thực insert (sau ON CONFLICT)."""
     conn.execute(_UPDATE_POINTS_COUNT, {"batch_id": batch_id, "count": count})
+
+
+def add_batch_points_count(conn: Connection, *, batch_id: UUID, delta: int) -> None:
+    """Cộng dồn count cho live session (mỗi sync incremental chỉ insert delta
+    rows mới — `set` sẽ ghi đè counter sai). Caller pass `delta=m_inserted`
+    sau mỗi sync chu kỳ."""
+    conn.execute(_INCREMENT_POINTS_COUNT, {"batch_id": batch_id, "delta": delta})
 
 
 def list_upload_batches(
