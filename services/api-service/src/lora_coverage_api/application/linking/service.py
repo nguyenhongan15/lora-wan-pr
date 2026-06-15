@@ -102,7 +102,7 @@ _INSERT_LINKED_SOURCE = text("""
     VALUES (
         :user_id, :source_type, :label, :credentials_encrypted, :credential_fingerprint,
         :webhook_token_hash,
-        CASE WHEN :webhook_token_hash IS NOT NULL THEN now() ELSE NULL END
+        CASE WHEN CAST(:webhook_token_hash AS bytea) IS NOT NULL THEN now() ELSE NULL END
     )
     RETURNING id, user_id, source_type, label, status,
               last_sync_at, last_sync_error, created_at,
