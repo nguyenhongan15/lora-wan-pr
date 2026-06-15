@@ -374,6 +374,45 @@ class PgSurveyRepository:
             )
         return {r["external_id"]: (float(r["lat"]), float(r["lon"])) for r in rows}
 
+    def lookup_gateway_for_uplink(
+        self,
+        *,
+        preferred_source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[UUID, float, float]]:
+        if not external_ids:
+            return {}
+        # DISTINCT ON: per external_id chỉ giữ 1 row; ORDER prioritize
+        # source_type khớp (TRUE=1 trước FALSE=0 nên DESC), fallback row
+        # cũ nhất (created_at ASC) để xác định nếu nhiều gateway cùng code.
+        sql = text(
+            """
+            SELECT DISTINCT ON (external_id)
+                   external_id,
+                   id,
+                   ST_Y(location::geometry) AS lat,
+                   ST_X(location::geometry) AS lon
+            FROM geo.gateways
+            WHERE external_id = ANY(:external_ids)
+            ORDER BY external_id,
+                     (source_type = :preferred) DESC,
+                     created_at ASC
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    sql,
+                    {
+                        "preferred": preferred_source_type,
+                        "external_ids": list(external_ids),
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        return {r["external_id"]: (r["id"], float(r["lat"]), float(r["lon"])) for r in rows}
+
     def list_user_devices(
         self,
         *,

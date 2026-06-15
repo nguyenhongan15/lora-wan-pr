@@ -141,6 +141,29 @@ class FakeSurveyIngest:
             if (source_type, ext) in self._gateway_coords
         }
 
+    def lookup_gateway_for_uplink(
+        self,
+        *,
+        preferred_source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[UUID, float, float]]:
+        # Fake: prefer match on preferred_source_type, fallback bất kỳ
+        # source_type khác cho cùng external_id. UUID giả lập bằng uuid5
+        # determined từ external_id để test verify ổn định.
+        from uuid import NAMESPACE_OID, uuid5
+
+        out: dict[str, tuple[UUID, float, float]] = {}
+        for ext in external_ids:
+            if (preferred_source_type, ext) in self._gateway_coords:
+                lat, lon = self._gateway_coords[(preferred_source_type, ext)]
+                out[ext] = (uuid5(NAMESPACE_OID, f"{preferred_source_type}:{ext}"), lat, lon)
+                continue
+            for (src, key), (lat, lon) in self._gateway_coords.items():
+                if key == ext:
+                    out[ext] = (uuid5(NAMESPACE_OID, f"{src}:{ext}"), lat, lon)
+                    break
+        return out
+
     def list_user_devices(
         self,
         *,

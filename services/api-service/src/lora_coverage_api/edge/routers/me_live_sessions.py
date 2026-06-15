@@ -19,6 +19,7 @@ endpoint cũ `DELETE /me/uploads/batches/{id}`. Không cần endpoint "end" riê
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -29,7 +30,7 @@ from sqlalchemy import text
 from ...application.identity import User
 from ...application.linking import LinkingService
 from ...application.sync import SyncResult, SyncService
-from ...application.uploads import create_upload_batch
+from ...application.uploads import add_batch_points_count, create_upload_batch
 from ..deps import _engine, current_user, linking_service, sync_service
 from ..schemas import (
     LiveSessionStartRequest,
@@ -42,12 +43,34 @@ router = APIRouter(prefix="/api/v1/me/live-sessions", tags=["me-live-sessions"])
 
 _SELECT_LIVE_BATCH = text(
     """
-    SELECT linked_source_id
+    SELECT linked_source_id, uploaded_at
     FROM me.upload_batches
     WHERE id = :batch_id
       AND user_id = :user_id
       AND kind = 'live_session'
       AND deleted_at IS NULL
+    """
+)
+
+
+# Webhook ingest (ChirpStack push) ghi vào ts.survey_quarantine với batch_id
+# NULL — không có context để biết user đang chạy live session nào. Mỗi lần
+# sync_live_session chạy (interval HOẶC final), gom toàn bộ record orphan
+# (batch_id IS NULL) của user + linked_source trong cửa sổ session [uploaded_at
+# .. now] về batch này. LPWANMapper KHÔNG bị: nó đi qua sync REST với
+# reuse_batch_id, batch_id được set ngay lúc insert.
+_BACKFILL_ORPHAN_WEBHOOK = text(
+    """
+    WITH updated AS (
+        UPDATE ts.survey_quarantine
+        SET batch_id = :batch_id
+        WHERE batch_id IS NULL
+          AND contributor_user_id = :user_id
+          AND linked_source_id = :linked_source_id
+          AND timestamp >= :session_started_at
+        RETURNING 1
+    )
+    SELECT COUNT(*) FROM updated
     """
 )
 
@@ -129,10 +152,29 @@ def sync_live_session(
                 status_code=404,
                 detail="Chuyến khảo sát không tồn tại hoặc đã kết thúc",
             )
+        backfilled = (
+            conn.execute(
+                _BACKFILL_ORPHAN_WEBHOOK,
+                {
+                    "batch_id": batch_id,
+                    "user_id": user.id,
+                    "linked_source_id": row.linked_source_id,
+                    "session_started_at": row.uploaded_at,
+                },
+            ).scalar()
+            or 0
+        )
+        if backfilled > 0:
+            add_batch_points_count(conn, batch_id=batch_id, delta=backfilled)
         result = sync.sync(
             conn,
             user=user,
             linked_source_id=row.linked_source_id,
             reuse_batch_id=batch_id,
         )
+        if backfilled > 0:
+            result = replace(
+                result,
+                measurements_inserted=result.measurements_inserted + backfilled,
+            )
     return _sync_to_response(result)

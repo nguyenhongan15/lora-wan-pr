@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-14T16:12:38Z",
+  "generated_at": "2026-06-15T07:03:51Z",
   "grid_m": 50.0,
   "bbox": {
     "lat_min": 15.8,
@@ -27,9 +27,9 @@
     "enabled": true,
     "scope": "per_gw",
     "max_link_km": 50.0,
-    "n_points": 10520,
-    "n_points_in_grid": 10520,
-    "n_cells_overlaid": 2633,
+    "n_points": 11299,
+    "n_points_in_grid": 11299,
+    "n_cells_overlaid": 2675,
     "n_gw_with_data": 13,
     "n_gw_overlaid": 13
   },
@@ -101,7 +101,7 @@
         "sub_ny": 1107,
         "sub_nx": 1140
       },
-      "elapsed_s": 320.3,
+      "elapsed_s": 322.6,
       "n_finite": 1261980,
       "n_total": 1261980,
       "per_gw_geojson": "per_gw/7276ff000b031aec.geojson"
@@ -118,7 +118,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 320.0,
+      "elapsed_s": 323.0,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/7276ff002e0507da.geojson"
@@ -135,7 +135,7 @@
         "sub_ny": 1115,
         "sub_nx": 1143
       },
-      "elapsed_s": 323.8,
+      "elapsed_s": 325.4,
       "n_finite": 1274445,
       "n_total": 1274445,
       "per_gw_geojson": "per_gw/7276ff002e06029f.geojson"
@@ -152,7 +152,7 @@
         "sub_ny": 1102,
         "sub_nx": 1196
       },
-      "elapsed_s": 341.6,
+      "elapsed_s": 342.3,
       "n_finite": 1317992,
       "n_total": 1317992,
       "per_gw_geojson": "per_gw/7276ff002e061f5b.geojson"
@@ -169,7 +169,7 @@
         "sub_ny": 1007,
         "sub_nx": 1086
       },
-      "elapsed_s": 264.7,
+      "elapsed_s": 266.3,
       "n_finite": 1093602,
       "n_total": 1093602,
       "per_gw_geojson": "per_gw/7276ff002e062cf2.geojson"
@@ -186,7 +186,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 321.1,
+      "elapsed_s": 322.4,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a840411eebb44150.geojson"
@@ -203,7 +203,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 320.2,
+      "elapsed_s": 323.1,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a84041ffff1ec39f.geojson"
@@ -220,7 +220,7 @@
         "sub_ny": 1105,
         "sub_nx": 1136
       },
-      "elapsed_s": 318.9,
+      "elapsed_s": 320.8,
       "n_finite": 1255280,
       "n_total": 1255280,
       "per_gw_geojson": "per_gw/a84041ffff1ee248.geojson"
@@ -237,7 +237,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 353.2,
+      "elapsed_s": 348.5,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab20.geojson"
@@ -254,7 +254,7 @@
         "sub_ny": 1024,
         "sub_nx": 1091
       },
-      "elapsed_s": 275.0,
+      "elapsed_s": 268.2,
       "n_finite": 1117184,
       "n_total": 1117184,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab25.geojson"
@@ -271,7 +271,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 357.1,
+      "elapsed_s": 348.7,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe06fcf2.geojson"
@@ -288,7 +288,7 @@
         "sub_ny": 1115,
         "sub_nx": 1146
       },
-      "elapsed_s": 332.5,
+      "elapsed_s": 326.4,
       "n_finite": 1277790,
       "n_total": 1277790,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd629.geojson"
@@ -305,7 +305,7 @@
         "sub_ny": 1015,
         "sub_nx": 1158
       },
-      "elapsed_s": 287.9,
+      "elapsed_s": 282.3,
       "n_finite": 1175370,
       "n_total": 1175370,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd63b.geojson"
@@ -322,7 +322,7 @@
         "sub_ny": 1102,
         "sub_nx": 1143
       },
-      "elapsed_s": 307.7,
+      "elapsed_s": 299.6,
       "n_finite": 1259586,
       "n_total": 1259586,
       "per_gw_geojson": "per_gw/ac1f09fffe168f85.geojson"
@@ -339,7 +339,7 @@
         "sub_ny": 1104,
         "sub_nx": 1141
       },
-      "elapsed_s": 294.7,
+      "elapsed_s": 283.6,
       "n_finite": 1259664,
       "n_total": 1259664,
       "per_gw_geojson": "per_gw/c795b211a13c6b34.geojson"

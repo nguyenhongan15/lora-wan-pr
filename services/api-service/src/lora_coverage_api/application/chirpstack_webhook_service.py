@@ -16,9 +16,10 @@ public" hoạt động cùng pattern với sync REST.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+from ..domain.coverage import GatewayId
 from ..domain.survey import (
     MAX_GATEWAY_DISTANCE_KM,
     SurveyBatch,
@@ -98,14 +99,17 @@ class ChirpstackWebhookService:
             )
 
         # Filter distance gateway → measurement (>50km). Adapter đã reject
-        # bbox; ở đây chỉ cần distance check. Records không match gateway
-        # external_id trong DB → giữ lại (không thể check, fall through theo
-        # behavior hiện tại — serving_gateway_id=None ở quarantine).
+        # bbox; ở đây chỉ cần distance check. Lookup cross-source: ChirpStack
+        # tenant chưa chắc chứa community gateway (vd Kerlink trên lpwanmapper
+        # public network) — fallback any source_type cho phép distance check +
+        # gán serving_gateway_id để popup hiển thị tên gateway.
+        # external_id nào không match bất kỳ source → giữ lại record với
+        # serving_gateway_id=None (không thể check distance).
         gw_ext_ids = adapter_result.gateway_external_ids
         unique_ext = {x for x in gw_ext_ids if x}
-        coords_map = (
-            self._repo.lookup_gateway_coords(
-                source_type=_WEBHOOK_SOURCE_TYPE,
+        gw_map = (
+            self._repo.lookup_gateway_for_uplink(
+                preferred_source_type=_WEBHOOK_SOURCE_TYPE,
                 external_ids=list(unique_ext),
             )
             if unique_ext
@@ -117,14 +121,15 @@ class ChirpstackWebhookService:
         for orig_i, (rec, gw_ext) in enumerate(
             zip(adapter_result.records, gw_ext_ids, strict=True)
         ):
-            if gw_ext and gw_ext in coords_map:
-                gw_lat, gw_lon = coords_map[gw_ext]
+            if gw_ext and gw_ext in gw_map:
+                gw_uuid, gw_lat, gw_lon = gw_map[gw_ext]
                 dist_km = haversine_km(rec.latitude, rec.longitude, gw_lat, gw_lon)
                 if dist_km > MAX_GATEWAY_DISTANCE_KM:
                     rejected.append(
                         f"gateway distance {dist_km:.1f}km > {MAX_GATEWAY_DISTANCE_KM}km"
                     )
                     continue
+                rec = replace(rec, serving_gateway_id=GatewayId(gw_uuid))
             kept_records.append(rec)
             kept_orig_idx.append(orig_i)
 

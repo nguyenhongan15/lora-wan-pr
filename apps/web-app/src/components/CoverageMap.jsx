@@ -11,6 +11,7 @@ import {
 } from "../api/client.js";
 import {
   deleteUploadBatch,
+  listDevices,
   startLiveSession,
   syncLiveSession,
 } from "../sources/client.js";
@@ -169,6 +170,56 @@ function escapeHtml(s) {
         return "&#39;";
     }
   });
+}
+
+// localStorage key cho chuyến khảo sát đang chạy. Persist {batchId, sourceId,
+// startedAt} để reload trang KHÔNG đánh mất session — restore vào state khi
+// mount, batch_id giữ nguyên, points đã ingest vào DB vẫn fetch lại được qua
+// surveysQ (cursor = startedAt → backend filter timestamp >= since).
+const LIVE_SESSION_STORAGE_KEY = "lora-coverage:live-session";
+
+/**
+ * @returns {{ batchId: string, sourceId: string, startedAt: number } | null}
+ */
+function readPersistedLiveSession() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(LIVE_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (
+      typeof obj?.batchId === "string" &&
+      typeof obj?.sourceId === "string" &&
+      typeof obj?.startedAt === "number" &&
+      Number.isFinite(obj.startedAt)
+    ) {
+      return obj;
+    }
+  } catch {
+    // corrupt entry — bỏ qua, sẽ overwrite ở handleStart kế tiếp.
+  }
+  return null;
+}
+
+/**
+ * @param {{ batchId: string, sourceId: string, startedAt: number }} entry
+ */
+function writePersistedLiveSession(entry) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LIVE_SESSION_STORAGE_KEY, JSON.stringify(entry));
+  } catch {
+    // quota / private mode — ignore, in-memory session vẫn chạy.
+  }
+}
+
+function clearPersistedLiveSession() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(LIVE_SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -562,6 +613,10 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const gatewaysRef = useRef(
     /** @type {import("../api/client.js").GatewayT[]} */ ([]),
   );
+  // Map devEUI → friendly name (`geo.devices.name`). Popup show name nếu có,
+  // fallback devEUI khi miss. Refresh khi source đang active đổi (live session
+  // hoặc filter "Bản đồ của tôi" theo source cụ thể).
+  const deviceNameRef = useRef(/** @type {Map<string, string>} */ (new Map()));
   // Snapshot displayedItems để click-handler (đăng ký 1 lần lúc map-load)
   // đọc được sibling rows: 1 packet → N row trong survey_training (1/gateway),
   // group lại để popup show "Gateway kết nối" list.
@@ -573,11 +628,26 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const gatewayAddressCacheRef = useRef(
     /** @type {Map<string, string | null>} */ (new Map()),
   );
+  // Popup điểm đo đang mở (click thường HOẶC auto khi có điểm real-time mới).
+  // Mở popup mới luôn remove() ref cũ trước → mỗi lần tại 1 popup, đóng popup
+  // cũ cho user. Reset null khi user tự đóng (popup remove sự kiện 'close').
+  const surveyPopupRef = useRef(/** @type {maplibregl.Popup | null} */ (null));
+  // Length snapshot dùng để phát hiện realtimeFeatures vừa grow (vs chỉ thay
+  // reference do filter/reset). Effect auto-popup chỉ fire khi length tăng.
+  const lastRealtimeFeatureCountRef = useRef(0);
   // Đảm bảo URL deep-link predict chỉ chạy 1 lần / mount.
   const deepLinkConsumedRef = useRef(false);
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
   const initialPointsFilterRef = useRef(readPointsFilterUrlState());
+  // Persisted live session (mig 0031): nếu user reload trang giữa chuyến,
+  // restore batch_id + sourceId + startedAt từ localStorage. Effect reset/
+  // start phát hiện ref non-null → skip create batch mới, chỉ resume interval.
+  const initialLiveSessionRef = useRef(readPersistedLiveSession());
+  // True ở lần render đầu nếu có persisted entry. Effect 851 dùng cờ này để
+  // khôi phục refs (batchId, startedAt, cursor) thay vì Date.now() reset.
+  // Flip false sau lần fire đầu để các lần re-trigger sau hoạt động bình thường.
+  const restoredLiveSessionRef = useRef(initialLiveSessionRef.current !== null);
 
   const user = useSyncExternalStore(subscribeAuth, getUser);
 
@@ -685,16 +755,28 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // sau mỗi response. `sessionCounterRef` ref vì cập nhật tần suất cao nhưng
   // chỉ cần render qua badge (lastSeenAt state đã trigger re-render).
   // `realtimeFeatures` accumulator: snapshot lần đầu + append incremental.
-  const [realtimeEnabled, setRealtimeEnabled] = useState(false);
+  const [realtimeEnabled, setRealtimeEnabled] = useState(
+    () => initialLiveSessionRef.current !== null,
+  );
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   // Khi bật, displayedItems chỉ giữ điểm có timestamp >= sessionStartedAtRef
   // (mốc lúc tick toggle realtime) — ẩn snapshot lịch sử khỏi map.
   const [liveOnlyEnabled, setLiveOnlyEnabled] = useState(false);
-  const lastPointTimestampRef = useRef(/** @type {string | null} */ (null));
+  // Sau restore: set = startedAt ISO để snapshot query gửi `since` cursor →
+  // backend chỉ trả điểm trong session, không full-history → counter chính xác.
+  const lastPointTimestampRef = useRef(
+    /** @type {string | null} */ (
+      initialLiveSessionRef.current
+        ? new Date(initialLiveSessionRef.current.startedAt).toISOString()
+        : null
+    ),
+  );
   const sessionCounterRef = useRef(0);
   // Mốc client time (epoch ms) khi user tick toggle realtime. Dùng cho
   // liveOnly filter — so với p.timestamp parse ISO. Reset cùng cursor.
-  const sessionStartedAtRef = useRef(/** @type {number | null} */ (null));
+  const sessionStartedAtRef = useRef(
+    /** @type {number | null} */ (initialLiveSessionRef.current?.startedAt ?? null),
+  );
   const [lastSeenAt, setLastSeenAt] = useState(
     /** @type {number | null} */ (null),
   );
@@ -716,13 +798,17 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // chuyến vào 1 source cụ thể, hoặc đang xem 1 source này nhưng ghi vào
   // source khác.
   const [liveSessionSourceId, setLiveSessionSourceId] = useState(
-    /** @type {string | null} */ (null),
+    /** @type {string | null} */ (initialLiveSessionRef.current?.sourceId ?? null),
   );
   // Tách "bật realtime" (xem điểm mới) khỏi "chuyến khảo sát" (1 batch).
   // Batch chỉ tạo khi user nhấn "Bắt đầu" → đảm bảo batch = data từ Start
   // tới End, không gồm điểm trước khi user explicit start.
-  const [liveSessionRunning, setLiveSessionRunning] = useState(false);
-  const liveSessionBatchIdRef = useRef(/** @type {string | null} */ (null));
+  const [liveSessionRunning, setLiveSessionRunning] = useState(
+    () => initialLiveSessionRef.current !== null,
+  );
+  const liveSessionBatchIdRef = useRef(
+    /** @type {string | null} */ (initialLiveSessionRef.current?.batchId ?? null),
+  );
   const liveSessionInsertedRef = useRef(0);
 
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
@@ -824,6 +910,29 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       realtimeEnabled && contributor === "me" ? REALTIME_POLL_MS : false,
   });
 
+  // Map devEUI → friendly name. Popup hiển thị tên user-set (vd
+  // "STM32F411-Node-01") thay vì hex devEUI khô khan. Source ưu tiên: source
+  // đang live (vừa có data đang chảy), fallback source đang filter "Bản đồ
+  // của tôi". Cả 2 null → skip query.
+  const deviceSourceForLookup =
+    liveSessionSourceId ?? linkedSourceForQuery ?? null;
+  const devicesQ = useQuery({
+    queryKey: ["live-devices", deviceSourceForLookup],
+    queryFn: () =>
+      listDevices(/** @type {string} */ (deviceSourceForLookup), { limit: 500 }),
+    enabled: deviceSourceForLookup !== null && contributor === "me" && !!user,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!devicesQ.data) return;
+    const map = new Map();
+    for (const d of devicesQ.data.items) {
+      if (d.name && d.name.trim()) map.set(d.dev_eui, d.name);
+    }
+    deviceNameRef.current = map;
+  }, [devicesQ.data]);
+
   // Reset realtime khi rời khỏi mode "me" hoặc logout — toggle realtime chỉ
   // có ý nghĩa với data của chính chủ. Cleanup cursor + counter + features
   // để lần bật lại snapshot từ đầu.
@@ -833,8 +942,11 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     setRealtimeFeatures([]);
     setLastSeenAt(null);
     setLiveSessionSourceId(null);
+    setLiveSessionRunning(false);
+    liveSessionBatchIdRef.current = null;
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
+    clearPersistedLiveSession();
   }, [contributor, user]);
 
   // Reset cursor + accumulator khi filter đổi giữa chừng realtime — kết quả
@@ -843,6 +955,14 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // cho liveOnly filter; advance mỗi lần "session" reset.
   useEffect(() => {
     if (!realtimeEnabled) return;
+    // Lần fire đầu sau reload-restore: refs đã được lazy-init từ persisted
+    // entry. KHÔNG được overwrite bằng Date.now() — flip cờ và bỏ qua reset.
+    // Lần fire tiếp theo (user đổi filter / bấm Kết thúc rồi bật lại) sẽ
+    // chạy reset bình thường.
+    if (restoredLiveSessionRef.current) {
+      restoredLiveSessionRef.current = false;
+      return;
+    }
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
     sessionStartedAtRef.current = Date.now();
@@ -878,27 +998,49 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     let cancelled = false;
     let intervalId = /** @type {ReturnType<typeof setInterval> | null} */ (null);
 
+    const startInterval = () => {
+      intervalId = setInterval(async () => {
+        const batchId = liveSessionBatchIdRef.current;
+        if (batchId === null) return;
+        try {
+          const r = await syncLiveSession(batchId);
+          if (!r.error) {
+            liveSessionInsertedRef.current += r.measurements_inserted;
+          }
+        } catch {
+          // Bỏ qua lỗi interval — handleEndSession sẽ surface qua final sync.
+        }
+      }, LIVE_SESSION_SYNC_MS);
+    };
+
+    // Resume path: batch_id đã restore từ localStorage, bỏ qua POST create
+    // (sẽ tạo batch trùng + orphan batch cũ). Chỉ resume interval sync.
+    if (liveSessionBatchIdRef.current !== null) {
+      startInterval();
+      return () => {
+        cancelled = true;
+        if (intervalId !== null) clearInterval(intervalId);
+      };
+    }
+
     (async () => {
       try {
         const res = await startLiveSession(liveSessionSourceId);
         if (cancelled) return;
         liveSessionBatchIdRef.current = res.batch_id;
-        intervalId = setInterval(async () => {
-          const batchId = liveSessionBatchIdRef.current;
-          if (batchId === null) return;
-          try {
-            const r = await syncLiveSession(batchId);
-            if (!r.error) {
-              liveSessionInsertedRef.current += r.measurements_inserted;
-            }
-          } catch {
-            // Bỏ qua lỗi interval — handleEndSession sẽ surface qua final sync.
-          }
-        }, LIVE_SESSION_SYNC_MS);
+        // Persist NGAY sau khi backend xác nhận batch — reload trong khoảng
+        // giữa lúc nhấn "Bắt đầu" và packet đầu tiên vẫn restore được.
+        writePersistedLiveSession({
+          batchId: res.batch_id,
+          sourceId: liveSessionSourceId,
+          startedAt: sessionStartedAtRef.current ?? Date.now(),
+        });
+        startInterval();
       } catch {
         // Start fail (404 source không tồn tại / mất mạng) → user vẫn xem
         // map; bấm Kết thúc sẽ báo NeedSource modal.
         liveSessionBatchIdRef.current = null;
+        clearPersistedLiveSession();
       }
     })();
 
@@ -919,22 +1061,25 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       setRealtimeFeatures(items);
       sessionCounterRef.current = 0;
     } else if (items.length > 0) {
-      setRealtimeFeatures((prev) => {
-        const seen = new Set(
-          prev.map(
-            (p) =>
-              `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
-          ),
-        );
-        const fresh = items.filter(
+      // Dedup + counter bump phải nằm NGOÀI updater của setRealtimeFeatures:
+      // React 18 StrictMode dev double-invoke updater để check purity → side
+      // effect (ref mutation) trong updater sẽ chạy 2 lần → counter ×2.
+      const seen = new Set(
+        realtimeFeatures.map(
           (p) =>
-            !seen.has(
-              `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
-            ),
-        );
+            `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
+        ),
+      );
+      const fresh = items.filter(
+        (p) =>
+          !seen.has(
+            `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
+          ),
+      );
+      if (fresh.length > 0) {
         sessionCounterRef.current += fresh.length;
-        return fresh.length > 0 ? [...prev, ...fresh] : prev;
-      });
+        setRealtimeFeatures((prev) => [...prev, ...fresh]);
+      }
     }
     if (items.length > 0) {
       const maxTs = items.reduce(
@@ -944,6 +1089,10 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       lastPointTimestampRef.current = maxTs;
       setLastSeenAt(Date.now());
     }
+    // realtimeFeatures DELIBERATELY không vào deps: feature update do effect
+    // này set, thêm vào deps → infinite loop. Closure-read là chấp nhận
+    // được vì poll mới đi qua surveysQ.data → re-render trước khi effect chạy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [surveysQ.data, realtimeEnabled]);
 
   // Idle timer — sau 15 phút không có điểm mới → tự tắt toggle. Reset mỗi
@@ -991,6 +1140,74 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     });
   }, [realtimeFeatures, realtimeEnabled, autoFollowEnabled]);
 
+  // Auto mở popup cho điểm real-time mới nhất (yêu cầu UX: theo dõi trực tiếp
+  // → mỗi packet mới tự mở popup chi tiết, đồng thời đóng popup cũ). Chỉ fire
+  // khi length thực sự tăng — tránh re-open khi realtimeFeatures được tạo
+  // reference mới do filter/reset (length không đổi hoặc giảm).
+  useEffect(() => {
+    if (!realtimeEnabled) {
+      lastRealtimeFeatureCountRef.current = realtimeFeatures.length;
+      return;
+    }
+    if (realtimeFeatures.length <= lastRealtimeFeatureCountRef.current) {
+      lastRealtimeFeatureCountRef.current = realtimeFeatures.length;
+      return;
+    }
+    lastRealtimeFeatureCountRef.current = realtimeFeatures.length;
+    const map = mapRef.current;
+    if (!map) return;
+    const newest = realtimeFeatures[realtimeFeatures.length - 1];
+    // 1 packet → N row (1/gateway). Group sibling theo (timestamp, device_id)
+    // để popup show đủ list "Gateway kết nối" giống click thường.
+    const sameKey = `${newest.timestamp}|${newest.device_id ?? ""}`;
+    const siblings = realtimeFeatures.filter(
+      (r) => `${r.timestamp}|${r.device_id ?? ""}` === sameKey,
+    );
+    const rows = [...siblings].sort((a, b) => b.rssi_dbm - a.rssi_dbm);
+    const top = rows[0] ?? newest;
+    const gwByUuid = new Map(gatewaysRef.current.map((g) => [g.id, g]));
+    const deviceLabel = newest.device_id
+      ? (deviceNameRef.current.get(newest.device_id) ?? newest.device_id)
+      : null;
+    const device = deviceLabel ? escapeHtml(deviceLabel) : "—";
+    const codeRate = newest.code_rate ? escapeHtml(newest.code_rate) : "—";
+    const lng = newest.longitude;
+    const lat = newest.latitude;
+    const gwListHtml = rows
+      .map((r) => {
+        const gw = r.serving_gateway_id
+          ? gwByUuid.get(r.serving_gateway_id)
+          : null;
+        const name = gw ? escapeHtml(gw.name) : "—";
+        const dist = gw
+          ? `${Math.round(haversineMeters(lat, lng, gw.latitude, gw.longitude))} m`
+          : "—";
+        return `<div>• ${name}: ${dist}, ${t.popup.rssiLabel}: ${Number(r.rssi_dbm).toFixed(1)} dBm, ${t.popup.snrLabel}: ${Number(r.snr_db).toFixed(1)} dB</div>`;
+      })
+      .join("");
+    surveyPopupRef.current?.remove();
+    const popup = new maplibregl.Popup({ offset: 8 })
+      .setLngLat([lng, lat])
+      .setHTML(
+        `<div style="font:12px/1.4 system-ui">
+           <div><strong>${t.popup.surveyTitle}</strong></div>
+           <div>${t.popup.deviceLabel}: ${device}</div>
+           <div>${t.popup.rssiLabel}: ${Number(top.rssi_dbm).toFixed(1)} dBm</div>
+           <div>${t.popup.snrLabel}: ${Number(top.snr_db).toFixed(1)} dB</div>
+           <div>${t.popup.frequencyLabel}: ${Number(newest.frequency_mhz).toFixed(2)} MHz</div>
+           <div>${t.popup.sfLabel(Number(newest.spreading_factor))}</div>
+           <div>${t.popup.codeRateLabel}: ${codeRate}</div>
+           <div>${t.popup.timeLabel}: ${formatSurveyTime(String(newest.timestamp))}</div>
+           ${gwListHtml ? `<div style="margin-top:6px"><strong>${t.popup.gatewayConnectedLabel}:</strong></div>${gwListHtml}` : ""}
+         </div>`,
+      )
+      .addTo(map);
+    popup.on("close", () => {
+      if (surveyPopupRef.current === popup) surveyPopupRef.current = null;
+    });
+    surveyPopupRef.current = popup;
+  }, [realtimeFeatures, realtimeEnabled]);
+
   // Nút "Bắt đầu": reset counter + cursor cho chuyến mới, set running=true →
   // effect lifecycle phía trên fire startLiveSession để tạo batch. Realtime
   // poll vẫn chạy độc lập (xem điểm mới trên map dù chưa Start).
@@ -1031,8 +1248,16 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         });
         return;
       }
-      const total =
-        liveSessionInsertedRef.current + result.measurements_inserted;
+      // ChirpStack ingest qua webhook push, KHÔNG đi qua sync REST → cả
+      // `liveSessionInsertedRef` (cộng dồn interval sync) lẫn `result.
+      // measurements_inserted` (final sync) đều 0. Fallback `sessionCounterRef`
+      // (UI counter, đã chính xác sau khi fix StrictMode double-count) phản
+      // ánh đúng packet webhook nhận trong session. LPWANMapper: cả 2 metric
+      // ≈ bằng nhau (cùng track DB inserts), `max` không over-count.
+      const total = Math.max(
+        sessionCounterRef.current,
+        liveSessionInsertedRef.current + result.measurements_inserted,
+      );
       if (total > 0) {
         setEndModal({
           title: tRealtime.endSuccessTitle,
@@ -1040,6 +1265,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         });
         liveSessionBatchIdRef.current = null;
         liveSessionInsertedRef.current = 0;
+        clearPersistedLiveSession();
         setLiveSessionRunning(false);
       } else {
         try {
@@ -1049,6 +1275,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         }
         liveSessionBatchIdRef.current = null;
         liveSessionInsertedRef.current = 0;
+        clearPersistedLiveSession();
         setEndModal({
           title: tRealtime.endEmptyTitle,
           body: tRealtime.endEmptyBody,
@@ -1330,7 +1557,10 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
          * }} */ (f.properties);
         const geom = /** @type {GeoJSON.Point} */ (f.geometry);
         const [lng, lat] = /** @type {[number, number]} */ (geom.coordinates);
-        const device = p.device_id ? escapeHtml(p.device_id) : "—";
+        const deviceLabel = p.device_id
+          ? (deviceNameRef.current.get(p.device_id) ?? p.device_id)
+          : null;
+        const device = deviceLabel ? escapeHtml(deviceLabel) : "—";
         const codeRate = p.code_rate ? escapeHtml(p.code_rate) : "—";
 
         const gwByUuid = new Map(gatewaysRef.current.map((g) => [g.id, g]));
@@ -1357,7 +1587,8 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
           })
           .join("");
 
-        new maplibregl.Popup({ offset: 8 })
+        surveyPopupRef.current?.remove();
+        const popup = new maplibregl.Popup({ offset: 8 })
           .setLngLat([lng, lat])
           .setHTML(
             `<div style="font:12px/1.4 system-ui">
@@ -1373,6 +1604,10 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
              </div>`,
           )
           .addTo(map);
+        popup.on("close", () => {
+          if (surveyPopupRef.current === popup) surveyPopupRef.current = null;
+        });
+        surveyPopupRef.current = popup;
       });
 
       // Đổi cursor khi hover circle để user biết click được.
@@ -2487,7 +2722,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
             - đang chạy (running=true): LIVE + counter + lastSeen + Kết thúc.
             Pointer-events-auto để nút click được. */}
         {realtimeEnabled && contributor === "me" && mode === "points" && (
-          <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
+          <div className="absolute top-3 left-1/2 z-20 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
             {liveSessionRunning && (
               <div>
                 <div className="flex items-center gap-1.5">

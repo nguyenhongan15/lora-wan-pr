@@ -177,6 +177,22 @@ class SurveyIngest(Protocol):
         """
         ...
 
+    def lookup_gateway_for_uplink(
+        self,
+        *,
+        preferred_source_type: str,
+        external_ids: Sequence[str],
+    ) -> dict[str, tuple[UUID, float, float]]:
+        """Bulk lookup gateway (id, lat, lng) theo external_id, cross source.
+
+        Webhook ChirpStack hay gặp uplink từ community/public gateway thuộc
+        source_type khác (vd lpwanmapper). Method này ưu tiên match
+        `preferred_source_type` trước, fallback bất kỳ source_type để
+        webhook có thể gắn `serving_gateway_id` cho popup hiển thị tên +
+        chạy distance filter.
+        """
+        ...
+
     def list_user_devices(
         self,
         *,
