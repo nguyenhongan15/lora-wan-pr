@@ -633,25 +633,6 @@ class SyncReportResponse(BaseModel):
     failures: int = Field(..., ge=0)
 
 
-# ── Live session (mig 0031 — theo dõi trực tiếp) ──────────────────────────
-# 1 chuyến khảo sát = 1 batch kind='live_session'. Start tạo batch, mỗi sync
-# chu kỳ tái sử dụng batch_id để gom rows vào cùng row "Lịch sử upload".
-
-
-class LiveSessionStartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    linked_source_id: UUID
-
-
-class LiveSessionStartResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    batch_id: UUID
-    linked_source_id: UUID
-    started_at: datetime
-
-
 # ── Admin (plan-auth-v1 §3.5, §11 step 8) ─────────────────────────────────
 # Chỉ admin (is_admin=true) gọi được. Audit log + RFC 7807 errors qua
 # AdminRequiredError (403) / AdminSelfModificationError (400).

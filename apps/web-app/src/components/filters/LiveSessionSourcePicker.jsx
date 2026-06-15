@@ -1,12 +1,8 @@
 // @ts-check
-// Picker chọn linked_source để GHI dữ liệu cho 1 chuyến khảo sát trực tiếp
-// (mig 0031). Khác LinkedSourceFilter (vốn là filter XEM): không có option
-// "Tất cả nguồn" — live session cần 1 nguồn cụ thể để biết pull upstream từ
-// đâu và gom rows vào batch nào.
-//
-// Chỉ liệt kê source status='active'; paused/failed không sync được nên không
-// cho chọn. Reuse query key ["sources"] đã cache (LinkedSourceFilter dùng
-// cùng query) để khỏi double fetch.
+// Picker chọn linked_source cho "Theo dõi trực tiếp" (refactor 2026-06-15):
+// tính năng chỉ XEM live, không tạo batch nữa. Liệt kê linked_source
+// status='active'; backend sync per-source pull all devices cho cả
+// LPWANMapper + ChirpStack, không cần FE chọn device.
 
 import { useQuery } from "@tanstack/react-query";
 import { listSources } from "../../sources/client.js";
@@ -53,7 +49,6 @@ export function LiveSessionSourcePicker({ value, onChange, disabled = false }) {
           </option>
         ))}
       </select>
-      <div className="text-[11px] text-slate-500">{t.sourcePickerHint}</div>
       {q.isError && (
         <div className="text-[11px] text-red-600">{t.sourcePickerErrorLoad}</div>
       )}

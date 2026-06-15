@@ -31,9 +31,6 @@ node_modules
 data
 cache
 
-# Coverage artifacts (mount riêng cho celery-worker khi cần)
-apps/web-app/public/coverage/minsf/*.tif
-
 # Docs + IDE
 docs
 .vscode

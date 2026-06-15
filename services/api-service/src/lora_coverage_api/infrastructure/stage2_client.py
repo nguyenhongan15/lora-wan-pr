@@ -44,9 +44,9 @@ class Stage2Client:
     ) -> Stage2Result | None:
         """1 (target, serving_gateway) → residual_db + model_version.
 
-        `stage1_rssi_dbm`: caller-computed Stage 1 RSSI; ET ml-service trừ
-        absolute RSSI prediction để return residual cho parity với XGBoost
-        contract.
+        `stage1_rssi_dbm`: Stage 1 RSSI caller-computed. ml-service chạy Extra
+        Trees end-to-end → dự đoán RSSI tuyệt đối, sau đó trừ Stage 1 để trả
+        ra delta. Tên field `residual_db` giữ nguyên cho ổn định contract.
 
         Return None khi:
           - 503: ml-service chưa có active model.

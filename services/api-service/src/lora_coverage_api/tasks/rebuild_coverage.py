@@ -5,7 +5,7 @@ Config "Bản đồ ước lượng" (chốt 2026-06-09):
   - Per-gateway noise floor calibrate từ survey (geo.gateways.noise_floor_dbm).
   - Survey overlay per-gw: gw có điểm đo (serving_gateway_id) nhận overlay
     riêng trên sub-grid của mình; gw không có điểm đo giữ pure physics.
-  - KHÔNG dùng Stage 2 XGBoost (`--no-stage2`).
+  - KHÔNG dùng Stage 2 ML (`--no-stage2`) — heatmap thuần vật lý.
   - Lý do chốt: user policy 2026-06-09 — composite max-agg sẽ inherit overlay
     từ per-gw tự nhiên; map mỗi gw "trung thực" với phép đo của riêng mình.
 
@@ -139,7 +139,7 @@ def rebuild_coverage_map(self: Any, job_id: str) -> dict[str, Any]:
     #   - KHÔNG dùng DSM (surface model) — clear LORA_SURFACE_DEM_DIRECTORY.
     #     Worker container có thể có env này từ Stage 1 ITU calibration,
     #     KHÔNG được rò rỉ vào subprocess heatmap.
-    #   - Stage 2 XGBoost đã bị drop hẳn cho heatmap (không còn flag CLI);
+    #   - Stage 2 ML đã bị drop hẳn cho heatmap (không còn flag CLI);
     #     survey overlay giờ luôn bật theo default của script.
     #   - --force: script skip nếu output file đã tồn tại; admin rebuild
     #     PHẢI overwrite.

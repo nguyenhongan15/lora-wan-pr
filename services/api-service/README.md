@@ -133,7 +133,7 @@ cùng → thao tác SQL trực tiếp.
 
 `infrastructure/stage2_client.py` (httpx.AsyncClient) gửi `Authorization: Bearer ...`.
 
-- Stage 2 OK → `model_version = "stage1-itu-p1812-v0.1.0+stage2-xgb-v0.6.0"`, RSSI điều chỉnh theo residual.
+- Stage 2 OK → `model_version = "stage1-itu-p1812-v0.1.0+stage2-et-v0.7.0"`, RSSI cộng `residual_db` (= ET end-to-end prediction − Stage 1 baseline).
 - Stage 2 timeout/500/503/OOD → graceful fallback, response 200, `model_version = "stage1-itu-p1812-v0.1.0"` only.
 - `STAGE2_PREDICT_BASE_URL` rỗng → Stage 1 only, không gọi ml-service.
 

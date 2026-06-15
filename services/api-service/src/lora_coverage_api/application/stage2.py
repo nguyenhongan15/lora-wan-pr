@@ -14,20 +14,25 @@ from ..domain.coverage import Gateway, Target
 
 @dataclass(frozen=True, slots=True)
 class Stage2Result:
-    """Output Stage 2 — residual dB + model_version cho audit trail."""
+    """Output Stage 2.
+
+    `residual_db` = (ET end-to-end RSSI prediction) - (Stage 1 RSSI). Tên field
+    giữ "residual" cho ổn định contract; ý nghĩa toán học hiện là "delta để
+    chuyển từ baseline Stage 1 sang dự đoán ML end-to-end".
+    """
 
     residual_db: float
     model_version: str
 
 
 class Stage2Predictor(Protocol):
-    """Capability: refine Stage 1 RSSI bằng residual model.
+    """Capability: tinh chỉnh Stage 1 RSSI bằng dự đoán ML end-to-end.
 
     Return None khi không có active model hoặc transient failure — caller
     fallback Stage 1 nguyên trạng.
 
-    `stage1_rssi_dbm`: Stage 1 RSSI (dBm) caller đã tính. ml-service ET-based
-    cần để convert absolute RSSI → residual.
+    `stage1_rssi_dbm`: Stage 1 RSSI (dBm) caller đã tính. ml-service Extra
+    Trees train trên RSSI tuyệt đối; phải biết baseline Stage 1 để trả delta.
     """
 
     async def predict_residual(

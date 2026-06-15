@@ -15,7 +15,6 @@ Output:
   - per_gw/<code>.geojson: lớp riêng từng gateway
   - manifest.json       : generated_at, model, bbox, gateway list
 
-Tái sử dụng helper từ precompute_minsf.py (Stage 1 setup, gateway loader).
 Composite = max(RSSI) toàn gateway; gw_count = số gw nghe được ≥ -130 dBm.
 
 Usage:
@@ -41,21 +40,277 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 API_SRC = REPO_ROOT / "services" / "api-service" / "src"
-for _p in (str(API_SRC), str(REPO_ROOT / "scripts")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from precompute_minsf import (  # noqa: E402
-    GatewayJob,
-    _compute_pl_grid,
-    _load_dotenv_if_present,
-    _load_gateways,
-    _resolve_db_url,
-    _smooth_pl_grid,
-    meters_to_degrees,
-)
+if str(API_SRC) not in sys.path:
+    sys.path.insert(0, str(API_SRC))
 
 log = logging.getLogger("precompute_rssi")
+
+# ITU-R P.2108-1 §3.2 — Terrestrial path clutter loss model chỉ valid cho
+# distance ≥ 0.25 km. Cell gần hơn skip clutter (pure P.1812 path loss).
+_P2108_MIN_DISTANCE_KM = 0.25
+
+
+def meters_to_degrees(lat: float, dx_m: float, dy_m: float) -> tuple[float, float]:
+    """Convert metres → degrees (dlon, dlat) at given latitude (local-flat)."""
+    dlat = dy_m / 111320.0
+    dlon = dx_m / (111320.0 * math.cos(math.radians(lat)))
+    return dlon, dlat
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayJob:
+    """Pickleable per-gateway spec — passed across multiprocessing boundary."""
+
+    code: str
+    name: str
+    lat: float
+    lon: float
+    altitude_m: float
+    antenna_height_m: float
+    antenna_gain_dbi: float
+    tx_power_dbm: float
+    frequency_mhz: float
+    radius_km: float
+    grid_m: float
+    dem_dir: str
+    surface_dem_dir: str
+    output_path: str
+    location_percent: float = 50.0
+    environment_prob_pct: float = 0.0
+    environment: str = "outdoor"
+    landcover_dir: str = ""
+    bias_path: str = ""
+    smooth_px: int = 5
+    noise_floor_dbm: float | None = None
+    raster_dir: str = ""
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _compute_pl_grid(
+    job: GatewayJob,
+    nx: int,
+    ny: int,
+    lat_min: float,
+    lon_min: float,
+    step_dlat: float,
+    step_dlon: float,
+    skip_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Sample P.1812 path-loss (+ P.2108 clutter khi DTM-only) trên grid nx×ny.
+
+    Clutter source phụ thuộc surface mode:
+      * `job.surface_dem_dir` rỗng (DTM-only): P.1812 + P.2108 statistic.
+      * `job.surface_dem_dir` set (DSM): chỉ P.1812 — building heights đã có
+        trong surface elevation; cộng P.2108 nữa = double-count.
+    """
+    from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
+    from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
+
+    pl_grid = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    eirp_dbm = job.tx_power_dbm + job.antenna_gain_dbi
+    eirp_w = 10.0 ** ((eirp_dbm - 30.0) / 10.0)
+
+    sim = covlib.Simulation()
+    sim.SetTransmitterLocation(job.lat, job.lon)
+    sim.SetTransmitterHeight(job.antenna_height_m)
+    sim.SetTransmitterFrequency(job.frequency_mhz)
+    sim.SetTransmitterPower(eirp_w, covlib.PowerType.EIRP)
+    sim.SetReceiverHeightAboveGround(1.5)
+    sim.SetPropagationModel(covlib.PropagationModel.ITU_R_P_1812)
+    sim.SetITURP1812TimePercentage(50.0)
+    sim.SetITURP1812LocationPercentage(job.location_percent)
+    sim.SetITURP1812SurfaceProfileMethod(
+        covlib.P1812SurfaceProfileMethod.P1812_USE_SURFACE_ELEV_DATA
+    )
+    sim.SetPrimaryTerrainElevDataSource(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF)
+    sim.SetTerrainElevDataSourceDirectory(
+        covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, job.dem_dir
+    )
+    sim.SetPrimarySurfaceElevDataSource(covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF)
+    sim.SetSurfaceElevDataSourceDirectory(
+        covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF,
+        job.surface_dem_dir or job.dem_dir,
+    )
+    if job.landcover_dir:
+        from lora_coverage_api.infrastructure.itu.landcover_mapping import (
+            apply_esa_worldcover_mapping,
+        )
+
+        apply_esa_worldcover_mapping(sim, job.landcover_dir)
+    sim.SetResultType(covlib.ResultType.PATH_LOSS_DB)
+    sim.SetTerrainElevDataSamplingResolution(30)
+
+    t0 = time.time()
+    n_done = 0
+    n_finite = 0
+    n_errors = 0
+    n_total = nx * ny
+    freq_ghz = job.frequency_mhz / 1000.0
+    apply_p2108 = not job.surface_dem_dir
+
+    for iy in range(ny):
+        lat = lat_min + iy * step_dlat
+        for ix in range(nx):
+            if skip_mask is not None and skip_mask[iy, ix]:
+                n_done += 1
+                continue
+            lon = lon_min + ix * step_dlon
+            try:
+                pl = sim.GenerateReceptionPointResult(lat, lon)
+                if math.isfinite(pl):
+                    if apply_p2108:
+                        d_km = _haversine_km(job.lat, job.lon, lat, lon)
+                        if d_km >= _P2108_MIN_DISTANCE_KM:
+                            clutter = itur_p2108.TerrestrialPathClutterLoss(
+                                freq_ghz, d_km, job.location_percent
+                            )
+                            pl = pl + clutter
+                    pl_grid[iy, ix] = pl
+                    n_finite += 1
+            except (RuntimeError, ValueError) as exc:
+                if n_errors < 3:
+                    log.warning(
+                        "[%s] cell (%.5f, %.5f) %s: %s",
+                        job.code,
+                        lat,
+                        lon,
+                        type(exc).__name__,
+                        exc,
+                    )
+                n_errors += 1
+
+            n_done += 1
+        if (iy + 1) % 50 == 0 or iy == ny - 1:
+            elapsed = time.time() - t0
+            rate = n_done / max(elapsed, 1e-3)
+            eta = (n_total - n_done) / max(rate, 1e-3)
+            log.info(
+                "[%s] %d/%d (%.0f%%, %.0f%% finite) %.0f cells/s ETA %.0fs",
+                job.code,
+                n_done,
+                n_total,
+                100.0 * n_done / n_total,
+                100.0 * n_finite / max(n_done, 1),
+                rate,
+                eta,
+            )
+
+    if n_errors:
+        log.info("[%s] %d cell exception total trong %d cell", job.code, n_errors, n_total)
+
+    if job.environment_prob_pct > 0.0:
+        from crc_covlib.helper import itur_p2109  # type: ignore[import-untyped]
+
+        bel_db = float(
+            itur_p2109.BuildingEntryLoss(
+                job.frequency_mhz / 1000.0,
+                job.environment_prob_pct,
+                itur_p2109.BuildingType.TRADITIONAL,
+                0.0,
+            )
+        )
+        if math.isfinite(bel_db):
+            finite_mask = np.isfinite(pl_grid)
+            pl_grid[finite_mask] += np.float32(bel_db)
+            log.info(
+                "[%s] P.2109 BEL +%.1f dB (env=%s, prob=%.0f%%)",
+                job.code,
+                bel_db,
+                job.environment,
+                job.environment_prob_pct,
+            )
+        else:
+            log.warning(
+                "[%s] P.2109 BEL non-finite cho freq=%.1f MHz, prob=%.0f%% — skip",
+                job.code,
+                job.frequency_mhz,
+                job.environment_prob_pct,
+            )
+
+    return pl_grid
+
+
+def _smooth_pl_grid(pl_grid: np.ndarray, kernel_px: int) -> np.ndarray:
+    """NaN-safe median filter trên PL grid để khử spike DSM building-receiver."""
+    if kernel_px <= 1:
+        return pl_grid
+    from scipy.ndimage import median_filter  # type: ignore[import-untyped]
+
+    finite_mask = np.isfinite(pl_grid)
+    if not finite_mask.any():
+        return pl_grid
+    fill = float(np.median(pl_grid[finite_mask]))
+    filled = np.where(finite_mask, pl_grid, fill).astype(np.float32)
+    smoothed = median_filter(filled, size=kernel_px, mode="nearest")
+    smoothed[~finite_mask] = np.nan
+    return smoothed
+
+
+def _load_gateways(db_url: str, only_codes: list[str] | None) -> list[dict[str, Any]]:
+    import psycopg
+
+    sql = """
+        SELECT code, name,
+               ST_Y(location::geometry) AS lat,
+               ST_X(location::geometry) AS lon,
+               altitude_m, antenna_height_m, antenna_gain_dbi,
+               tx_power_dbm, frequency_mhz, noise_floor_dbm
+        FROM geo.gateways
+        WHERE is_public = true
+    """
+    params: list[Any] = []
+    if only_codes:
+        sql += " AND code = ANY(%s)"
+        params.append(only_codes)
+    sql += " ORDER BY code"
+
+    if db_url.startswith("postgresql+psycopg://"):
+        db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        assert cur.description is not None
+        cols = [d.name for d in cur.description]
+        return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
+
+
+def _resolve_db_url() -> str:
+    direct = os.environ.get("DATABASE_URL")
+    if direct:
+        return direct
+    os.environ.setdefault("LORA_JWT_SECRET", "x" * 32)
+    os.environ.setdefault(
+        "LORA_LINKING_FERNET_KEYS",
+        "ZmFrZWtleWZha2VrZXlmYWtla2V5ZmFrZWtleWZha2VrZXk=",
+    )
+    os.environ.setdefault("LORA_DEM_DIRECTORY", os.environ.get("LORA_DEM_DIRECTORY", "."))
+    from lora_coverage_api.config import get_settings
+
+    return get_settings().database_url
+
+
+def _load_dotenv_if_present() -> None:
+    """Auto-load repo-root `.env` để script chạy được từ PowerShell mà không
+    cần set env thủ công. Không override env đã set sẵn ngoài shell."""
+    env_path = REPO_ROOT / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        log.warning("python-dotenv không khả dụng — skip auto-load .env")
+        return
+    load_dotenv(env_path, override=False)
+
 
 OUTPUT_DIR = REPO_ROOT / "apps" / "web-app" / "public" / "coverage" / "rssi"
 

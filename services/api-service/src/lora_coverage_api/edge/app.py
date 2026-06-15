@@ -19,7 +19,6 @@ from .routers import auth as auth_router
 from .routers import coverage as coverage_router
 from .routers import gateways as gateways_router
 from .routers import health as health_router
-from .routers import me_live_sessions as me_live_sessions_router
 from .routers import me_sources as me_sources_router
 from .routers import me_uploads as me_uploads_router
 from .routers import survey as survey_router
@@ -111,7 +110,6 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(me_sources_router.router)
     app.include_router(me_uploads_router.router)
-    app.include_router(me_live_sessions_router.router)
     app.include_router(admin_router.router)
     app.include_router(coverage_router.router)
     app.include_router(gateways_router.router)

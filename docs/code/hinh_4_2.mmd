@@ -1,0 +1,13 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart LR
+  EDGE["edge/<br/>HTTP router · middleware · Pydantic"]
+  APP["application/<br/>use-case · Protocol (interface)"]
+  DOM["domain/<br/>kiểu thuần · không I/O"]:::core
+  INFRA["infrastructure/<br/>PostGIS repo · HTTP client · R2 · Valkey"]
+
+  EDGE --> APP
+  APP --> DOM
+  INFRA --> DOM
+  INFRA -. hiện thực hoá Protocol .-> APP
+
+  classDef core fill:#1F3864,stroke:#1F3864,color:#FFFFFF,stroke-width:2px;

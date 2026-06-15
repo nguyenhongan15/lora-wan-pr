@@ -55,7 +55,7 @@ migrations/         ✅ Alembic — 20 revisions (PostGIS + TimescaleDB hypertab
 ops/                Nginx reverse-proxy template
 docs/               Báo cáo tiến độ + ADR (mới có 1 file)
 core-logic/         Design playbook + skill rules
-scripts/            Stage 1 fit/validate, precompute (min-SF + RSSI heatmap), DSM build, ML train, seed
+scripts/            Stage 1 fit/validate, precompute RSSI heatmap, DSM build, ML train, seed
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
@@ -70,16 +70,15 @@ scripts/            Stage 1 fit/validate, precompute (min-SF + RSSI heatmap), DS
 
 ## Coverage map modes (web-app)
 
-Tab "Bản đồ phủ sóng" có 4 chế độ:
+Tab "Bản đồ phủ sóng" có 3 chế độ:
 
 | Mode | Mô tả | Tin cậy |
 |---|---|---|
 | `points` | Survey điểm đo (raw walk-measure data) | Tuyệt đối — đo thực tế |
 | `heatmap` | Heat density survey points | Hiển thị mật độ |
-| `minsf` | Min spreading factor per gateway (Stage 1 ITU + walk-survey bias) | Cao trong walk-path, pure physics ngoài đó |
-| `estimate` 🆕 | **Composite RSSI** max qua 13 gateway (Stage 1 + Stage 2) | Beta — RMSE ±10 dB (~1 bin) |
+| `estimate` | **Composite RSSI** max qua 13 gateway (Stage 1 + Stage 2) | Beta — RMSE ±10 dB (~1 bin) |
 
-GeoJSON tĩnh được pre-generate trong `apps/web-app/public/coverage/{minsf,rssi}/`.
+GeoJSON tĩnh được pre-generate trong `apps/web-app/public/coverage/rssi/`.
 
 ## Architecture
 
@@ -118,7 +117,6 @@ Lỗi theo RFC 7807 (`application/problem+json`). Versioning URI-path (`/api/v1`
 
 ```
 scripts/
-  precompute_minsf.py             # Min-SF heatmap per gateway (Stage 1 + walk-bias)
   precompute_rssi_heatmap.py      # Composite RSSI heatmap (Stage 1 + Stage 2)
   train_residual_model.py         # Train Stage 2 XGBoost từ ts.survey_training
   build_dsm.py                    # Build DSM raster (Copernicus + Google buildings + landcover)

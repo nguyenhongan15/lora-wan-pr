@@ -1,0 +1,20 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart TB
+  TRIG["Trigger: push / PR vào main"]
+  subgraph J1["Job: api-service"]
+    A1["Ruff lint/format"] --> A2["mypy strict"] --> A3["import-linter"] --> A4["grep no-leaky-strings"] --> A5["Alembic upgrade (Timescale)"] --> A6["seed gateway"] --> A7["pytest"]
+  end
+  subgraph J2["Job: docker-build"]
+    B1["Build Dockerfile (api/ml/worker)"] --> B2["smoke docker run + healthcheck"]
+  end
+  subgraph J3["Job: web-app"]
+    C1["npm install"] --> C2["ESLint"] --> C3["JSDoc (tsc --checkJs)"] --> C4["Vite build"]
+  end
+  MERGE["Tất cả pass → image tag theo git SHA"]
+
+  TRIG --> J1
+  TRIG --> J2
+  TRIG --> J3
+  J1 --> MERGE
+  J2 --> MERGE
+  J3 --> MERGE

@@ -101,9 +101,9 @@ class TargetSchema(BaseModel):
     longitude: float
     spreading_factor: int
     frequency_mhz: float
-    # ET dự đoán RSSI tuyệt đối; endpoint vẫn trả `residual_db` (giữ contract
-    # XGBoost) bằng cách trừ stage1_rssi_dbm caller gửi sang. None → endpoint
-    # không thể tính residual, trả None + ood=False để caller fallback Stage1.
+    # ET dự đoán RSSI tuyệt đối; endpoint trả `residual_db = rssi_et −
+    # stage1_rssi_dbm` để api-service cộng lại RSSI cuối. None → không tính
+    # được delta, trả None + ood=False để caller fallback Stage 1.
     stage1_rssi_dbm: float | None = None
 
 

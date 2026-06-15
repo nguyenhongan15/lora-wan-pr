@@ -62,7 +62,7 @@ def apply_esa_worldcover_mapping(sim: Any, landcover_directory: str) -> None:
 
     Caller phải đã `import crc_covlib.simulation as covlib`; nhận `sim` là
     `covlib.Simulation()` instance. Tách hàm này ra để CrcCovlibBackend +
-    precompute_minsf dùng chung 1 wiring, tránh drift.
+    precompute_rssi_heatmap dùng chung 1 wiring, tránh drift.
 
     Args:
         sim: crc_covlib.simulation.Simulation instance.

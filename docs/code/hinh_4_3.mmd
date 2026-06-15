@@ -1,0 +1,33 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart TB
+  subgraph GEO["schema geo"]
+    GW["gateways"]:::hl
+    GWQ["gateway_quarantine"]
+    DEV["devices"]
+    ADDR["addresses"]
+  end
+  subgraph TS["schema ts"]
+    ST["survey_training<br/>(hypertable Timescale, chunk 7 ngày)"]:::hl
+    SQ["survey_quarantine"]
+    CE["chirpstack_events"]
+  end
+  subgraph AUTH["schema auth"]
+    USR["users"]
+    RT["refresh_tokens"]
+    LA["login_attempts"]
+    PRT["password_reset_tokens"]
+  end
+  subgraph MLG["schema ml"]
+    AM["active_models"]
+    RJ["retrain_jobs"]
+    UB["upload_batches"]
+  end
+  subgraph OPS["schema ops"]
+    CR["coverage_rebuild_jobs"]
+    DV["daily_visits"]
+  end
+
+  ST -->|FK gateway_id| GW
+  RT -->|FK user_id| USR
+
+  classDef hl fill:#1F3864,stroke:#1F3864,color:#FFFFFF,stroke-width:2px;

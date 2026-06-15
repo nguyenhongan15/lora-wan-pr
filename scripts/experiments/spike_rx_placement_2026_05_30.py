@@ -1,6 +1,6 @@
 """Spike: xác định crc-covlib đặt RX ở DTM+h hay DSM+h.
 
-Setup Simulation y hệt precompute_minsf cho gw 7276ff002e0507da. Với mỗi
+Setup Simulation y hệt precompute_rssi_heatmap cho gw 7276ff002e0507da. Với mỗi
 cell test:
   - DTM = sim.GetTerrainElevation(lat, lon)
   - DSM = sim.GetSurfaceElevation(lat, lon)

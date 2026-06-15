@@ -1,14 +1,11 @@
 // @ts-check
-// Filter "Cộng đồng / Của tôi / Người dùng cụ thể" — gửi vào /survey/training
-// qua param ?contributor=community|me|user/<uuid>.
+// Filter "Cộng đồng / Của tôi" — gửi vào /survey/training
+// qua param ?contributor=community|me.
 //
-// Plan-auth-v1 §9.2: chuỗi symbolic này được edge/filters.py (resolver duy
-// nhất) parse + authorize. UI chỉ chịu trách nhiệm hiển thị + emit value;
-// KHÔNG tự assert quyền (vd ẩn "user/" với non-admin). User non-admin chọn
-// "user" mà gửi → backend trả 403 admin_required, frontend chỉ hiển thị
-// disabled trên radio. Defense-in-depth chứ không phải auth UI-side.
+// Plan-auth-v1 §9.2: chuỗi symbolic được edge/filters.py (resolver duy
+// nhất) parse + authorize. UI chỉ chịu trách nhiệm hiển thị + emit value.
 
-import { useId, useState } from "react";
+import { useId } from "react";
 import { strings } from "../../strings.js";
 
 const t = strings.coverageMap.filters;
@@ -24,27 +21,13 @@ const t = strings.coverageMap.filters;
  */
 export function ContributorFilter({ value, onChange, user }) {
   const groupId = useId();
-  const isAdmin = Boolean(user?.is_admin);
   const isLoggedIn = Boolean(user);
 
-  // mode: "community" | "me" | "user"
-  // userIdInput: UUID nhập tay khi chọn "user" (admin only).
-  const mode = value === "community" ? "community" : value === "me" ? "me" : "user";
-  const initialUuid = value.startsWith("user/") ? value.slice(5) : "";
-  const [userIdInput, setUserIdInput] = useState(initialUuid);
+  const mode = value === "me" ? "me" : "community";
 
-  /** @param {"community" | "me" | "user"} next */
+  /** @param {"community" | "me"} next */
   function selectMode(next) {
-    if (next === "community") onChange("community");
-    else if (next === "me") onChange("me");
-    else if (userIdInput) onChange(/** @type {ContributorMode} */ (`user/${userIdInput}`));
-    else onChange("community"); // user mode chưa có UUID → fallback
-  }
-
-  /** @param {string} raw */
-  function onUuidChange(raw) {
-    setUserIdInput(raw);
-    if (mode === "user" && raw) onChange(/** @type {ContributorMode} */ (`user/${raw}`));
+    onChange(next);
   }
 
   return (
@@ -83,33 +66,6 @@ export function ContributorFilter({ value, onChange, user }) {
         />
         <span>{t.contributor.me}</span>
       </label>
-
-      {isAdmin && (
-        <>
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-700">
-            <input
-              type="radio"
-              name={groupId}
-              value="user"
-              checked={mode === "user"}
-              onChange={() => selectMode("user")}
-              className="h-3.5 w-3.5"
-            />
-            <span>{t.contributor.user}</span>
-          </label>
-
-          {mode === "user" && (
-            <input
-              type="text"
-              placeholder={t.contributor.userIdPlaceholder}
-              value={userIdInput}
-              onChange={(e) => onUuidChange(e.target.value.trim())}
-              className="ml-5 w-full rounded-md border border-slate-300 px-2 py-1 font-mono text-[11px] shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-              spellCheck={false}
-            />
-          )}
-        </>
-      )}
     </fieldset>
   );
 }

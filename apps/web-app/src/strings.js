@@ -358,34 +358,8 @@ export const strings = {
       modes: {
         points: "Bản đồ điểm đo",
         heatmap: "Bản đồ nhiệt mật độ",
-        // Tab "Bản đồ phủ sóng" có 2 layer:
-        minsf: "Bản đồ min-SF",
         estimate: "Bản đồ ước lượng",
       },
-    },
-    minsf: {
-      panelTitle: "Bản đồ phủ sóng",
-      toggle: {
-        open: "Mở bảng phủ sóng",
-        close: "Đóng bảng",
-      },
-      selector: {
-        label: "Chọn gateway",
-        placeholder: "— Chọn gateway —",
-        loading: "Đang tải gateway…",
-        empty: "Chưa có gateway nào.",
-      },
-      legend: {
-        title: "Min-SF",
-        /** @param {number} sf */
-        sfLabel: (sf) => `SF${sf}`,
-        noCoverage: "Không phủ",
-        hint: "SF nhỏ = sóng mạnh, đỡ spread. SF lớn = vùng rìa, cần sensitivity cao.",
-      },
-      loadError:
-        "Không tải được dữ liệu phủ sóng. Gateway này có thể chưa được precompute.",
-      loadEmpty:
-        "Chưa có dữ liệu phủ sóng cho gateway này — chạy lại `precompute_minsf.py`.",
     },
     estimate: {
       panelTitle: "Bản đồ ước lượng RSSI tổng hợp",
@@ -418,8 +392,6 @@ export const strings = {
         community: "Bản đồ chung",
         me: "Của tôi",
         meLoggedOutHint: "Đăng nhập để xem dữ liệu của riêng bạn.",
-        user: "Người dùng cụ thể",
-        userIdPlaceholder: "UUID người dùng",
       },
       linkedSource: {
         label: "Nguồn liên kết",
@@ -462,12 +434,9 @@ export const strings = {
         loginRequiredCta: "Đăng nhập để tiếp tục",
         toggleLabel: "Bật theo dõi trực tiếp",
         toggleHint:
-          "Tự cập nhật điểm đo từ thiết bị mỗi vài giây. Tự tắt sau 15 phút không có gói tin mới.",
+          "Tự cập nhật điểm đo từ thiết bị trên bản đồ. Để tải dữ liệu lưu vào hệ thống, dùng nút \"Tải dữ liệu mới nhất\" trong tab Nguồn.",
         autoFollowLabel: "Tự theo dõi vị trí",
         autoFollowHint: "Tự dịch bản đồ tới điểm đo mới nhất.",
-        liveOnlyLabel: "Chỉ hiện dữ liệu trực tiếp",
-        liveOnlyHint:
-          "Ẩn các điểm đo cũ, chỉ hiển thị điểm ghi được trong chuyến khảo sát hiện tại.",
         liveBadge: "● TRỰC TIẾP",
         lastSeenLabel: "Mới nhất",
         lastSeenNever: "chưa có",
@@ -476,28 +445,10 @@ export const strings = {
         /** @param {number} m */
         lastSeenMinutesAgo: (m) => `${m} phút trước`,
         /** @param {number} n */
-        sessionCounter: (n) => `Đã ghi ${n} điểm`,
-        startButton: "Bắt đầu",
-        startNeedSourceHint: "Chọn nguồn dữ liệu ở panel filter trước khi bắt đầu.",
-        endButton: "Kết thúc",
-        ending: "Đang đồng bộ…",
-        endSuccessTitle: "Hoàn tất chuyến khảo sát",
-        /** @param {number} n */
-        endSuccessBody: (n) =>
-          `Đã đồng bộ ${n} điểm đo mới vào bản đồ của bạn. Mở "Quản lý dữ liệu" để xem batch vừa tạo.`,
-        endEmptyTitle: "Không có điểm đo mới",
-        endEmptyBody:
-          "Không có điểm đo nào mới được ghi nhận trong chuyến khảo sát này.",
-        endErrorTitle: "Không thể kết thúc",
-        /** @param {string} err */
-        endErrorBody: (err) =>
-          `Đồng bộ thất bại: ${err}. Bạn có thể thử lại sau hoặc đồng bộ thủ công ở trang "Nguồn dữ liệu".`,
-        endNeedSourceTitle: "Chọn nguồn dữ liệu",
-        endNeedSourceBody:
-          'Hãy chọn nguồn dữ liệu để ghi chuyến khảo sát ngay dưới ô "Bật theo dõi trực tiếp" rồi bấm "Kết thúc".',
-        sourcePickerLabel: "Nguồn ghi dữ liệu chuyến này",
-        sourcePickerHint:
-          "Điểm đo trong chuyến sẽ được đồng bộ về 1 batch mới của nguồn này.",
+        sessionCounter: (n) => `Đã ghi nhận ${n} điểm`,
+        viewButton: "Xem",
+        stopButton: "Dừng",
+        sourcePickerLabel: "Nguồn",
         sourcePickerPlaceholder: "— Chưa chọn nguồn —",
         sourcePickerNoActive:
           "Chưa có nguồn nào ở trạng thái Đang dùng. Vào trang Nguồn dữ liệu để thêm/bật.",

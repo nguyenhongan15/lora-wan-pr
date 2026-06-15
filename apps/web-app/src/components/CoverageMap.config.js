@@ -59,11 +59,7 @@ export const STATUS_COLOR_FALLBACK = "#7c3aed";
 export const MARGIN_BAR_RANGE = { min: -10, max: 20 };
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Basemap raster tiles.
- *  - BASEMAP_STYLE (CARTO Voyager): basemap mặc định mọi tab.
- *  - SATELLITE_BASEMAP_STYLE (ESRI World Imagery): overlay raster chỉ
- *    hiện khi coverageViewMode === "minsf" (đối chiếu band SF với
- *    toà nhà/đường thực tế). Tab "Bản đồ ước lượng" không bật overlay.
+ * Basemap raster tiles. CARTO Voyager dùng chung cho mọi tab.
  * ─────────────────────────────────────────────────────────────────────── */
 
 export const BASEMAP_STYLE = {
@@ -79,23 +75,6 @@ export const BASEMAP_STYLE = {
       tileSize: 256,
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      maxzoom: 19,
-    },
-  },
-  layers: [{ id: "basemap", type: "raster", source: "basemap" }],
-};
-
-export const SATELLITE_BASEMAP_STYLE = {
-  version: 8,
-  sources: {
-    basemap: {
-      type: "raster",
-      tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      attribution:
-        'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
       maxzoom: 19,
     },
   },
@@ -126,26 +105,6 @@ export const PREDICT_MARKER_STYLE = {
   border: "3px solid white",
   boxShadow: "0 0 6px rgba(0,0,0,0.5)",
 };
-
-/* ─────────────────────────────────────────────────────────────────────────
- * Min-SF coverage map palette (paper Fig 11 style).
- * SF7 (inner, gw gần) = đỏ ấm; SF12 (outer, xa) = xanh dương lạnh.
- * Convention: SF nhỏ = signal mạnh, đỡ cần spread; SF lớn = xa, cần
- * sensitivity cao. Sequential cool→warm reversed cho "vùng dễ phục vụ ⇄ rìa".
- * ─────────────────────────────────────────────────────────────────────── */
-
-/** @type {Record<number, string>} */
-export const MINSF_BAND_COLORS = {
-  7: "#d7191c",
-  8: "#fdae61",
-  9: "#ffffbf",
-  10: "#abd9e9",
-  11: "#2c7bb6",
-  12: "#08306b",
-};
-
-// Opacity nền fill — đủ rõ band, vẫn thấy địa hình dưới.
-export const MINSF_FILL_OPACITY = 0.55;
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Composite RSSI heatmap palette (mode='estimate').

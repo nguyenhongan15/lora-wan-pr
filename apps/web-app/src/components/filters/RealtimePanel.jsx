@@ -1,6 +1,8 @@
 // @ts-check
-// Panel "Theo dõi trực tiếp" — tách icon + body để icon nằm trong
-// icons-column ở CoverageMap, không bị panel filter push xuống khi mở.
+// Panel "Theo dõi trực tiếp" (refactor 2026-06-15) — chỉ xem live, không
+// còn tạo batch. Picker chọn linked_source → bật toggle → poll điểm mới
+// hiển thị trên map. Tắt toggle → ngừng poll, giữ markers.
+// Tải dữ liệu thật về DB dùng nút "Tải dữ liệu mới nhất" trong tab Nguồn.
 
 import { strings } from "../../strings.js";
 import { LiveSessionSourcePicker } from "./LiveSessionSourcePicker.jsx";
@@ -57,11 +59,8 @@ export function RealtimeToggleBtn({ open, onToggle, realtimeEnabled }) {
  *   onRealtimeEnabledChange: (v: boolean) => void,
  *   autoFollowEnabled: boolean,
  *   onAutoFollowEnabledChange: (v: boolean) => void,
- *   liveOnlyEnabled: boolean,
- *   onLiveOnlyEnabledChange: (v: boolean) => void,
  *   liveSessionSourceId: string | null,
  *   onLiveSessionSourceIdChange: (v: string | null) => void,
- *   liveSessionActive: boolean,
  * }} props
  */
 export function RealtimeBody({
@@ -71,11 +70,8 @@ export function RealtimeBody({
   onRealtimeEnabledChange,
   autoFollowEnabled,
   onAutoFollowEnabledChange,
-  liveOnlyEnabled,
-  onLiveOnlyEnabledChange,
   liveSessionSourceId,
   onLiveSessionSourceIdChange,
-  liveSessionActive,
 }) {
   const loggedIn = !!user;
 
@@ -96,8 +92,6 @@ export function RealtimeBody({
             type="checkbox"
             checked={loggedIn && realtimeEnabled}
             onChange={(e) => {
-              // Guest tick → ép login. Sau login thành công, App.jsx fire
-              // afterLogin để auto-tick. User huỷ login → giữ false.
               if (!loggedIn) {
                 if (e.target.checked) {
                   onRequestLogin?.(() => onRealtimeEnabledChange(true));
@@ -129,7 +123,6 @@ export function RealtimeBody({
             <LiveSessionSourcePicker
               value={liveSessionSourceId}
               onChange={onLiveSessionSourceIdChange}
-              disabled={liveSessionActive}
             />
             <label className="flex items-start gap-2 pl-5">
               <input
@@ -142,20 +135,6 @@ export function RealtimeBody({
                 <span>{t.autoFollowLabel}</span>
                 <span className="block text-xs text-slate-500">
                   {t.autoFollowHint}
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-2 pl-5">
-              <input
-                type="checkbox"
-                checked={liveOnlyEnabled}
-                onChange={(e) => onLiveOnlyEnabledChange(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                <span>{t.liveOnlyLabel}</span>
-                <span className="block text-xs text-slate-500">
-                  {t.liveOnlyHint}
                 </span>
               </span>
             </label>

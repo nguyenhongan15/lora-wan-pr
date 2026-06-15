@@ -12,10 +12,9 @@ import { strings } from "../strings.js";
 const t = strings.coverageMap.viewModePicker;
 
 /**
- * Generic view-mode toggle — value typed string vì 2 tab khác nhau:
- *  - tab "Bản đồ điểm đo": "points" | "heatmap"
- *  - tab "Bản đồ phủ sóng": "minsf" | "estimate"
- * Component không quan tâm semantic value, chỉ render label.
+ * Generic view-mode toggle — value typed string. Tab "Bản đồ điểm đo"
+ * hiện dùng "points" | "heatmap"; component không quan tâm semantic
+ * value, chỉ render label.
  */
 
 /**

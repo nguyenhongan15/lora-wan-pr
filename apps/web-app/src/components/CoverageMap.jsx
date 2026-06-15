@@ -9,20 +9,12 @@ import {
   listSurveyTraining,
   predictCoverage,
 } from "../api/client.js";
-import {
-  deleteUploadBatch,
-  listDevices,
-  startLiveSession,
-  syncLiveSession,
-} from "../sources/client.js";
+import { listDevices } from "../sources/client.js";
 import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
-import { AlertModal } from "./Modal.jsx";
 import { MapLegend } from "./MapLegend.jsx";
 import { MapViewModeToggle } from "./MapViewModeToggle.jsx";
 import { EstimatePanel } from "./EstimatePanel.jsx";
-// MinSFPanel: tạm ẩn UI minsf, import lại khi bật lại toggle.
-// import { MinSFPanel } from "./MinSFPanel.jsx";
 import {
   PointsFilterToggleBtn,
   PointsFilterBody,
@@ -34,14 +26,11 @@ import {
 import { AddressLookupPanel } from "./address/AddressLookupPanel.jsx";
 import {
   BASEMAP_STYLE,
-  SATELLITE_BASEMAP_STYLE,
   DEFAULT_FREQ_MHZ,
   DEFAULT_SF,
   DEFAULT_TX_POWER_DBM,
   INITIAL_CENTER,
   INITIAL_ZOOM,
-  MINSF_BAND_COLORS,
-  MINSF_FILL_OPACITY,
   RSSI_FILL_OPACITY,
   PREDICT_MARKER_STYLE,
   STATUS_COLOR,
@@ -170,56 +159,6 @@ function escapeHtml(s) {
         return "&#39;";
     }
   });
-}
-
-// localStorage key cho chuyến khảo sát đang chạy. Persist {batchId, sourceId,
-// startedAt} để reload trang KHÔNG đánh mất session — restore vào state khi
-// mount, batch_id giữ nguyên, points đã ingest vào DB vẫn fetch lại được qua
-// surveysQ (cursor = startedAt → backend filter timestamp >= since).
-const LIVE_SESSION_STORAGE_KEY = "lora-coverage:live-session";
-
-/**
- * @returns {{ batchId: string, sourceId: string, startedAt: number } | null}
- */
-function readPersistedLiveSession() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(LIVE_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    if (
-      typeof obj?.batchId === "string" &&
-      typeof obj?.sourceId === "string" &&
-      typeof obj?.startedAt === "number" &&
-      Number.isFinite(obj.startedAt)
-    ) {
-      return obj;
-    }
-  } catch {
-    // corrupt entry — bỏ qua, sẽ overwrite ở handleStart kế tiếp.
-  }
-  return null;
-}
-
-/**
- * @param {{ batchId: string, sourceId: string, startedAt: number }} entry
- */
-function writePersistedLiveSession(entry) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(LIVE_SESSION_STORAGE_KEY, JSON.stringify(entry));
-  } catch {
-    // quota / private mode — ignore, in-memory session vẫn chạy.
-  }
-}
-
-function clearPersistedLiveSession() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(LIVE_SESSION_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
 }
 
 /**
@@ -419,8 +358,8 @@ const SURVEY_CONNECTION_LINES_SOURCE_ID = "survey-connection-lines-src";
 const SURVEY_CONNECTION_LINES_LAYER_ID = "survey-connection-lines";
 
 // ViewMode cho tab "Bản đồ điểm đo" — toggle circle/heatmap mật độ. Định
-// nghĩa local vì MapViewModeToggle hiện nhận `string` chung (xài cho cả
-// tab "Bản đồ phủ sóng" với value khác: minsf/estimate).
+// nghĩa local vì MapViewModeToggle nhận `string` chung; tab "Bản đồ phủ
+// sóng" hiện chỉ có 1 mode "estimate" nên picker tạm ẩn.
 /** @typedef {"points" | "heatmap"} ViewMode */
 
 // Predict-line GeoJSON source — line layer nối điểm dự đoán → serving gateway.
@@ -430,23 +369,10 @@ const SURVEY_CONNECTION_LINES_LAYER_ID = "survey-connection-lines";
 const PREDICT_LINES_SOURCE_ID = "predict-lines-src";
 const PREDICT_LINES_LAYER_ID = "predict-lines";
 
-// Min-SF coverage layer (tab "Bản đồ phủ sóng" + viewMode "minsf"). 1 source
-// + 1 fill layer; setData khi user đổi gateway. Polygon nested SF12⊃...⊃SF7
-// đã sort outermost-first ở precompute script → render đúng order tự nhiên.
-const MINSF_SOURCE_ID = "minsf-src";
-const MINSF_FILL_LAYER_ID = "minsf-fill";
-const MINSF_OUTLINE_LAYER_ID = "minsf-outline";
-
 // Composite RSSI heatmap (viewMode "estimate"). Fetch 1 lần khi switch sang
 // estimate; cached trong source data cho lần switch sau.
 const RSSI_COMPOSITE_SOURCE_ID = "rssi-composite-src";
 const RSSI_COMPOSITE_FILL_LAYER_ID = "rssi-composite-fill";
-
-// Satellite overlay — chỉ visible khi coverageViewMode === "minsf" (đối
-// chiếu band SF với buildings/đường). Estimate view dùng basemap CARTO
-// sạch (composite RSSI cell trông rõ hơn).
-const SATELLITE_OVERLAY_SOURCE_ID = "satellite-overlay-src";
-const SATELLITE_OVERLAY_LAYER_ID = "satellite-overlay";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
@@ -552,10 +478,6 @@ const REALTIME_BADGE_TICK_MS = 5000;
 // Khi auto-pan tới điểm mới, zoom tối thiểu để user thấy chi tiết đường đi.
 // Giữ zoom cao hơn nếu user đang zoom xa hơn (max → preserve user intent).
 const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 15;
-// Chu kỳ pull external source vào DB cho live session (mig 0031). Chậm hơn
-// REALTIME_POLL_MS — sync ChirpStack/LPWANMapper tốn round-trip, không cần
-// fan-out 1s/lần; 20s đủ "gần realtime" cho UX khảo sát mà không nghẽn upstream.
-const LIVE_SESSION_SYNC_MS = 20000;
 // Reference ổn định cho displayedItems khi chưa có data — tránh `?? []` tạo
 // array mới mỗi render gây useEffect deps re-fire.
 const EMPTY_TRAINING_ITEMS = Object.freeze(/** @type {never[]} */ ([]));
@@ -640,14 +562,6 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const initialUrlRef = useRef(readUrlState());
   const initialFilterRef = useRef(readFilterUrlState());
   const initialPointsFilterRef = useRef(readPointsFilterUrlState());
-  // Persisted live session (mig 0031): nếu user reload trang giữa chuyến,
-  // restore batch_id + sourceId + startedAt từ localStorage. Effect reset/
-  // start phát hiện ref non-null → skip create batch mới, chỉ resume interval.
-  const initialLiveSessionRef = useRef(readPersistedLiveSession());
-  // True ở lần render đầu nếu có persisted entry. Effect 851 dùng cờ này để
-  // khôi phục refs (batchId, startedAt, cursor) thay vì Date.now() reset.
-  // Flip false sau lần fire đầu để các lần re-trigger sau hoạt động bình thường.
-  const restoredLiveSessionRef = useRef(initialLiveSessionRef.current !== null);
 
   const user = useSyncExternalStore(subscribeAuth, getUser);
 
@@ -665,7 +579,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const [gpsError, setGpsError] = useState(
     /** @type {string | null} */ (null),
   );
-  // Collapse pattern khớp với PointsFilterPanel / MinSFPanel / EstimatePanel:
+  // Collapse pattern khớp với PointsFilterPanel / EstimatePanel:
   // default closed (1 icon button) để không che map. Reset về closed khi user
   // rời tab predict — tránh ghost-state hiện ra ở lần re-enter sau.
   const [predictPanelOpen, setPredictPanelOpen] = useState(false);
@@ -694,19 +608,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // đo đến gateway đã thu được. Chỉ ý nghĩa khi mode === "points".
   const [showConnectionLines, setShowConnectionLines] = useState(false);
 
-  // Tab "Bản đồ phủ sóng" (mode === "heatmap") có 2 layer toggle độc lập với
-  // viewMode points/heatmap. "estimate" là composite RSSI heatmap (default —
-  // hiển thị toàn cảnh phủ sóng cộng dồn 13 gateway); "minsf" cần user chọn
-  // gateway nên kém trực quan cho lần đầu vào tab.
+  // Tab "Bản đồ phủ sóng" (mode === "heatmap"): hiện chỉ có 1 layer "estimate"
+  // (composite RSSI heatmap cộng dồn 13 gateway). State giữ làm skeleton cho
+  // các mode sau có thể bổ sung vào picker.
   const [coverageViewMode] = useState(
-    /** @type {"minsf" | "estimate"} */ ("estimate"),
+    /** @type {string} */ ("estimate"),
   );
-  // Code gateway đang được chọn để hiển thị min-SF overlay (null = không chọn).
-  // Dùng `code` thay `id` vì precompute script ghi GeoJSON theo code (`{code}.geojson`).
-  // Tạm ẩn UI minsf → setter không reachable; giữ value để các useEffect layer
-  // visibility vẫn type-safe (always null, layer luôn hidden).
-  const [minsfGatewayCode] = useState(/** @type {string | null} */ (null));
-  const [, setMinsfLoadError] = useState(/** @type {string | null} */ (null));
   // Composite RSSI heatmap (viewMode "estimate"): load error state. Fetch
   // GeoJSON khi vào estimate mode lần đầu hoặc khi gateway picker đổi giá trị.
   // estimateLoadedRef cache theo "key": "composite" cho all-gw, code cho per-gw
@@ -755,28 +662,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // sau mỗi response. `sessionCounterRef` ref vì cập nhật tần suất cao nhưng
   // chỉ cần render qua badge (lastSeenAt state đã trigger re-render).
   // `realtimeFeatures` accumulator: snapshot lần đầu + append incremental.
-  const [realtimeEnabled, setRealtimeEnabled] = useState(
-    () => initialLiveSessionRef.current !== null,
-  );
+  // Refactor 2026-06-15: chỉ XEM live, không tạo batch — ingest qua nút
+  // "Tải dữ liệu mới nhất" ở tab Nguồn.
+  const [realtimeEnabled, setRealtimeEnabled] = useState(false);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
-  // Khi bật, displayedItems chỉ giữ điểm có timestamp >= sessionStartedAtRef
-  // (mốc lúc tick toggle realtime) — ẩn snapshot lịch sử khỏi map.
-  const [liveOnlyEnabled, setLiveOnlyEnabled] = useState(false);
-  // Sau restore: set = startedAt ISO để snapshot query gửi `since` cursor →
-  // backend chỉ trả điểm trong session, không full-history → counter chính xác.
-  const lastPointTimestampRef = useRef(
-    /** @type {string | null} */ (
-      initialLiveSessionRef.current
-        ? new Date(initialLiveSessionRef.current.startedAt).toISOString()
-        : null
-    ),
-  );
+  const lastPointTimestampRef = useRef(/** @type {string | null} */ (null));
   const sessionCounterRef = useRef(0);
-  // Mốc client time (epoch ms) khi user tick toggle realtime. Dùng cho
-  // liveOnly filter — so với p.timestamp parse ISO. Reset cùng cursor.
-  const sessionStartedAtRef = useRef(
-    /** @type {number | null} */ (initialLiveSessionRef.current?.startedAt ?? null),
-  );
   const [lastSeenAt, setLastSeenAt] = useState(
     /** @type {number | null} */ (null),
   );
@@ -785,31 +676,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   );
   // Tick để badge "Mới nhất: Ns trước" tự re-render dù không có điểm mới.
   const [nowTick, setNowTick] = useState(() => Date.now());
-  // Nút Kết thúc → final sync + summary modal. State busy + modal result.
-  const [endingBusy, setEndingBusy] = useState(false);
-  const [endModal, setEndModal] = useState(
-    /** @type {{ title: string, body: string } | null} */ (null),
-  );
-  // Live session (mig 0031): 1 chuyến = 1 batch. Ref vì sync interval đọc
-  // trong closure ổn định; cumulative counter cho tổng kết Kết thúc.
-  // `liveSessionSourceId` là source RIÊNG cho live session (nơi GHI data),
-  // không liên quan tới `linkedSourceId` filter (chỉ điều khiển XEM data).
-  // Tách hẳn 2 state để user có thể đang lọc "Tất cả nguồn" mà vẫn ghi
-  // chuyến vào 1 source cụ thể, hoặc đang xem 1 source này nhưng ghi vào
-  // source khác.
+  // Source filter cho live view: điều khiển scope query realtime (XEM data
+  // của nguồn nào). Backend per-source sync sẽ pull all devices về DB; FE
+  // chỉ chọn nguồn để lọc, không cần chọn device.
   const [liveSessionSourceId, setLiveSessionSourceId] = useState(
-    /** @type {string | null} */ (initialLiveSessionRef.current?.sourceId ?? null),
+    /** @type {string | null} */ (null),
   );
-  // Tách "bật realtime" (xem điểm mới) khỏi "chuyến khảo sát" (1 batch).
-  // Batch chỉ tạo khi user nhấn "Bắt đầu" → đảm bảo batch = data từ Start
-  // tới End, không gồm điểm trước khi user explicit start.
-  const [liveSessionRunning, setLiveSessionRunning] = useState(
-    () => initialLiveSessionRef.current !== null,
-  );
-  const liveSessionBatchIdRef = useRef(
-    /** @type {string | null} */ (initialLiveSessionRef.current?.batchId ?? null),
-  );
-  const liveSessionInsertedRef = useRef(0);
 
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
   // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
@@ -942,31 +814,17 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     setRealtimeFeatures([]);
     setLastSeenAt(null);
     setLiveSessionSourceId(null);
-    setLiveSessionRunning(false);
-    liveSessionBatchIdRef.current = null;
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
-    clearPersistedLiveSession();
   }, [contributor, user]);
 
   // Reset cursor + accumulator khi filter đổi giữa chừng realtime — kết quả
   // mới khác hẳn, không thể incremental từ cursor cũ. Cũng fire khi bật/tắt
-  // realtime để lần snapshot mới luôn full-fetch. sessionStartedAt = mốc
-  // cho liveOnly filter; advance mỗi lần "session" reset.
+  // realtime để lần snapshot mới luôn full-fetch.
   useEffect(() => {
     if (!realtimeEnabled) return;
-    // Lần fire đầu sau reload-restore: refs đã được lazy-init từ persisted
-    // entry. KHÔNG được overwrite bằng Date.now() — flip cờ và bỏ qua reset.
-    // Lần fire tiếp theo (user đổi filter / bấm Kết thúc rồi bật lại) sẽ
-    // chạy reset bình thường.
-    if (restoredLiveSessionRef.current) {
-      restoredLiveSessionRef.current = false;
-      return;
-    }
     lastPointTimestampRef.current = null;
     sessionCounterRef.current = 0;
-    sessionStartedAtRef.current = Date.now();
-    liveSessionInsertedRef.current = 0;
     setRealtimeFeatures([]);
   }, [
     realtimeEnabled,
@@ -979,76 +837,6 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     snrRange,
     timeRange,
   ]);
-
-  // Live session lifecycle (mig 0031): khi user tick "Theo dõi trực tiếp" +
-  // chọn nguồn ghi (liveSessionSourceId) → tạo batch kind='live_session' để
-  // gom mọi sync trong chuyến vào 1 row "Lịch sử upload". Mỗi chu kỳ
-  // LIVE_SESSION_SYNC_MS pull upstream → batch.points_count cộng dồn. Cleanup
-  // khi tắt realtime / đổi source / unmount: clear interval; batch row còn
-  // lại để handleEndSession xử lý (success → giữ, empty → DELETE).
-  //
-  // liveSessionSourceId TÁCH HẲN khỏi linkedSourceId filter: filter điều
-  // khiển XEM data nào trên map, picker này điều khiển GHI vào source nào.
-  useEffect(() => {
-    if (!realtimeEnabled) return;
-    if (contributor !== "me") return;
-    if (liveSessionSourceId === null) return;
-    if (!liveSessionRunning) return;
-
-    let cancelled = false;
-    let intervalId = /** @type {ReturnType<typeof setInterval> | null} */ (null);
-
-    const startInterval = () => {
-      intervalId = setInterval(async () => {
-        const batchId = liveSessionBatchIdRef.current;
-        if (batchId === null) return;
-        try {
-          const r = await syncLiveSession(batchId);
-          if (!r.error) {
-            liveSessionInsertedRef.current += r.measurements_inserted;
-          }
-        } catch {
-          // Bỏ qua lỗi interval — handleEndSession sẽ surface qua final sync.
-        }
-      }, LIVE_SESSION_SYNC_MS);
-    };
-
-    // Resume path: batch_id đã restore từ localStorage, bỏ qua POST create
-    // (sẽ tạo batch trùng + orphan batch cũ). Chỉ resume interval sync.
-    if (liveSessionBatchIdRef.current !== null) {
-      startInterval();
-      return () => {
-        cancelled = true;
-        if (intervalId !== null) clearInterval(intervalId);
-      };
-    }
-
-    (async () => {
-      try {
-        const res = await startLiveSession(liveSessionSourceId);
-        if (cancelled) return;
-        liveSessionBatchIdRef.current = res.batch_id;
-        // Persist NGAY sau khi backend xác nhận batch — reload trong khoảng
-        // giữa lúc nhấn "Bắt đầu" và packet đầu tiên vẫn restore được.
-        writePersistedLiveSession({
-          batchId: res.batch_id,
-          sourceId: liveSessionSourceId,
-          startedAt: sessionStartedAtRef.current ?? Date.now(),
-        });
-        startInterval();
-      } catch {
-        // Start fail (404 source không tồn tại / mất mạng) → user vẫn xem
-        // map; bấm Kết thúc sẽ báo NeedSource modal.
-        liveSessionBatchIdRef.current = null;
-        clearPersistedLiveSession();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (intervalId !== null) clearInterval(intervalId);
-    };
-  }, [realtimeEnabled, contributor, liveSessionSourceId, liveSessionRunning]);
 
   // Merge incremental result: snapshot lần đầu (cursor null) hoặc append
   // điểm mới với dedup theo (timestamp + device_id + serving_gateway_id).
@@ -1208,108 +996,13 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     surveyPopupRef.current = popup;
   }, [realtimeFeatures, realtimeEnabled]);
 
-  // Nút "Bắt đầu": reset counter + cursor cho chuyến mới, set running=true →
-  // effect lifecycle phía trên fire startLiveSession để tạo batch. Realtime
-  // poll vẫn chạy độc lập (xem điểm mới trên map dù chưa Start).
-  const tRealtime = strings.coverageMap.filters.realtime;
-  const handleStartSession = useCallback(() => {
-    if (liveSessionSourceId === null) return;
-    liveSessionInsertedRef.current = 0;
-    sessionCounterRef.current = 0;
-    lastPointTimestampRef.current = null;
-    sessionStartedAtRef.current = Date.now();
-    setRealtimeFeatures([]);
-    setLastSeenAt(null);
-    setLiveSessionRunning(true);
-  }, [liveSessionSourceId]);
-
-  // Nút "Kết thúc": final sync chuyến khảo sát + tổng kết. Cần batch_id
-  // (effect lifecycle đã tạo khi nhấn Bắt đầu). Total = cumulative interval
-  // inserts + final sync delta. Total > 0 → success modal, tắt running để
-  // queryKey đổi → snapshot mới. = 0 → DELETE batch (xoá row rỗng khỏi
-  // "Lịch sử upload") + empty modal. Giữ realtimeEnabled để user có thể
-  // bắt đầu chuyến mới mà không cần tick lại toggle.
-  const handleEndSession = useCallback(async () => {
-    const batchId = liveSessionBatchIdRef.current;
-    if (batchId === null) {
-      setEndModal({
-        title: tRealtime.endNeedSourceTitle,
-        body: tRealtime.endNeedSourceBody,
-      });
-      return;
-    }
-    setEndingBusy(true);
-    try {
-      const result = await syncLiveSession(batchId);
-      if (result.error) {
-        setEndModal({
-          title: tRealtime.endErrorTitle,
-          body: tRealtime.endErrorBody(result.error),
-        });
-        return;
-      }
-      // ChirpStack ingest qua webhook push, KHÔNG đi qua sync REST → cả
-      // `liveSessionInsertedRef` (cộng dồn interval sync) lẫn `result.
-      // measurements_inserted` (final sync) đều 0. Fallback `sessionCounterRef`
-      // (UI counter, đã chính xác sau khi fix StrictMode double-count) phản
-      // ánh đúng packet webhook nhận trong session. LPWANMapper: cả 2 metric
-      // ≈ bằng nhau (cùng track DB inserts), `max` không over-count.
-      const total = Math.max(
-        sessionCounterRef.current,
-        liveSessionInsertedRef.current + result.measurements_inserted,
-      );
-      if (total > 0) {
-        setEndModal({
-          title: tRealtime.endSuccessTitle,
-          body: tRealtime.endSuccessBody(total),
-        });
-        liveSessionBatchIdRef.current = null;
-        liveSessionInsertedRef.current = 0;
-        clearPersistedLiveSession();
-        setLiveSessionRunning(false);
-      } else {
-        try {
-          await deleteUploadBatch(batchId);
-        } catch {
-          // Cleanup best-effort — batch rỗng còn lại user có thể tự xoá.
-        }
-        liveSessionBatchIdRef.current = null;
-        liveSessionInsertedRef.current = 0;
-        clearPersistedLiveSession();
-        setEndModal({
-          title: tRealtime.endEmptyTitle,
-          body: tRealtime.endEmptyBody,
-        });
-        setLiveSessionRunning(false);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setEndModal({
-        title: tRealtime.endErrorTitle,
-        body: tRealtime.endErrorBody(msg),
-      });
-    } finally {
-      setEndingBusy(false);
-    }
-  }, [tRealtime]);
-
   // Render source: realtime → accumulated features; static → snapshot từ
   // useQuery. EMPTY_TRAINING_ITEMS giữ ref ổn định khi data chưa có (tránh
   // `?? []` tạo array mới mỗi render gây setData effect re-fire).
-  // liveOnly: filter điểm có timestamp >= mốc session (client time vs server
-  // ISO; sai số vài giây chấp nhận được cho UX khảo sát).
   const displayedItems = useMemo(() => {
-    if (realtimeEnabled) {
-      if (liveOnlyEnabled && sessionStartedAtRef.current !== null) {
-        const start = sessionStartedAtRef.current;
-        return realtimeFeatures.filter(
-          (p) => Date.parse(p.timestamp) >= start,
-        );
-      }
-      return realtimeFeatures;
-    }
+    if (realtimeEnabled) return realtimeFeatures;
     return surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
-  }, [realtimeEnabled, liveOnlyEnabled, realtimeFeatures, surveysQ.data]);
+  }, [realtimeEnabled, realtimeFeatures, surveysQ.data]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1395,76 +1088,9 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         });
       }
 
-      // Tab "Bản đồ phủ sóng" (mode "heatmap"): add min-SF source + fill layer
-      // ngay khi map load để khi user chọn gateway chỉ cần setData. Layer ẩn
-      // mặc định (visibility="none") — bật khi viewMode==="minsf" và có data.
+      // Tab "Bản đồ phủ sóng" (mode "heatmap"): composite RSSI source + fill
+      // layer. Visibility mặc định "none", bật khi coverageViewMode === "estimate".
       if (mode === "heatmap") {
-        // Satellite ESRI overlay — add TRƯỚC các fill layer để nó nằm dưới
-        // (maplibre stack: add sau = trên). Default hidden; toggle visible
-        // khi coverageViewMode === "minsf".
-        map.addSource(SATELLITE_OVERLAY_SOURCE_ID, {
-          type: "raster",
-          tiles: SATELLITE_BASEMAP_STYLE.sources.basemap.tiles,
-          tileSize: SATELLITE_BASEMAP_STYLE.sources.basemap.tileSize,
-          attribution: SATELLITE_BASEMAP_STYLE.sources.basemap.attribution,
-          maxzoom: SATELLITE_BASEMAP_STYLE.sources.basemap.maxzoom,
-        });
-        map.addLayer({
-          id: SATELLITE_OVERLAY_LAYER_ID,
-          type: "raster",
-          source: SATELLITE_OVERLAY_SOURCE_ID,
-          layout: /** @type {any} */ ({ visibility: "none" }),
-        });
-
-        map.addSource(MINSF_SOURCE_ID, {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-        });
-        map.addLayer({
-          id: MINSF_FILL_LAYER_ID,
-          type: "fill",
-          source: MINSF_SOURCE_ID,
-          // fill-sort-key: SF nhỏ → key cao → render trên cùng. Polygon nested
-          // SF7 ⊂ SF8 ⊂ ... ⊂ SF12; nếu để default order (SF12 last → top) sẽ
-          // phủ hết SF7..SF11. Sort key = 12 - min_sf đảo lại → SF7 = 5 (top),
-          // SF12 = 0 (bottom).
-          layout: /** @type {any} */ ({
-            visibility: "none",
-            "fill-sort-key": ["-", 12, ["get", "min_sf"]],
-          }),
-          paint: /** @type {any} */ ({
-            "fill-color": [
-              "match",
-              ["get", "min_sf"],
-              7, MINSF_BAND_COLORS[7],
-              8, MINSF_BAND_COLORS[8],
-              9, MINSF_BAND_COLORS[9],
-              10, MINSF_BAND_COLORS[10],
-              11, MINSF_BAND_COLORS[11],
-              12, MINSF_BAND_COLORS[12],
-              "#888888",
-            ],
-            "fill-opacity": MINSF_FILL_OPACITY,
-          }),
-        });
-        map.addLayer({
-          id: MINSF_OUTLINE_LAYER_ID,
-          type: "line",
-          source: MINSF_SOURCE_ID,
-          // Outline cùng sort-key để khớp với fill bên dưới — SF nhỏ vẽ trên
-          // cùng. line-sort-key chỉ chấp nhận number expression.
-          layout: /** @type {any} */ ({
-            visibility: "none",
-            "line-sort-key": ["-", 12, ["get", "min_sf"]],
-          }),
-          paint: /** @type {any} */ ({
-            "line-color": "rgba(0,0,0,0.25)",
-            "line-width": 0.5,
-          }),
-        });
-
-        // Composite RSSI heatmap source + fill layer. Layout visibility="none"
-        // mặc định — bật khi coverageViewMode === "estimate".
         map.addSource(RSSI_COMPOSITE_SOURCE_ID, {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -1711,104 +1337,8 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     );
   }, [showConnectionLines, mode, mapLoaded]);
 
-  // Tab "Bản đồ phủ sóng": sync visibility 2 layer min-SF với viewMode +
-  // có gateway đang chọn. Khi switch sang "estimate" hoặc bỏ chọn gateway →
-  // ẩn cả 2 layer. Không clear source data — giữ để switch lại nhanh.
-  useEffect(() => {
-    if (mode !== "heatmap") return;
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    if (!map.getLayer(MINSF_FILL_LAYER_ID)) return;
-    const visible =
-      coverageViewMode === "minsf" && minsfGatewayCode != null ? "visible" : "none";
-    map.setLayoutProperty(MINSF_FILL_LAYER_ID, "visibility", visible);
-    map.setLayoutProperty(MINSF_OUTLINE_LAYER_ID, "visibility", visible);
-  }, [coverageViewMode, minsfGatewayCode, mode, mapLoaded]);
-
-  // Satellite ESRI overlay: chỉ hiện khi đang xem min-SF (cần đối chiếu
-  // với buildings/đường). Estimate view dùng basemap CARTO cho composite
-  // RSSI nhìn rõ hơn.
-  useEffect(() => {
-    if (mode !== "heatmap") return;
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    if (!map.getLayer(SATELLITE_OVERLAY_LAYER_ID)) return;
-    map.setLayoutProperty(
-      SATELLITE_OVERLAY_LAYER_ID,
-      "visibility",
-      coverageViewMode === "minsf" ? "visible" : "none",
-    );
-  }, [coverageViewMode, mode, mapLoaded]);
-
-  // Fetch GeoJSON tĩnh từ public/coverage/minsf/{code}.geojson khi user chọn
-  // gateway. File precomputed offline qua `scripts/precompute_minsf.py` —
-  // không qua API, không có authentication. AbortController để cancel khi
-  // user đổi nhanh (race-safe).
-  useEffect(() => {
-    if (mode !== "heatmap") return;
-    const map = mapRef.current;
-    if (!map || !mapLoaded || !minsfGatewayCode) {
-      // Clear source khi bỏ chọn để không tốn memory với feature cũ.
-      if (map && mapLoaded && map.getSource(MINSF_SOURCE_ID)) {
-        /** @type {maplibregl.GeoJSONSource} */ (
-          map.getSource(MINSF_SOURCE_ID)
-        ).setData({ type: "FeatureCollection", features: [] });
-      }
-      setMinsfLoadError(null);
-      return;
-    }
-
-    setMinsfLoadError(null);
-    const controller = new AbortController();
-    const url = `${import.meta.env.BASE_URL ?? "/"}coverage/minsf/${encodeURIComponent(minsfGatewayCode)}.geojson`;
-    fetch(url, { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const fc = await res.json();
-        if (!fc || !Array.isArray(fc.features)) {
-          throw new Error("invalid_geojson");
-        }
-        const src = map.getSource(MINSF_SOURCE_ID);
-        if (src && "setData" in src) {
-          /** @type {maplibregl.GeoJSONSource} */ (src).setData(fc);
-        }
-        // Fly tới gateway center nếu có trong properties.
-        const props = /** @type {Record<string, any>} */ (fc.properties ?? {});
-        if (
-          typeof props.gateway_lat === "number" &&
-          typeof props.gateway_lon === "number"
-        ) {
-          map.flyTo({
-            center: [props.gateway_lon, props.gateway_lat],
-            zoom: 11,
-            duration: 800,
-          });
-        }
-        if (fc.features.length === 0) {
-          setMinsfLoadError(strings.coverageMap.minsf.loadEmpty);
-        }
-      })
-      .catch((err) => {
-        if (err.name === "AbortError") return;
-        console.error("min-SF fetch failed:", err);
-        setMinsfLoadError(strings.coverageMap.minsf.loadError);
-        const src = map.getSource(MINSF_SOURCE_ID);
-        if (src && "setData" in src) {
-          /** @type {maplibregl.GeoJSONSource} */ (src).setData({
-            type: "FeatureCollection",
-            features: [],
-          });
-        }
-      });
-
-    return () => controller.abort();
-  }, [minsfGatewayCode, mode, mapLoaded]);
-
-  // Composite RSSI heatmap: toggle visibility theo coverageViewMode. Khác
-  // min-SF (cần gateway selection) — composite hiển thị ngay khi switch
-  // sang "estimate".
+  // Composite RSSI heatmap: toggle visibility theo coverageViewMode. Composite
+  // hiển thị ngay khi switch sang "estimate" (không cần gateway selection).
   useEffect(() => {
     if (mode !== "heatmap") return;
     const map = mapRef.current;
@@ -1823,7 +1353,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
 
   // Fetch RSSI GeoJSON khi vào estimate mode hoặc khi gateway picker đổi.
   // Key = "composite" cho all-gw, hoặc code cho per-gw. estimateLoadedRef cache
-  // key đã load để né re-fetch khi switch minsf ↔ estimate (giữ data đã load).
+  // key đã load để né re-fetch khi switch tab (giữ data đã load).
   useEffect(() => {
     if (mode !== "heatmap") return;
     if (coverageViewMode !== "estimate") return;
@@ -1980,8 +1510,6 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     for (const g of gatewaysQ.data.items) {
       if (filterEstimateGw && g.code !== estimateGatewayCode) continue;
       const el = document.createElement("div");
-      // Glow chấm trắng + ring pulse — dùng chung class .cm-gw-marker khai
-      // báo ở index.css, khớp visual với landing map preview.
       el.className = "cm-gw-marker";
       el.setAttribute("aria-label", `Gateway ${g.code}`);
       // g.code + g.name từ ChirpStack do user link → có thể chứa HTML (XSS).
@@ -2066,9 +1594,6 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
             applyAddress(null);
           });
       });
-      // Marker tâm chấm tròn đặt đúng tại tọa độ gateway (anchor default
-      // = center). Khác teardrop pin cũ (anchor="bottom") — circle nên
-      // center mới đặt đúng tâm chấm vào toạ độ.
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([g.longitude, g.latitude])
         .setPopup(popup)
@@ -2695,81 +2220,34 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
           />
         )}
 
-        {/* Tab "Bản đồ phủ sóng": tạm ẩn toggle minsf ↔ estimate — chỉ giữ
-            estimate. Khi bật lại minsf: uncomment block dưới + restore conditional
-            MinSFPanel ở dưới + restore import + state setters đã skip ở trên. */}
-        {/*
-        {mode === "heatmap" && (
-          <MapViewModeToggle
-            mode={coverageViewMode}
-            onChange={(v) =>
-              setCoverageViewMode(
-                "" + v,
-              )
-            }
-            options={[
-              { value: "minsf", label: t.viewModePicker.modes.minsf },
-              { value: "estimate", label: t.viewModePicker.modes.estimate },
-            ]}
-          />
-        )}
-        */}
+        {/* Tab "Bản đồ phủ sóng" hiện chỉ có 1 layer "estimate" — picker
+            sẽ render khi có thêm mode trong tương lai. */}
 
-        {/* Badge chuyến khảo sát trực tiếp: top-center khi realtime ON +
-            contributor=me + mode=points. 2 trạng thái:
-            - chưa Bắt đầu (running=false): nút Bắt đầu (disabled khi chưa
-              chọn nguồn).
-            - đang chạy (running=true): LIVE + counter + lastSeen + Kết thúc.
-            Pointer-events-auto để nút click được. */}
+        {/* Badge "Theo dõi trực tiếp": top-center khi realtime ON +
+            contributor=me + mode=points. Refactor 2026-06-15: chỉ hiển thị
+            trạng thái LIVE + counter + lastSeen — không còn Start/End vì
+            view-only, không tạo batch. */}
         {realtimeEnabled && contributor === "me" && mode === "points" && (
           <div className="absolute top-3 left-1/2 z-20 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
-            {liveSessionRunning && (
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                  <span className="font-semibold text-red-700">
-                    {t.filters.realtime.liveBadge}
-                  </span>
-                </div>
-                <div className="text-slate-600">
-                  {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
-                </div>
-                <div className="text-slate-500">
-                  {t.filters.realtime.lastSeenLabel}:{" "}
-                  {formatLastSeenLabel(
-                    lastSeenAt,
-                    nowTick,
-                    t.filters.realtime,
-                  )}
-                </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                <span className="font-semibold text-red-700">
+                  {t.filters.realtime.liveBadge}
+                </span>
               </div>
-            )}
-            {liveSessionRunning ? (
-              <button
-                type="button"
-                onClick={handleEndSession}
-                disabled={endingBusy}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              >
-                {endingBusy
-                  ? t.filters.realtime.ending
-                  : t.filters.realtime.endButton}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleStartSession}
-                disabled={liveSessionSourceId === null}
-                title={
-                  liveSessionSourceId === null
-                    ? t.filters.realtime.startNeedSourceHint
-                    : undefined
-                }
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-              >
-                {t.filters.realtime.startButton}
-              </button>
-            )}
+              <div className="text-slate-600">
+                {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
+              </div>
+              <div className="text-slate-500">
+                {t.filters.realtime.lastSeenLabel}:{" "}
+                {formatLastSeenLabel(
+                  lastSeenAt,
+                  nowTick,
+                  t.filters.realtime,
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -3028,31 +2506,20 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
                       realtimeEnabled={realtimeEnabled}
                       onRealtimeEnabledChange={(v) => {
                         setRealtimeEnabled(v);
-                        // Live session start effect + badge UI gate
-                        // `contributor === "me"` — auto-switch khi bật để
-                        // tránh silent fail nếu user đang xem community/all.
+                        // Auto-switch contributor=me khi bật để tránh silent
+                        // fail nếu user đang xem community/all.
                         if (v) setContributor("me");
-                        // Untick mid-session: clear running để re-tick không
-                        // tạo batch mới chồng lên batch cũ chưa close (batch
-                        // cũ vẫn còn DB, user xoá tay ở "Lịch sử upload").
-                        else setLiveSessionRunning(false);
                       }}
                       autoFollowEnabled={autoFollowEnabled}
                       onAutoFollowEnabledChange={setAutoFollowEnabled}
-                      liveOnlyEnabled={liveOnlyEnabled}
-                      onLiveOnlyEnabledChange={setLiveOnlyEnabled}
                       liveSessionSourceId={liveSessionSourceId}
                       onLiveSessionSourceIdChange={setLiveSessionSourceId}
-                      liveSessionActive={liveSessionRunning}
                     />
                   )}
                 </div>
               )}
             </div>
           ) : mode === "heatmap" ? (
-            // Tab "Bản đồ phủ sóng": tạm ẩn minsf — chỉ render EstimatePanel.
-            // Khi bật lại, restore conditional `coverageViewMode === "minsf"`
-            // + unwrap toggle ở trên.
             <EstimatePanel
               gateways={gatewaysQ.data?.items ?? []}
               selectedCode={estimateGatewayCode}
@@ -3065,8 +2532,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
 
         {/* Legend cố định ở góc dưới trái — chừa chỗ cho ScaleControl của
             maplibre (mounted ở "bottom-left", cao ~24px). Ẩn ở tab "Bản đồ
-            phủ sóng" vì RSSI band không áp dụng cho min-SF map (đã có
-            legend riêng trong MinSFPanel). */}
+            phủ sóng" vì tab này tự render bảng + legend riêng trong panel. */}
         {mode !== "heatmap" && (
           <div className="absolute bottom-10 left-2 z-10" data-map-legend>
             <MapLegend
@@ -3089,13 +2555,6 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
           </div>
         )}
 
-        {endModal && (
-          <AlertModal
-            title={endModal.title}
-            body={endModal.body}
-            onClose={() => setEndModal(null)}
-          />
-        )}
       </div>
     </div>
   );

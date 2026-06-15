@@ -43,25 +43,16 @@
   }
 }
 
-/* Gateway marker — dùng chung giữa landing map preview và CoverageMap.
-   Chấm trắng viền xanh deep + box-shadow glow. Ring 15 km toả ra render qua
-   MapLibre circle layer (xem CoverageMap.jsx + LandingPage.jsx) để bám km
-   khi user zoom, không dùng CSS scale screen-space. */
-@keyframes cm-gw-pulse {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(10,61,145,0.25), 0 0 18px rgba(29,95,209,0.6); }
-  50%      { box-shadow: 0 0 0 4px rgba(10,61,145,0.45), 0 0 28px rgba(29,95,209,0.9); }
-}
+/* Gateway marker — icon broadcast SVG. Ring 5 km toả ra render qua MapLibre
+   circle layer (xem CoverageMap.jsx) để bám km khi user zoom, không dùng CSS
+   scale screen-space. */
 .cm-gw-marker {
-  width: 18px;
-  height: 18px;
-  background: #ffffff;
-  border: 3px solid #0a3d91;
-  border-radius: 999px;
-  box-shadow:
-    0 0 0 4px rgba(10,61,145,0.25),
-    0 0 18px rgba(29,95,209,0.6);
-  position: relative;
+  width: 28px;
+  height: 28px;
+  background-image: url(/anten2.svg);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
   display: block;
   cursor: pointer;
-  animation: cm-gw-pulse 2.4s ease-in-out infinite;
 }

@@ -34,15 +34,9 @@ dependencies = [
     # module — không khai báo trong setup.py của lib nên cần thêm tay. P.2108
     # không cần. Khi BEL bị strip thì indoor predict crash với ImportError.
     "numpy>=1.26",
-    # scikit-image dùng cho `scripts/precompute_minsf.py` — marching squares
-    # (find_contours) convert min-SF grid → GeoJSON polygon bands. Chỉ chạy
-    # offline (CLI precompute), không touch runtime API. Đặt ở api-service vì
-    # script reuse Stage1ItuModel + CrcCovlibBackend.
-    "scikit-image>=0.24",
-    # shapely cho `_build_features` polygon hole detection. skimage
-    # find_contours không phân biệt outer ring với inner hole (vd terrain
-    # shadow tạo "đảo" SF cao giữa band SF thấp); shapely.contains test
-    # nesting để build Polygon(outer, holes=[...]) đúng theo GeoJSON spec.
+    # shapely cho `scripts/precompute_rssi_heatmap.py` — ocean polygon mask
+    # (Đà Nẵng bbox − mainland − Sơn Trà) để clip cell biển ra khỏi composite
+    # RSSI heatmap. Cũng dùng bởi scripts/build_dsm.py + build_training_csv.py.
     "shapely>=2.0",
     # Stage 2 XGBoost residual model — dùng bởi `scripts/precompute_rssi_heatmap.py`
     # offline (composite RSSI heatmap). Joblib load model ở worker process,

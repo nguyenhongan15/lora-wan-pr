@@ -210,7 +210,7 @@ def resolve_sensitivity(provided: float | None, defaults_table: dict[int, float]
 
 # ── Signal-quality estimators (UI dự đoán chi tiết) ──────────────────────
 # Worst-SNR-margin = min(UL, DL) (SNR − SF_limit). Stage 1 tính từ link budget;
-# orchestrator recompute sau Stage 2 ML residual shift SNR đồng đều.
+# orchestrator recompute sau khi Stage 2 ET shift SNR đồng đều.
 
 
 def estimate_pdr(worst_snr_margin_db: float) -> float:

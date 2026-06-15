@@ -1,0 +1,14 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart TB
+  GW["Gateway LoRa"]
+  CS["ChirpStack server"]
+  WH["POST /chirpstack/webhook<br/>(api-service, token per-tenant)"]
+  EV[("ts.chirpstack_events")]
+  DEDUP["Celery dedup<br/>key (timestamp, device_eui, gw_eui)"]
+  TRAIN[("ts.survey_training")]
+  SSE["SSE fan-out<br/>/me/live-sessions/sse (idle 15')"]
+  CLIENTS["Client panel khảo sát"]
+
+  GW --> CS --> WH --> EV
+  EV --> DEDUP --> TRAIN
+  EV --> SSE --> CLIENTS

@@ -23,14 +23,13 @@ Yêu cầu: api-service chạy ở `VITE_API_BASE_URL` (mặc định http://loc
 
 ## Coverage map modes
 
-Component `CoverageMap.jsx` có 4 view mode (chuyển qua dropdown trong tab "Bản đồ phủ sóng"):
+Component `CoverageMap.jsx` có 3 view mode (chuyển qua dropdown trong tab "Bản đồ phủ sóng"):
 
 | Mode | Source data | Mô tả |
 |---|---|---|
 | `points` | API `/coverage/survey` | Survey điểm đo raw (mỗi point 1 marker) |
 | `heatmap` | Computed client-side | Density heatmap từ survey points |
-| `minsf` | `public/coverage/minsf/*.geojson` | Min spreading factor per gateway (Stage 1 ITU + walk-survey bias) |
-| `estimate` 🆕 | `public/coverage/rssi/*.geojson` | Composite RSSI max qua 13 gateway (Stage 1 + Stage 2 XGBoost) |
+| `estimate` | `public/coverage/rssi/*.geojson` | Composite RSSI max qua 13 gateway (Stage 1 + Stage 2 XGBoost) |
 
 ### Static coverage data
 
@@ -38,10 +37,6 @@ Pre-computed GeoJSON ship cùng frontend:
 
 ```
 public/coverage/
-  minsf/
-    <gw_code>.geojson        # 11 file, mỗi gw 1 layer (4 SF bands)
-    bias_<gw_code>.json      # Walk-survey calibration table per gw
-    manifest.json            # Index + metadata (generated_at, version)
   rssi/
     composite.geojson        # Max RSSI composite (4 bins)
     redundancy.geojson       # gw_count per cell (3 bins)
@@ -50,13 +45,12 @@ public/coverage/
 
 Re-generate khi gw catalog hoặc Stage 1/2 đổi:
 ```bash
-docker exec lora-wan-api uv run python scripts/precompute_minsf.py --bbox danang
 docker exec lora-wan-api uv run python scripts/precompute_rssi_heatmap.py --bbox danang
 # Copy output ra apps/web-app/public/coverage/
 ```
 
 ## i18n
 
-`src/i18n/strings.js` chứa toàn bộ string Việt (block: `coverageStatus`, `coverageMap`, `minsf`, `estimate`, `auth`, `admin`, ...). Không hardcode string trong component.
+`src/i18n/strings.js` chứa toàn bộ string Việt (block: `coverageStatus`, `coverageMap`, `estimate`, `auth`, `admin`, ...). Không hardcode string trong component.
 
 

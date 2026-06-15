@@ -34,7 +34,7 @@ const SECTIONS = [
   { key: "training", label: t.sidebar.training, heading: t.trainingHeading },
   { key: "users", label: t.sidebar.users, heading: t.usersHeading },
   { key: "gateways", label: t.sidebar.gateways, heading: t.gatewaysHeading },
-  { key: "sync", label: t.sidebar.sync, heading: t.syncHeading },
+  // { key: "sync", label: t.sidebar.sync, heading: t.syncHeading }, // tạm ẩn
   { key: "rebuild", label: t.sidebar.rebuild, heading: t.rebuildHeading },
   { key: "retrain", label: t.sidebar.retrain, heading: t.retrainHeading },
   { key: "notifications", label: t.sidebar.notifications, heading: t.notificationsHeading },

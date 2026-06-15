@@ -55,7 +55,7 @@ class CoverageStatus(StrEnum):
 
 class ConfidenceMethod(StrEnum):
     PHYSICS = "physics"  # Stage 1: ITU-R P.1812 + P.2108 (first-principles)
-    RESIDUAL = "residual"  # Stage 2: Stage1 + ML residual
+    RESIDUAL = "residual"  # Stage 2: Stage1 baseline + Extra Trees end-to-end delta
     ENSEMBLE = "ensemble"  # Stage 3: deep ensemble
     BAYESIAN = "bayesian"  # Stage 4: variational (TRIGGERED)
 
@@ -165,8 +165,8 @@ class Prediction:
     # 0.0 = no serving gateway / chưa wire.
     distance_to_serving_gateway_km: float = 0.0
     # ── Signal-quality metrics (FE "Dự đoán điểm" tab) ─────────────────────
-    # Stage 1 tính từ SNR margin (= worst-of UL/DL); Stage 2 ML residual shift
-    # SNR đồng đều → orchestrator recompute. Default 0.0 để legacy test/factory
+    # Stage 1 tính từ SNR margin (= worst-of UL/DL); Stage 2 ET shift SNR
+    # đồng đều → orchestrator recompute. Default 0.0 để legacy test/factory
     # không vỡ.
     pdr: float = 0.0  # Packet Delivery Ratio [0,1]
     ber: float = 0.0  # Bit Error Rate (linear, vd 1e-3)

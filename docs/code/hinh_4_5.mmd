@@ -1,0 +1,14 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart TB
+  REQ["POST /coverage/predict<br/>(lat, lon, SF, env)"]
+  S1["Stage 1 (P.1812)<br/>→ gateway*, rssi_stage1"]
+  Q{"ML bật?"}
+  RET1["Trả về kết quả Stage 1"]
+  CALL["POST ml-service:8001/residual<br/>{target, serving_gateway, stage1_rssi_dbm}"]
+  ET["Extra Trees: trích 21 đặc trưng → rssi_et<br/>residual_db = rssi_et − rssi_stage1"]
+  COMB["rssi_final = rssi_stage1 + residual_db<br/>tính lại SNR/margin/SF/PDR/BER"]
+
+  REQ --> S1 --> Q
+  Q -- Không --> RET1
+  Q -- Có --> CALL --> ET --> COMB
+  CALL -. lỗi → fallback .-> RET1

@@ -1,13 +1,16 @@
 """Stage 1 + optional Stage 2 orchestrator.
 
-Plan v1 §5: predict(target) = best_gateway(Stage1) → Stage2.predict_residual →
-RSSI += residual. Stage1 picks gateway (physics ranking), Stage2 refines RSSI.
+predict(target) = best_gateway(Stage1) → Stage2.predict_residual → RSSI += delta.
+Stage1 (ITU-R P.1812) chọn gateway theo physics ranking + tính RSSI baseline.
+Stage2 (Extra Trees end-to-end) trả `residual_db = rssi_et - rssi_stage1`;
+cộng vào → RSSI cuối = RSSI dự đoán end-to-end của ET. Stage1 effectively chỉ
+còn vai trò gateway selection + baseline cho metric phụ.
 
 Design choice: refine sau khi chọn (1 Stage2 call), KHÔNG refine từng candidate.
 Lý do:
   - Latency: 1 HTTP call thay vì N (5 candidate x 50ms ≈ 250ms vs 50ms).
-  - Stage1 ranking dựa trên link-budget margin — physics đáng tin. Stage2
-    correction là dB delta < ±15 dB → unlikely đảo lộn ranking.
+  - Stage1 ranking dựa trên link-budget margin — physics đáng tin cho rank;
+    Stage2 absolute prediction chỉ tinh chỉnh giá trị dB cho gateway thắng.
 
 Fallback: Stage2 fail (timeout/no model/network) → return Stage1 result thuần.
 Define-errors-out: tất cả failure paths đều trả Stage1, log + telemetry.
@@ -96,10 +99,10 @@ class PredictionOrchestrator:
             else pred.confidence
         )
 
-        # Residual cộng vào RSSI là dB shift đồng đều — noise floor và sensitivity
-        # bất biến → SNR và margin shift cùng delta. Tính lại để response self-
-        # consistent: SF khuyến nghị + status phản ánh được "máy học nói khoẻ
-        # hơn vật lý dự đoán bao nhiêu".
+        # delta = (ET end-to-end RSSI) − (Stage1 RSSI) là dB shift đồng đều —
+        # noise floor và sensitivity bất biến → SNR và margin shift cùng delta.
+        # Tính lại để response self-consistent: SF khuyến nghị + status phản
+        # ánh đúng giá trị ML end-to-end.
         ul_rssi = round(pred.uplink_rssi_dbm + delta, 2)
         dl_rssi = round(pred.downlink_rssi_dbm + delta, 2)
         ul_snr = round(pred.uplink_snr_db + delta, 2)
@@ -112,8 +115,8 @@ class PredictionOrchestrator:
         coverage_status = status_worse_of(ul_status, dl_status)
         worst_snr = ul_snr if ul_margin <= dl_margin else dl_snr
 
-        # Stage 2 ML residual shift SNR đồng đều → PDR/BER/FER cập nhật theo
-        # margin mới; ToA/jitter/bandwidth/shadow σ/noise floor/env không đổi.
+        # Stage 2 ET shift SNR đồng đều → PDR/BER/FER cập nhật theo margin mới;
+        # ToA/jitter/bandwidth/shadow σ/noise floor/env không đổi.
         sf_limit = SF_SNR_LIMITS_DB[sf]
         worst_snr_margin_new = min(ul_snr - sf_limit, dl_snr - sf_limit)
         pdr_new = estimate_pdr(worst_snr_margin_new)
@@ -141,7 +144,7 @@ class PredictionOrchestrator:
         )
         # Re-detect causes vì Stage 2 đã shift SNR/recommended_sf → snr_low &
         # sf_mismatch có thể flip; path_loss/interference/tx_power_cap không
-        # đổi (PL & NF bất biến sau residual).
+        # đổi (PL & NF bất biến sau khi cộng delta).
         refined = dataclasses.replace(
             refined, bottleneck_causes=detect_bottleneck_causes(refined, target)
         )

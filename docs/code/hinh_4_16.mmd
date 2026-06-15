@@ -1,0 +1,24 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
+flowchart TB
+  SRC["Nguồn liên kết<br/>(LPWANMapper / ChirpStack)"]
+  SYNC["Sync packet"]
+  UPL["Upload CSV/JSON"]
+  QS[("ts.survey_quarantine")]
+  QG[("geo.gateway_quarantine")]
+  ADMIN{"Admin duyệt"}
+  GWT[("geo.gateways<br/>+ backfill FK survey")]
+  TRAIN[("ts.survey_training")]
+  TRIG["Reset last_rebuild_at = NULL<br/>+ (tuỳ chọn) retrain ML"]
+  REJ["Reject row<br/>(gateway lạ → admin tạo trước)"]
+
+  SRC --> SYNC
+  SYNC --> QS
+  SYNC --> QG
+  UPL --> QS
+  UPL -. gặp gateway lạ .-> REJ
+  QG --> ADMIN
+  QS --> ADMIN
+  ADMIN -->|duyệt gateway| GWT
+  ADMIN -->|duyệt batch| TRAIN
+  GWT --> TRIG
+  TRAIN --> TRIG

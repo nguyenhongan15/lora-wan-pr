@@ -103,18 +103,6 @@ export const SyncResult = z.object({
   error: z.string().nullable(),
 });
 
-// ── Schemas: live session (mig 0031) ─────────────────────────────────────
-
-export const LiveSessionStartRequest = z.object({
-  linked_source_id: z.string().uuid(),
-});
-
-export const LiveSessionStartResponse = z.object({
-  batch_id: z.string().uuid(),
-  linked_source_id: z.string().uuid(),
-  started_at: z.string(),
-});
-
 // ── Schemas: upload batches (mig 0024 + refactor 2026-06-11) ──────────────
 
 export const UploadKind = z.enum([
@@ -190,7 +178,6 @@ export const CsvUploadResponse = z.object({
  * @typedef {z.infer<typeof UploadBatchSubmitResponse>} UploadBatchSubmitResponseT
  * @typedef {z.infer<typeof UploadBatchDeleteResponse>} UploadBatchDeleteResponseT
  * @typedef {z.infer<typeof CsvUploadResponse>} CsvUploadResponseT
- * @typedef {z.infer<typeof LiveSessionStartResponse>} LiveSessionStartResponseT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -326,50 +313,6 @@ export async function patchSource(id, patch) {
 export async function syncSource(id) {
   const res = await authFetch(
     `${API_BASE_URL}/api/v1/me/sources/${id}/sync`,
-    { method: "POST" },
-  );
-  if (!res.ok) await _throwProblem(res);
-  return SyncResult.parse(await res.json());
-}
-
-// ── Endpoints: live session (mig 0031) ────────────────────────────────────
-
-/**
- * POST /api/v1/me/live-sessions — bắt đầu 1 chuyến khảo sát trực tiếp.
- *
- * Backend tạo batch trống kind='live_session'. FE giữ batch_id; mọi sync
- * incremental trong cùng chuyến truyền batch_id này để gom rows vào 1 batch
- * duy nhất (1 chuyến = 1 row "Lịch sử upload").
- *
- * 404 nếu linked_source không tồn tại / sai owner.
- *
- * @param {string} linkedSourceId UUID
- * @returns {Promise<LiveSessionStartResponseT>}
- */
-export async function startLiveSession(linkedSourceId) {
-  const res = await authFetch(`${API_BASE_URL}/api/v1/me/live-sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ linked_source_id: linkedSourceId }),
-  });
-  if (!res.ok) await _throwProblem(res);
-  return LiveSessionStartResponse.parse(await res.json());
-}
-
-/**
- * POST /api/v1/me/live-sessions/{batchId}/sync — pull incremental cho 1
- * chuyến khảo sát đang chạy. Tái sử dụng batch_id (gom rows mỗi chu kỳ vào
- * cùng batch).
- *
- * Plan §3.4: HTTP 200 kể cả khi sync fail; caller inspect `error`. 404 khi
- * batch không tồn tại / sai owner / đã kết thúc.
- *
- * @param {string} batchId UUID
- * @returns {Promise<SyncResultT>}
- */
-export async function syncLiveSession(batchId) {
-  const res = await authFetch(
-    `${API_BASE_URL}/api/v1/me/live-sessions/${batchId}/sync`,
     { method: "POST" },
   );
   if (!res.ok) await _throwProblem(res);

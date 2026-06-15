@@ -426,9 +426,10 @@ class Settings(BaseSettings):
         description="Goong geocoding API key. Empty = disabled.",
     )
 
-    # ── Stage 2 residual (Predict-ML) ─────────────────────────────────────
+    # ── Stage 2 ML end-to-end (Predict-ML) ────────────────────────────────
     # base_url rỗng → Stage 2 disabled (Stage1-only response). Khi set + có
-    # active model, mọi /predict + /lookup được refine bằng residual_db.
+    # active model, mọi /predict + /lookup được refine bằng delta (residual_db)
+    # do ml-service trả về.
     stage2_predict_base_url: str = Field(
         default="",
         description="Internal URL tới ml-service (vd http://ml-service:8001). Rỗng = disabled.",
@@ -442,8 +443,8 @@ class Settings(BaseSettings):
         ge=0.05,
         le=5.0,
         description="Per-request timeout. Quá thời gian → fallback Stage1. "
-        "ET model (v0.7) làm DEM + OSM lookup + 30m step Fresnel — chậm hơn "
-        "XGBoost v0.6 nhiều, default 3s để có headroom.",
+        "Extra Trees làm DEM + OSM lookup + 30m step Fresnel; default 3s để "
+        "có headroom.",
     )
 
     # ── F2 SLO ────────────────────────────────────────────────────────────
