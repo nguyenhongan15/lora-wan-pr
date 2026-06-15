@@ -135,6 +135,22 @@ function formatSurveyTime(iso) {
 }
 
 /**
+ * Khoảng cách haversine (mét) giữa 2 toạ độ WGS84. Đủ chính xác cho khoảng
+ * vài km — sai số <0.5% vs ellipsoidal.
+ * @param {number} lat1 @param {number} lon1 @param {number} lat2 @param {number} lon2
+ */
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/**
  * Escape HTML để inject vào popup an toàn (device_id là user-input).
  * @param {string} s
  */
@@ -545,6 +561,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const [predictMarkerCount, setPredictMarkerCount] = useState(0);
   const gatewaysRef = useRef(
     /** @type {import("../api/client.js").GatewayT[]} */ ([]),
+  );
+  // Snapshot displayedItems để click-handler (đăng ký 1 lần lúc map-load)
+  // đọc được sibling rows: 1 packet → N row trong survey_training (1/gateway),
+  // group lại để popup show "Gateway kết nối" list.
+  const displayedItemsRef = useRef(
+    /** @type {ReadonlyArray<import("../api/client.js").SurveyTrainingPointT>} */ ([]),
   );
   // Cache reverse-geocode kết quả theo gateway code để tránh gọi lại Nominatim
   // mỗi lần user mở lại popup. Giá trị "" = đang tải, null = lỗi (đã fetch).
@@ -1292,6 +1314,8 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       });
 
       // Lazy popup — chỉ tạo khi click 1 circle, không pre-render 4k popup.
+      // 1 packet → N row (1/gateway nhận) cùng (device_id+timestamp); group
+      // sibling rows từ displayedItemsRef để list "Gateway kết nối".
       map.on("click", SURVEYS_LAYER_ID, (e) => {
         const f = e.features?.[0];
         if (!f) return;
@@ -1305,20 +1329,47 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
          *   code_rate: string,
          * }} */ (f.properties);
         const geom = /** @type {GeoJSON.Point} */ (f.geometry);
+        const [lng, lat] = /** @type {[number, number]} */ (geom.coordinates);
         const device = p.device_id ? escapeHtml(p.device_id) : "—";
         const codeRate = p.code_rate ? escapeHtml(p.code_rate) : "—";
+
+        const gwByUuid = new Map(gatewaysRef.current.map((g) => [g.id, g]));
+        const sameKey = `${p.timestamp}|${p.device_id ?? ""}`;
+        const siblings = displayedItemsRef.current.filter(
+          (r) => `${r.timestamp}|${r.device_id ?? ""}` === sameKey,
+        );
+        // Sort gateway list theo RSSI desc — best signal first.
+        const rows = [...siblings].sort((a, b) => b.rssi_dbm - a.rssi_dbm);
+        const top = rows[0] ?? null;
+        const headerRssi = top ? top.rssi_dbm : Number(p.rssi_dbm);
+        const headerSnr = top ? top.snr_db : Number(p.snr_db);
+
+        const gwListHtml = rows
+          .map((r) => {
+            const gw = r.serving_gateway_id
+              ? gwByUuid.get(r.serving_gateway_id)
+              : null;
+            const name = gw ? escapeHtml(gw.name) : "—";
+            const dist = gw
+              ? `${Math.round(haversineMeters(lat, lng, gw.latitude, gw.longitude))} m`
+              : "—";
+            return `<div>• ${name}: ${dist}, ${t.popup.rssiLabel}: ${Number(r.rssi_dbm).toFixed(1)} dBm, ${t.popup.snrLabel}: ${Number(r.snr_db).toFixed(1)} dB</div>`;
+          })
+          .join("");
+
         new maplibregl.Popup({ offset: 8 })
-          .setLngLat(/** @type {[number, number]} */ (geom.coordinates))
+          .setLngLat([lng, lat])
           .setHTML(
             `<div style="font:12px/1.4 system-ui">
                <div><strong>${t.popup.surveyTitle}</strong></div>
                <div>${t.popup.deviceLabel}: ${device}</div>
-               <div>${t.popup.rssiLabel}: ${Number(p.rssi_dbm).toFixed(1)} dBm</div>
-               <div>${t.popup.snrLabel}: ${Number(p.snr_db).toFixed(1)} dB</div>
+               <div>${t.popup.rssiLabel}: ${headerRssi.toFixed(1)} dBm</div>
+               <div>${t.popup.snrLabel}: ${headerSnr.toFixed(1)} dB</div>
                <div>${t.popup.frequencyLabel}: ${Number(p.frequency_mhz).toFixed(2)} MHz</div>
                <div>${t.popup.sfLabel(Number(p.spreading_factor))}</div>
                <div>${t.popup.codeRateLabel}: ${codeRate}</div>
                <div>${t.popup.timeLabel}: ${formatSurveyTime(String(p.timestamp))}</div>
+               ${gwListHtml ? `<div style="margin-top:6px"><strong>${t.popup.gatewayConnectedLabel}:</strong></div>${gwListHtml}` : ""}
              </div>`,
           )
           .addTo(map);
@@ -1363,6 +1414,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     const map = mapRef.current;
     if (!map) return;
     if (!mapLoaded || !map.getSource(SURVEYS_SOURCE_ID)) return;
+    displayedItemsRef.current = displayedItems;
     /** @type {maplibregl.GeoJSONSource} */ (
       map.getSource(SURVEYS_SOURCE_ID)
     ).setData(buildSurveyGeoJson(displayedItems));

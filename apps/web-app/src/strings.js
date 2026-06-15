@@ -250,6 +250,7 @@ export const strings = {
       frequencyLabel: "Frequency",
       codeRateLabel: "Code Rate",
       timeLabel: "Time",
+      gatewayConnectedLabel: "Gateway kết nối",
       /** @param {number} sf */
       sfLabel: (sf) => `Spreading Factor: SF${sf}`,
       gatewayTx: "TX",

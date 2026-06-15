@@ -109,7 +109,7 @@ export const SATELLITE_BASEMAP_STYLE = {
  * ─────────────────────────────────────────────────────────────────────── */
 
 export const SURVEY_CIRCLE_PAINT = {
-  "circle-radius": 4,
+  "circle-radius": 6,
   "circle-color": surveyRssiColorExpression(),
   "circle-stroke-color": "#ffffff",
   "circle-stroke-width": 1,
