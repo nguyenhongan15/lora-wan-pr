@@ -4,10 +4,63 @@
 // hiển thị trên map. Tắt toggle → ngừng poll, giữ markers.
 // Tải dữ liệu thật về DB dùng nút "Tải dữ liệu mới nhất" trong tab Nguồn.
 
+import { useEffect, useState } from "react";
 import { strings } from "../../strings.js";
 import { LiveSessionSourcePicker } from "./LiveSessionSourcePicker.jsx";
 
 const t = strings.coverageMap.filters.realtime;
+
+/**
+ * Input số giây với local string state — cho phép user xoá hết / gõ tạm số
+ * ngoài [min,max] mà KHÔNG bị parent clamp ép giá trị về giữa chừng. Commit
+ * lên parent khi blur hoặc Enter; giá trị rỗng / invalid → revert về value.
+ *
+ * @param {{
+ *   value: number,
+ *   min: number,
+ *   max: number,
+ *   onCommit: (v: number) => void,
+ *   className?: string,
+ * }} props
+ */
+function IntervalSecondsInput({ value, min, max, onCommit, className }) {
+  const [draft, setDraft] = useState(String(value));
+  // Đồng bộ khi parent đổi value từ ngoài (vd reset session).
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const n = Number.parseInt(draft, 10);
+    if (!Number.isFinite(n)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.min(max, Math.max(min, n));
+    setDraft(String(clamped));
+    if (clamped !== value) onCommit(clamped);
+  };
+
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={1}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+          /** @type {HTMLInputElement} */ (e.currentTarget).blur();
+        }
+      }}
+      className={className}
+    />
+  );
+}
 
 /**
  * @param {{
@@ -57,10 +110,22 @@ export function RealtimeToggleBtn({ open, onToggle, realtimeEnabled }) {
  *   onRequestLogin?: (afterLogin?: () => void) => void,
  *   realtimeEnabled: boolean,
  *   onRealtimeEnabledChange: (v: boolean) => void,
+ *   realtimeStarted: boolean,
+ *   onStartWatching: () => void,
+ *   onChangeSource: () => void,
+ *   onStopWatching: () => void,
  *   autoFollowEnabled: boolean,
  *   onAutoFollowEnabledChange: (v: boolean) => void,
+ *   connectionLinesEnabled: boolean,
+ *   onConnectionLinesEnabledChange: (v: boolean) => void,
+ *   onlyNewAfterStart: boolean,
+ *   onOnlyNewAfterStartChange: (v: boolean) => void,
  *   liveSessionSourceId: string | null,
  *   onLiveSessionSourceIdChange: (v: string | null) => void,
+ *   livePullIntervalSec: number,
+ *   onLivePullIntervalSecChange: (v: number) => void,
+ *   livePullIntervalMin: number,
+ *   livePullIntervalMax: number,
  * }} props
  */
 export function RealtimeBody({
@@ -68,12 +133,25 @@ export function RealtimeBody({
   onRequestLogin,
   realtimeEnabled,
   onRealtimeEnabledChange,
+  realtimeStarted,
+  onStartWatching,
+  onChangeSource,
+  onStopWatching,
   autoFollowEnabled,
   onAutoFollowEnabledChange,
+  connectionLinesEnabled,
+  onConnectionLinesEnabledChange,
+  onlyNewAfterStart,
+  onOnlyNewAfterStartChange,
   liveSessionSourceId,
   onLiveSessionSourceIdChange,
+  livePullIntervalSec,
+  onLivePullIntervalSecChange,
+  livePullIntervalMin,
+  livePullIntervalMax,
 }) {
   const loggedIn = !!user;
+  const canStart = !!liveSessionSourceId;
 
   return (
     <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-md border border-slate-200 bg-white text-xs text-slate-700 shadow-sm md:w-64 md:flex-initial">
@@ -123,7 +201,21 @@ export function RealtimeBody({
             <LiveSessionSourcePicker
               value={liveSessionSourceId}
               onChange={onLiveSessionSourceIdChange}
+              disabled={realtimeStarted}
             />
+            <label className="flex items-center gap-2 pl-5">
+              <span className="flex-1 text-sm">{t.intervalLabel}</span>
+              <span className="flex items-center gap-1.5">
+                <IntervalSecondsInput
+                  value={livePullIntervalSec}
+                  min={livePullIntervalMin}
+                  max={livePullIntervalMax}
+                  onCommit={onLivePullIntervalSecChange}
+                  className="h-9 w-20 rounded border border-slate-300 px-2 py-1 text-right text-sm [appearance:textfield] [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span className="text-sm text-slate-600">{t.intervalUnit}</span>
+              </span>
+            </label>
             <label className="flex items-start gap-2 pl-5">
               <input
                 type="checkbox"
@@ -138,6 +230,66 @@ export function RealtimeBody({
                 </span>
               </span>
             </label>
+            <label className="flex items-start gap-2 pl-5">
+              <input
+                type="checkbox"
+                checked={connectionLinesEnabled}
+                onChange={(e) =>
+                  onConnectionLinesEnabledChange(e.target.checked)
+                }
+                className="mt-0.5"
+              />
+              <span>
+                <span>{t.connectionLinesLabel}</span>
+                <span className="block text-xs text-slate-500">
+                  {t.connectionLinesHint}
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 pl-5">
+              <input
+                type="checkbox"
+                checked={onlyNewAfterStart}
+                onChange={(e) => onOnlyNewAfterStartChange(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span>{t.onlyNewLabel}</span>
+                <span className="block text-xs text-slate-500">
+                  {t.onlyNewHint}
+                </span>
+              </span>
+            </label>
+            <div className="flex flex-wrap gap-2 pl-5 pt-1">
+              {!realtimeStarted ? (
+                <button
+                  type="button"
+                  onClick={onStartWatching}
+                  disabled={!canStart}
+                  title={canStart ? undefined : t.viewButtonDisabledHint}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-slate-900 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {t.viewButton}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={onChangeSource}
+                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                  >
+                    {t.changeSourceButton}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onStopWatching}
+                    className="inline-flex items-center justify-center rounded-md border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-700 shadow-sm hover:bg-red-50 focus:outline-none focus:ring-1 focus:ring-red-500"
+                  >
+                    {t.stopButton}
+                  </button>
+                </>
+              )}
+            </div>
           </>
         )}
       </div>

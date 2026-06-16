@@ -236,6 +236,10 @@ class Gateway:
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
     noise_floor_dbm: float | None = None
+    # is_public=False = admin đã ẩn khỏi bản đồ chung; user vẫn thấy ở map "Của tôi".
+    is_public: bool = True
+    # Admin "ghim" state thủ công, bỏ qua ChirpStack/DB derive. None = auto.
+    manual_state_override: str | None = None
 
     def __post_init__(self) -> None:
         if self.rx_antenna_gain_dbi is not None and not -10.0 <= self.rx_antenna_gain_dbi <= 30.0:

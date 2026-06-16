@@ -40,15 +40,18 @@ from ...application.identity import (
 from ...application.sync import SyncResult, SyncService
 from ...application.trust import TrustValidator
 from ...application.trust.promotion import (
+    BatchGateway,
     PendingContribution,
-    approve_pending_contribution,
     approve_pending_review_batch,
-    get_pending_review,
+    approve_points_only_for_batch,
+    cascade_reject_deferred_for_gateway,
+    list_known_gateways_for_batch,
+    list_pending_gateways_for_batch,
     list_pending_review,
     list_pending_review_batches,
-    list_pending_review_for_batch,
-    reject_pending_contribution,
-    reject_pending_review_batch,
+    list_quarantine_for_batch_display,
+    promote_deferred_for_gateway,
+    reject_quarantine_for_batch,
 )
 from ...config import get_settings
 from ..deps import (
@@ -61,17 +64,14 @@ from ..deps import (
 )
 from ..schemas import (
     AdminStatsResponse,
+    BatchGatewayResponse,
     BatchReviewRequest,
     BatchReviewResponse,
-    ContributionRejectRequest,
-    ContributionReviewResponse,
+    BatchRowsResponse,
     CoverageRebuildEnqueueResponse,
     CoverageRebuildJobListResponse,
     CoverageRebuildJobResponse,
     DataFreshnessResponse,
-    GatewayApproveResponse,
-    GatewayRejectRequest,
-    GatewayRejectResponse,
     MlRetrainEnqueueResponse,
     MlRetrainJobListResponse,
     MlRetrainJobResponse,
@@ -380,13 +380,6 @@ def list_pending_contributions(
 # Group quarantine rows theo (uploader_id, uploaded_at) — 1 batch = 1 file
 # user upload. Admin xét cả file thay vì từng row (UX: file 100 điểm cùng
 # user upload cùng thời điểm thường có cùng độ tin cậy).
-#
-# Per-row reject vẫn giữ (endpoint `/contributions/{id}/reject` bên dưới) để
-# admin loại row xấu trước rồi approve phần còn lại.
-#
-# ROUTE ORDER MATTERS: batch routes (`/contributions/batches/...`) phải đăng
-# ký TRƯỚC per-id routes (`/contributions/{contribution_id}/...`), nếu không
-# FastAPI sẽ match path param trước và parse `"batches"` thành UUID → 422.
 
 
 @router.get(
@@ -396,7 +389,8 @@ def list_pending_contributions(
 def list_pending_batches(
     admin: Annotated[User, Depends(require_admin)],
 ) -> PendingReviewBatchListResponse:
-    """List các file CSV (uploader + uploaded_at) còn ≥1 row chờ duyệt."""
+    """List các batch (uploader + uploaded_at) còn ≥1 row chờ duyệt HOẶC ≥1
+    gateway pending. `new_gateway_count` count gateway pending của batch."""
     with _engine().begin() as conn:
         items = list_pending_review_batches(conn)
     return PendingReviewBatchListResponse(
@@ -409,32 +403,55 @@ def list_pending_batches(
                 total_count=b.total_count,
                 earliest_timestamp=b.earliest_timestamp,
                 latest_timestamp=b.latest_timestamp,
+                new_gateway_count=b.new_gateway_count,
             )
             for b in items
         ]
     )
 
 
+def _batch_gateway_to_response(g: BatchGateway) -> BatchGatewayResponse:
+    return BatchGatewayResponse(
+        id=g.id,
+        code=g.code,
+        name=g.name,
+        latitude=g.latitude,
+        longitude=g.longitude,
+        frequency_mhz=g.frequency_mhz,
+        source_type=g.source_type,
+        is_new=g.is_new,
+    )
+
+
 @router.get(
     "/contributions/batches/rows",
-    response_model=PendingContributionListResponse,
+    response_model=BatchRowsResponse,
 )
 def list_batch_rows(
     admin: Annotated[User, Depends(require_admin)],
     uploader_id: UUID,
     uploaded_at: datetime,
-) -> PendingContributionListResponse:
-    """Detail rows pending_review của 1 batch — admin drill-in xem trước duyệt.
+) -> BatchRowsResponse:
+    """Map preview của 1 batch: điểm đo (pending_review + pending_gateway) +
+    gateway (cả pending lẫn đã promoted mà batch tham chiếu).
 
     `uploaded_at` truyền ISO 8601 datetime (vd `2026-05-25T08:30:00+00:00`).
     """
     with _engine().begin() as conn:
-        items = list_pending_review_for_batch(
+        points = list_quarantine_for_batch_display(
             conn, uploader_id=uploader_id, uploaded_at=uploaded_at
         )
-    return PendingContributionListResponse(
-        items=[_pending_to_response(p) for p in items],
-        total=len(items),
+        pending_gw = list_pending_gateways_for_batch(
+            conn, uploader_id=uploader_id, uploaded_at=uploaded_at
+        )
+        known_gw = list_known_gateways_for_batch(
+            conn, uploader_id=uploader_id, uploaded_at=uploaded_at
+        )
+    return BatchRowsResponse(
+        points=[_pending_to_response(p) for p in points],
+        gateways=[_batch_gateway_to_response(g) for g in pending_gw + known_gw],
+        total_points=len(points),
+        new_gateway_count=len(pending_gw),
     )
 
 
@@ -465,6 +482,55 @@ def _invalidate_rebuild_for_gateways(conn: Any, gateway_ids: Iterable[UUID]) -> 
     )
 
 
+def _approve_batch_gateways(
+    conn: Any,
+    trust: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+) -> tuple[list[UUID], int]:
+    """Promote mọi gateway pending của batch → geo.gateways + backfill + auto-
+    promote deferred rows. Trả (gw_ids_đã_promote, tổng_deferred_promoted)."""
+    pending = list_pending_gateways_for_batch(
+        conn, uploader_id=uploader_id, uploaded_at=uploaded_at
+    )
+    gw_ids: list[UUID] = []
+    total_deferred = 0
+    for g in pending:
+        gw_id, _backfilled, deferred = _promote_one_gateway_quarantine(
+            conn, trust, quarantine_id=g.id, code=g.code, reviewer_id=reviewer_id
+        )
+        gw_ids.append(gw_id)
+        total_deferred += deferred
+    return gw_ids, total_deferred
+
+
+def _reject_batch_gateways(
+    conn: Any,
+    trust: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+    note: str | None,
+) -> int:
+    """Reject mọi gateway pending của batch + cascade reject pending_gateway
+    rows cùng EUI. Trả số gateway bị reject."""
+    pending = list_pending_gateways_for_batch(
+        conn, uploader_id=uploader_id, uploaded_at=uploaded_at
+    )
+    for g in pending:
+        conn.execute(
+            _MARK_GATEWAY_REJECTED,
+            {"qid": g.id, "reviewer_id": reviewer_id, "note": note},
+        )
+        cascade_reject_deferred_for_gateway(
+            conn, trust, gateway_code=g.code, reviewer_id=reviewer_id, note=note
+        )
+    return len(pending)
+
+
 @router.post(
     "/contributions/batches/approve",
     response_model=BatchReviewResponse,
@@ -475,33 +541,86 @@ def approve_batch(
     trust: Annotated[TrustValidator, Depends(trust_validator)],
     mailer: Annotated[Mailer, Depends(mailer_dep)],
 ) -> BatchReviewResponse:
-    """Duyệt cả file: approve mọi pending_review row của batch trong 1 txn.
+    """Duyệt batch theo 3 mode:
+    * "all" — duyệt cả file: điểm pending_review → training, gateway pending →
+      geo.gateways, deferred rows cùng EUI → training.
+    * "points_only" — duyệt điểm đo (không duyệt gateway): điểm trỏ gateway cũ
+      → training; điểm trỏ gateway mới → defer (pending_gateway). Gateway
+      pending giữ nguyên ở queue chờ admin click duyệt sau.
+    * "gateways_only" — duyệt gateway (không duyệt điểm đo): mọi gateway pending
+      → geo.gateways; mọi điểm đo của batch → rejected.
 
-    Sau approve: gửi 1 email cảm ơn tổng kết (Option B — 1 email/batch,
-    không phải 1 email/row, tránh spam khi batch lớn).
+    Email gộp gửi cho contributor cuối mỗi mode.
     """
-    with _engine().begin() as conn:
-        approved = approve_pending_review_batch(
-            conn,
-            trust,
-            uploader_id=body.uploader_id,
-            uploaded_at=body.uploaded_at,
-            reviewer_id=admin.id,
-        )
-        _invalidate_rebuild_for_gateways(
-            conn, {p.serving_gateway_id for p in approved if p.serving_gateway_id}
-        )
+    approved: list[PendingContribution] = []
+    rejected: list[PendingContribution] = []
+    deferred_count = 0
+    gw_approved_count = 0
+    gw_rejected_count = 0
 
-    if not approved:
+    with _engine().begin() as conn:
+        if body.mode == "all":
+            approved = approve_pending_review_batch(
+                conn,
+                trust,
+                uploader_id=body.uploader_id,
+                uploaded_at=body.uploaded_at,
+                reviewer_id=admin.id,
+            )
+            gw_ids, deferred_count = _approve_batch_gateways(
+                conn,
+                trust,
+                uploader_id=body.uploader_id,
+                uploaded_at=body.uploaded_at,
+                reviewer_id=admin.id,
+            )
+            gw_approved_count = len(gw_ids)
+            _invalidate_rebuild_for_gateways(
+                conn,
+                {p.serving_gateway_id for p in approved if p.serving_gateway_id} | set(gw_ids),
+            )
+        elif body.mode == "points_only":
+            approved, deferred_count = approve_points_only_for_batch(
+                conn,
+                trust,
+                uploader_id=body.uploader_id,
+                uploaded_at=body.uploaded_at,
+                reviewer_id=admin.id,
+            )
+            _invalidate_rebuild_for_gateways(
+                conn, {p.serving_gateway_id for p in approved if p.serving_gateway_id}
+            )
+        elif body.mode == "gateways_only":
+            rejected = reject_quarantine_for_batch(
+                conn,
+                trust,
+                uploader_id=body.uploader_id,
+                uploaded_at=body.uploaded_at,
+                reviewer_id=admin.id,
+                note=body.note,
+            )
+            gw_ids, deferred_count = _approve_batch_gateways(
+                conn,
+                trust,
+                uploader_id=body.uploader_id,
+                uploaded_at=body.uploaded_at,
+                reviewer_id=admin.id,
+            )
+            gw_approved_count = len(gw_ids)
+            _invalidate_rebuild_for_gateways(conn, set(gw_ids))
+
+    if not approved and not rejected and gw_approved_count == 0 and deferred_count == 0:
         raise HTTPException(
             status_code=404,
-            detail="Không có row nào chờ duyệt trong batch này (đã xử lý hoặc batch không tồn tại).",
+            detail="Không có row/gateway nào chờ duyệt trong batch này (đã xử lý hoặc batch không tồn tại).",
         )
 
-    # Email gộp — gửi tới contributor_email của row đầu (tất cả rows trong
-    # batch cùng 1 uploader → cùng email). Skip nếu email null.
-    contributor_email = approved[0].contributor_email
-    if contributor_email:
+    contributor_email = (
+        approved[0].contributor_email
+        if approved
+        else (rejected[0].contributor_email if rejected else None)
+    )
+    if contributor_email and approved:
         timestamps = [p.timestamp for p in approved]
         try:
             mailer.send_contribution_batch_approved(
@@ -525,13 +644,22 @@ def approve_batch(
         uploader_id=str(body.uploader_id),
         uploaded_at=body.uploaded_at.isoformat(),
         reviewer_id=str(admin.id),
+        mode=body.mode,
         approved_count=len(approved),
+        rejected_count=len(rejected),
+        deferred_count=deferred_count,
+        gateways_approved=gw_approved_count,
+        gateways_rejected=gw_rejected_count,
     )
 
     return BatchReviewResponse(
         uploader_id=body.uploader_id,
         uploaded_at=body.uploaded_at,
         approved_count=len(approved),
+        deferred_count=deferred_count,
+        rejected_count=len(rejected),
+        gateways_approved_count=gw_approved_count,
+        gateways_rejected_count=gw_rejected_count,
     )
 
 
@@ -545,14 +673,23 @@ def reject_batch(
     trust: Annotated[TrustValidator, Depends(trust_validator)],
     mailer: Annotated[Mailer, Depends(mailer_dep)],
 ) -> BatchReviewResponse:
-    """Từ chối cả file: reject mọi pending_review row của batch.
+    """Từ chối cả file: reject mọi rows quarantine (cả pending_review và
+    pending_gateway) + reject mọi gateway pending của batch.
 
     Sau reject: gửi 1 email thông báo tổng kết cho user kèm lý do admin nhập
     (note). Per-row reject ở dưới KHÔNG gửi email (drill-in escape hatch —
     admin có thể loại nhiều row noise sẽ spam inbox).
     """
     with _engine().begin() as conn:
-        rejected = reject_pending_review_batch(
+        rejected = reject_quarantine_for_batch(
+            conn,
+            trust,
+            uploader_id=body.uploader_id,
+            uploaded_at=body.uploaded_at,
+            reviewer_id=admin.id,
+            note=body.note,
+        )
+        gw_rejected_count = _reject_batch_gateways(
             conn,
             trust,
             uploader_id=body.uploader_id,
@@ -561,17 +698,14 @@ def reject_batch(
             note=body.note,
         )
 
-    if not rejected:
+    if not rejected and gw_rejected_count == 0:
         raise HTTPException(
             status_code=404,
-            detail="Không có row nào chờ duyệt trong batch này (đã xử lý hoặc batch không tồn tại).",
+            detail="Không có row/gateway nào chờ duyệt trong batch này (đã xử lý hoặc batch không tồn tại).",
         )
 
-    # Email gộp — 1 email/batch tới contributor (mọi row trong batch cùng
-    # uploader → cùng email). Skip nếu email null. Fire-and-forget: SMTP fail
-    # log warning nhưng KHÔNG fail response (rows đã reject trong DB rồi).
-    contributor_email = rejected[0].contributor_email
-    if contributor_email:
+    contributor_email = rejected[0].contributor_email if rejected else None
+    if contributor_email and rejected:
         timestamps = [p.timestamp for p in rejected]
         try:
             mailer.send_contribution_batch_rejected(
@@ -597,66 +731,15 @@ def reject_batch(
         uploaded_at=body.uploaded_at.isoformat(),
         reviewer_id=str(admin.id),
         rejected_count=len(rejected),
+        gateways_rejected=gw_rejected_count,
     )
 
     return BatchReviewResponse(
         uploader_id=body.uploader_id,
         uploaded_at=body.uploaded_at,
         rejected_count=len(rejected),
+        gateways_rejected_count=gw_rejected_count,
     )
-
-
-# ── Per-row review ──────────────────────────────────────────────────────
-# Drill-in escape hatch: admin loại từng row xấu trước, rồi approve cả batch
-# phần còn lại. Phải đăng ký SAU batch routes (xem note ở trên).
-
-
-@router.post(
-    "/contributions/{contribution_id}/approve",
-    response_model=ContributionReviewResponse,
-)
-def approve_contribution(
-    contribution_id: UUID,
-    admin: Annotated[User, Depends(require_admin)],
-    trust: Annotated[TrustValidator, Depends(trust_validator)],
-    mailer: Annotated[Mailer, Depends(mailer_dep)],
-) -> ContributionReviewResponse:
-    """Approve: row đẩy sang survey_training, hiển thị trên bản đồ cộng đồng."""
-    with _engine().begin() as conn:
-        # Detail PHẢI lấy trước approve — sau khi approve, review_status đổi
-        # sang 'approved' nên _GET_PENDING_BY_ID (filter pending_review) sẽ miss.
-        detail = get_pending_review(conn, contribution_id)
-        ok = approve_pending_contribution(conn, trust, qid=contribution_id, reviewer_id=admin.id)
-        if ok and detail and detail.serving_gateway_id:
-            _invalidate_rebuild_for_gateways(conn, [detail.serving_gateway_id])
-    if not ok:
-        raise HTTPException(
-            status_code=404,
-            detail="Không tìm thấy đóng góp đang chờ duyệt (đã xử lý hoặc không tồn tại).",
-        )
-
-    # Thanks email — fire-and-forget. SMTP fail KHÔNG fail approve (row đã
-    # vào training, response 200 vẫn đúng). Cũng skip nếu contributor_email
-    # null (vd row csv không gắn user, hoặc user bị xoá).
-    if detail is not None and detail.contributor_email:
-        try:
-            mailer.send_contribution_approved(
-                detail.contributor_email,
-                point_timestamp=detail.timestamp,
-                latitude=detail.latitude,
-                longitude=detail.longitude,
-                gateway_code=detail.gateway_code,
-                rssi_dbm=detail.rssi_dbm,
-            )
-        except MailerError as exc:
-            logger.warning(
-                "contribution_thanks_email_failed",
-                contribution_id=str(contribution_id),
-                contributor_email=detail.contributor_email,
-                error=str(exc),
-            )
-
-    return ContributionReviewResponse(id=contribution_id, review_status="approved")
 
 
 # ── Gateway moderation (mig 0029) ───────────────────────────────────────
@@ -684,17 +767,6 @@ _COUNT_PENDING_GATEWAYS = text(
     "SELECT COUNT(*)::int AS total "
     "FROM geo.gateway_quarantine WHERE review_status = 'pending_review'"
 )
-
-_GET_PENDING_GATEWAY = text("""
-    SELECT q.id, q.code, q.name,
-           ST_Y(q.location::geometry) AS latitude,
-           ST_X(q.location::geometry) AS longitude,
-           q.altitude_m, q.frequency_mhz, q.source_type,
-           q.contributor_user_id, q.linked_source_id,
-           q.review_status
-    FROM geo.gateway_quarantine q
-    WHERE q.id = :qid
-""")
 
 # Promote quarantine row → geo.gateways. INSERT...SELECT đảm bảo atomic.
 # ON CONFLICT (code) DO NOTHING: phòng race nếu admin click 2 lần hoặc EUI
@@ -788,89 +860,37 @@ def list_pending_gateways(
     )
 
 
-@router.post(
-    "/gateway-contributions/{quarantine_id}/approve",
-    response_model=GatewayApproveResponse,
-)
-def approve_gateway(
+def _promote_one_gateway_quarantine(
+    conn: Any,
+    trust: TrustValidator,
+    *,
     quarantine_id: UUID,
-    admin: Annotated[User, Depends(require_admin)],
-) -> GatewayApproveResponse:
-    """Approve: INSERT geo.gateways từ quarantine + backfill measurement FK."""
-    with _engine().begin() as conn:
-        existing = conn.execute(_GET_PENDING_GATEWAY, {"qid": quarantine_id}).one_or_none()
-        if existing is None:
-            raise HTTPException(status_code=404, detail="Gateway quarantine không tồn tại.")
-        if existing.review_status != "pending_review":
-            raise HTTPException(
-                status_code=409,
-                detail=f"Gateway đã ở trạng thái {existing.review_status}, không thể duyệt lại.",
-            )
+    code: str,
+    reviewer_id: UUID,
+) -> tuple[UUID, int, int]:
+    """Promote 1 row gateway_quarantine → geo.gateways + backfill FK survey
+    rows + auto-promote rows pending_gateway cùng EUI → training.
 
-        # INSERT geo.gateways; CONFLICT (code) → row đã có (race or pre-existing).
-        promoted = conn.execute(_PROMOTE_GATEWAY, {"qid": quarantine_id}).one_or_none()
-        if promoted is not None:
-            gw_id = promoted.id
-        else:
-            # ON CONFLICT DO NOTHING → resolve id của row hiện hữu.
-            gw_id = conn.execute(
-                _RESOLVE_GATEWAY_ID_FOR_QUARANTINE, {"qid": quarantine_id}
-            ).scalar_one()
-
-        conn.execute(
-            _MARK_GATEWAY_APPROVED,
-            {"qid": quarantine_id, "reviewer_id": admin.id, "gw_id": gw_id},
-        )
-        backfill = conn.execute(
-            _BACKFILL_QUARANTINE_FK,
-            {"gw_id": gw_id, "code": existing.code},
-        )
-        backfilled = backfill.rowcount or 0
-
-    logger.info(
-        "admin_gateway_approved",
-        admin_id=str(admin.id),
-        quarantine_id=str(quarantine_id),
-        gateway_id=str(gw_id),
-        code=existing.code,
-        measurements_backfilled=backfilled,
+    Trả (gateway_id, measurements_backfilled, deferred_promoted). Caller wrap
+    transaction. KHÔNG raise — assume caller đã verify status='pending_review'.
+    """
+    promoted = conn.execute(_PROMOTE_GATEWAY, {"qid": quarantine_id}).one_or_none()
+    if promoted is not None:
+        gw_id = promoted.id
+    else:
+        gw_id = conn.execute(
+            _RESOLVE_GATEWAY_ID_FOR_QUARANTINE, {"qid": quarantine_id}
+        ).scalar_one()
+    conn.execute(
+        _MARK_GATEWAY_APPROVED,
+        {"qid": quarantine_id, "reviewer_id": reviewer_id, "gw_id": gw_id},
     )
-
-    return GatewayApproveResponse(
-        quarantine_id=quarantine_id,
-        gateway_id=gw_id,
-        measurements_backfilled=backfilled,
+    backfill = conn.execute(_BACKFILL_QUARANTINE_FK, {"gw_id": gw_id, "code": code})
+    backfilled = backfill.rowcount or 0
+    deferred_promoted = promote_deferred_for_gateway(
+        conn, trust, gateway_code=code, reviewer_id=reviewer_id
     )
-
-
-@router.post(
-    "/gateway-contributions/{quarantine_id}/reject",
-    response_model=GatewayRejectResponse,
-)
-def reject_gateway(
-    quarantine_id: UUID,
-    body: GatewayRejectRequest,
-    admin: Annotated[User, Depends(require_admin)],
-) -> GatewayRejectResponse:
-    """Reject gateway quarantine — giữ row làm audit."""
-    with _engine().begin() as conn:
-        result = conn.execute(
-            _MARK_GATEWAY_REJECTED,
-            {"qid": quarantine_id, "reviewer_id": admin.id, "note": body.note},
-        ).one_or_none()
-
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Gateway quarantine không tồn tại hoặc đã được xử lý.",
-        )
-
-    logger.info(
-        "admin_gateway_rejected",
-        admin_id=str(admin.id),
-        quarantine_id=str(quarantine_id),
-    )
-    return GatewayRejectResponse(quarantine_id=quarantine_id, review_status="rejected")
+    return gw_id, backfilled, deferred_promoted
 
 
 # ── Coverage map rebuild (admin "Rebuild bản đồ ước lượng") ─────────────
@@ -977,33 +997,6 @@ def get_coverage_rebuild(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} không tồn tại.")
     return _row_to_rebuild_response(row)
-
-
-@router.post(
-    "/contributions/{contribution_id}/reject",
-    response_model=ContributionReviewResponse,
-)
-def reject_contribution(
-    contribution_id: UUID,
-    body: ContributionRejectRequest,
-    admin: Annotated[User, Depends(require_admin)],
-    trust: Annotated[TrustValidator, Depends(trust_validator)],
-) -> ContributionReviewResponse:
-    """Reject: row giữ trong quarantine, không bao giờ lên map cộng đồng."""
-    with _engine().begin() as conn:
-        ok = reject_pending_contribution(
-            conn,
-            trust,
-            qid=contribution_id,
-            reviewer_id=admin.id,
-            note=body.note,
-        )
-    if not ok:
-        raise HTTPException(
-            status_code=404,
-            detail="Không tìm thấy đóng góp đang chờ duyệt (đã xử lý hoặc không tồn tại).",
-        )
-    return ContributionReviewResponse(id=contribution_id, review_status="rejected")
 
 
 # ── Admin trace-back: data đã duyệt vào ts.survey_training ──────────────

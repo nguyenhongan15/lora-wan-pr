@@ -51,7 +51,6 @@ from ..sources import (
 )
 from ..uploads import (
     UploadKind,
-    add_batch_points_count,
     create_upload_batch,
     set_batch_points_count,
 )
@@ -186,17 +185,11 @@ class SyncService:
         *,
         user: User,
         linked_source_id: UUID,
-        reuse_batch_id: UUID | None = None,
     ) -> SyncResult:
         """Pull 1 source. KHÔNG raise (trừ LinkedSourceNotFoundError → 404).
 
         Status update + audit log được commit cùng transaction của caller —
         caller dùng `engine.begin()` đảm bảo atomic.
-
-        `reuse_batch_id` (live session): caller đã tạo batch trước (kind=
-        'live_session') → skip create batch trong sync, dùng luôn batch_id
-        đó cho `_ingest_measurements`. Mỗi sync incremental tiếp tục append
-        row mới vào cùng batch thay vì tạo batch riêng.
         """
         params = {"id": linked_source_id, "user_id": user.id}
         row = conn.execute(_LOCK_OWNED_ROW, params).one_or_none()
@@ -219,7 +212,7 @@ class SyncService:
                 error=_LOCKED_ERR_TAG,
             )
 
-        return self._run_locked(conn, user_id=user.id, row=row, reuse_batch_id=reuse_batch_id)
+        return self._run_locked(conn, user_id=user.id, row=row)
 
     # ── orchestration ────────────────────────────────────────────────────
 
@@ -245,7 +238,6 @@ class SyncService:
         *,
         user_id: UUID,
         row: Any,
-        reuse_batch_id: UUID | None = None,
     ) -> SyncResult:
         started = time.monotonic()
         ls_id = row.id
@@ -277,20 +269,16 @@ class SyncService:
         # ingest. Nếu source_type không có trong _SYNC_KIND (vd test source
         # tương lai), bỏ batch — data vẫn vào quarantine, chỉ không hiện
         # trong "Quản lý dữ liệu" UI. Filename = ISO timestamp click cho UX.
-        # Live session (mig 0031): caller đã tạo batch kind='live_session'
-        # từ trước → skip create, reuse batch_id để gom mọi sync incremental
-        # vào 1 batch chung cho cả chuyến khảo sát.
-        batch_id: UUID | None = reuse_batch_id
-        if batch_id is None:
-            kind = _SYNC_KIND.get(source_type)
-            if kind is not None:
-                batch_id, _ = create_upload_batch(
-                    conn,
-                    user_id=user_id,
-                    kind=kind,
-                    filename=datetime.now(UTC).isoformat(),
-                    linked_source_id=ls_id,
-                )
+        batch_id: UUID | None = None
+        kind = _SYNC_KIND.get(source_type)
+        if kind is not None:
+            batch_id, _ = create_upload_batch(
+                conn,
+                user_id=user_id,
+                kind=kind,
+                filename=datetime.now(UTC).isoformat(),
+                linked_source_id=ls_id,
+            )
 
         try:
             adapter = get_adapter(source_type)
@@ -308,6 +296,7 @@ class SyncService:
                 source_type=source_type,
                 user_id=user_id,
                 ls_id=ls_id,
+                batch_id=batch_id,
             )
             dev_inserted, dev_updated = _ingest_devices(
                 conn,
@@ -346,13 +335,8 @@ class SyncService:
         # không tính (rows đã thuộc batch cũ — first-writer-wins ở
         # _QUARANTINE_UPSERT_SQL). Sync 0 row mới vẫn để batch row tồn tại
         # với count=0 → "Lịch sử upload" log đầy đủ mỗi lần click.
-        # Live session: reuse batch → cộng dồn delta (mỗi sync chu kỳ append
-        # m_inserted rows mới vào cùng batch); sync 1 lần dùng set thường.
         if batch_id is not None:
-            if reuse_batch_id is not None:
-                add_batch_points_count(conn, batch_id=batch_id, delta=m_inserted)
-            else:
-                set_batch_points_count(conn, batch_id=batch_id, count=m_inserted)
+            set_batch_points_count(conn, batch_id=batch_id, count=m_inserted)
 
         return self._finalise(
             conn,
@@ -442,6 +426,7 @@ def _ingest_gateways(
     source_type: str,
     user_id: UUID,
     ls_id: UUID,
+    batch_id: UUID | None = None,
 ) -> tuple[int, int, int, dict[str, UUID], dict[str, tuple[float, float]]]:
     """Split flow (mig 0029):
 
@@ -463,13 +448,16 @@ def _ingest_gateways(
             continue
         existing = lookup_existing_gateway(conn, code=rec.external_id)
         if existing is None:
-            # New EUI → quarantine
+            # New EUI → quarantine. batch_id gắn lần đầu, ON CONFLICT giữ batch
+            # cũ (first-writer-wins) — gateway "thuộc về" batch user submit lần
+            # đầu, batch sau chỉ refresh metadata không đổi ownership batch.
             _, _q_id, _review_status = upsert_gateway_quarantine(
                 conn,
                 rec,
                 source_type=source_type,
                 contributor_user_id=user_id,
                 linked_source_id=ls_id,
+                batch_id=batch_id,
             )
             quarantined += 1
             coords_by_external[rec.external_id] = (rec.latitude, rec.longitude)

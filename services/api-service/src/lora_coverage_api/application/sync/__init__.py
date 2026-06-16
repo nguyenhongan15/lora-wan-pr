@@ -12,9 +12,12 @@ from ._upsert import (
     upsert_gateway_quarantine,
     upsert_measurement,
 )
+from .live_pull import LivePullPoint, LivePullService
 from .service import SyncReport, SyncResult, SyncService
 
 __all__ = [
+    "LivePullPoint",
+    "LivePullService",
     "SyncReport",
     "SyncResult",
     "SyncService",

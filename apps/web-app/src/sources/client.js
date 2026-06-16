@@ -319,6 +319,28 @@ export async function syncSource(id) {
   return SyncResult.parse(await res.json());
 }
 
+/**
+ * GET /api/v1/me/sources/{id}/live-pull?since=ISO — view-only pull cho
+ * "Theo dõi trực tiếp". KHÔNG ghi DB. Chỉ hỗ trợ lpwanmapper hiện tại.
+ * SourceError (auth/network) → 502 → _throwProblem → caller catch + toast.
+ *
+ * @param {string} id linked_source UUID
+ * @param {string | null} [since] ISO timestamp; null = full snapshot
+ */
+export async function livePullSource(id, since = null) {
+  const params = new URLSearchParams();
+  if (since) params.set("since", since);
+  const qs = params.toString();
+  const url =
+    `${API_BASE_URL}/api/v1/me/sources/${id}/live-pull` +
+    (qs ? `?${qs}` : "");
+  const res = await authFetch(url);
+  if (!res.ok) await _throwProblem(res);
+  // Reuse SurveyTrainingList zod schema từ api/client.js (cùng shape)
+  const { SurveyTrainingList } = await import("../api/client.js");
+  return SurveyTrainingList.parse(await res.json());
+}
+
 // ── Endpoints: upload batches (refactor 2026-06-11) ───────────────────────
 
 /**

@@ -9,7 +9,7 @@ import {
   listSurveyTraining,
   predictCoverage,
 } from "../api/client.js";
-import { listDevices } from "../sources/client.js";
+import { listDevices, listSources, livePullSource } from "../sources/client.js";
 import { getUser, subscribe as subscribeAuth } from "../auth/store.js";
 import { strings } from "../strings.js";
 import { MapLegend } from "./MapLegend.jsx";
@@ -200,6 +200,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *   rssiRange: { min: number | null, max: number | null },
  *   snrRange: { min: number | null, max: number | null },
  *   timeRange: { from: string | null, to: string | null },
+ *   latestCount: { count: number | null, order: "desc" | "asc" },
  * }} PointsFilterState
  */
 
@@ -212,6 +213,7 @@ function readPointsFilterUrlState() {
     rssiRange: { min: null, max: null },
     snrRange: { min: null, max: null },
     timeRange: { from: null, to: null },
+    latestCount: { count: null, order: "desc" },
   };
   if (typeof window === "undefined") return def;
   const p = new URLSearchParams(window.location.search);
@@ -242,6 +244,16 @@ function readPointsFilterUrlState() {
   const tt = p.get("time_to");
   def.timeRange = { from: tf, to: tt };
 
+  const limitRaw = p.get("limit");
+  if (limitRaw) {
+    const n = Number(limitRaw);
+    if (Number.isInteger(n) && n >= 1 && n <= 50000) {
+      def.latestCount.count = n;
+    }
+  }
+  const order = p.get("sort_order");
+  if (order === "asc" || order === "desc") def.latestCount.order = order;
+
   return def;
 }
 
@@ -271,9 +283,18 @@ function writePointsFilterUrlState(state) {
   if (state.timeRange.to) p.set("time_to", state.timeRange.to);
   else p.delete("time_to");
 
-  // Clean URL legacy keys (sort + rank window đã gỡ khỏi UI).
+  if (state.latestCount.count != null) {
+    p.set("limit", String(state.latestCount.count));
+    p.set("sort_order", state.latestCount.order);
+  } else {
+    p.delete("limit");
+    // Order chỉ ảnh hưởng khi có count → bỏ param để URL gọn ở default desc.
+    if (state.latestCount.order === "desc") p.delete("sort_order");
+    else p.set("sort_order", state.latestCount.order);
+  }
+
+  // Clean URL legacy keys (rank window đã gỡ khỏi UI).
   p.delete("sort_by");
-  p.delete("sort_order");
   p.delete("rank_from");
   p.delete("rank_to");
 
@@ -469,18 +490,65 @@ function appendCopyLinkButton(parent, lat, lng) {
 // Realtime "Theo dõi trực tiếp" — chu kỳ polling backend khi bật mode.
 // Tham chiếu duy nhất trong file để tránh magic number rải rác.
 const REALTIME_POLL_MS = 3000;
+// Live-pull lpwanmapper: chu kỳ user nhập (giây) — thiết bị phát ~15s/gói nên
+// default 15s. View-only KHÔNG ghi DB; mỗi request connect upstream API
+// (login + GET /data 10k limit) nên clamp min 5s tránh saturate.
+const REALTIME_LIVE_PULL_DEFAULT_SEC = 15;
+const REALTIME_LIVE_PULL_MIN_SEC = 5;
+const REALTIME_LIVE_PULL_MAX_SEC = 600;
 // Sau khoảng này không thấy gói tin mới → tự tắt toggle (user quên tắt khi
 // rời site đo). Reset timer mỗi lần lastSeenAt advance.
 const REALTIME_IDLE_AUTO_OFF_MS = 15 * 60 * 1000;
 // Tick re-render badge "Mới nhất: Ns trước" — counter chạy độc lập với
 // polling interval (poll 3s nhưng UI tick 5s là vừa mắt, đỡ jitter).
 const REALTIME_BADGE_TICK_MS = 5000;
+// Popup "không có chuyến khảo sát thực địa nào": lần đầu sau ngưỡng FIRST
+// (countdown từ sessionStartedAt / lastSeenAt), các lần sau cách nhau REPEAT
+// (countdown từ thời điểm popup hiện gần nhất hoặc lastSeenAt — cái nào mới
+// hơn). Auto-close sau AUTO_CLOSE_MS.
+const REALTIME_NO_PACKET_ALERT_MS_FIRST = 60 * 1000;
+const REALTIME_NO_PACKET_ALERT_MS_REPEAT = 3 * 60 * 1000;
+const REALTIME_NO_PACKET_ALERT_AUTO_CLOSE_MS = 10 * 1000;
 // Khi auto-pan tới điểm mới, zoom tối thiểu để user thấy chi tiết đường đi.
 // Giữ zoom cao hơn nếu user đang zoom xa hơn (max → preserve user intent).
 const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 15;
 // Reference ổn định cho displayedItems khi chưa có data — tránh `?? []` tạo
 // array mới mỗi render gây useEffect deps re-fire.
 const EMPTY_TRAINING_ITEMS = Object.freeze(/** @type {never[]} */ ([]));
+
+// Persist phiên "Theo dõi trực tiếp" qua reload + tab switch (per-tab —
+// sessionStorage, không phải localStorage để không leak sang tab khác).
+// v1 schema = object phẳng; bump key khi đổi shape không backward-compat.
+const REALTIME_SESSION_STORAGE_KEY = "lora-realtime-session-v1";
+
+/** @returns {Record<string, unknown> | null} */
+function loadRealtimeSession() {
+  try {
+    const raw = sessionStorage.getItem(REALTIME_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {Record<string, unknown>} data */
+function saveRealtimeSession(data) {
+  try {
+    sessionStorage.setItem(REALTIME_SESSION_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    /* quota exceeded / storage disabled — silent: in-memory state vẫn ok */
+  }
+}
+
+function clearRealtimeSession() {
+  try {
+    sessionStorage.removeItem(REALTIME_SESSION_STORAGE_KEY);
+  } catch {
+    /* noop */
+  }
+}
 
 /**
  * @param {number | null} lastSeenAt epoch ms
@@ -512,9 +580,10 @@ function formatLastSeenLabel(lastSeenAt, now, t) {
  * @param {{
  *   mode?: "points" | "heatmap" | "predict",
  *   onRequestLogin?: (afterLogin?: () => void) => void,
+ *   authBootstrapped?: boolean,
  * }} props
  */
-export function CoverageMap({ mode = "points", onRequestLogin }) {
+export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped = true }) {
   const containerRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -566,6 +635,11 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const user = useSyncExternalStore(subscribeAuth, getUser);
 
   const [tileError, setTileError] = useState(/** @type {string | null} */ (null));
+  // Toast lỗi cho live-pull (502 SourceError, network down...). Hiển thị
+  // bottom-right + auto-stop xem; user thấy thông báo + tự bấm Xem lại.
+  const [realtimeError, setRealtimeError] = useState(
+    /** @type {string | null} */ (null),
+  );
   const [pickedCoords, setPickedCoords] = useState(
     /** @type {{ lat: number, lng: number } | null} */ (null),
   );
@@ -587,7 +661,14 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // lift lên đây để icon column ở left luôn cố định — mở 1 panel không push
   // icon của panel còn lại xuống dưới.
   const [pointsFilterOpen, setPointsFilterOpen] = useState(false);
-  const [realtimePanelOpen, setRealtimePanelOpen] = useState(false);
+  // Snapshot phiên realtime đã persist (sessionStorage) — đọc 1 lần lúc mount.
+  // Tất cả state/ref realtime bên dưới khôi phục từ object này khi user reload
+  // hoặc rời tab quay lại.
+  const persistedRealtimeRef = useRef(loadRealtimeSession());
+  const persistedRealtime = persistedRealtimeRef.current;
+  const [realtimePanelOpen, setRealtimePanelOpen] = useState(
+    persistedRealtime?.realtimePanelOpen === true,
+  );
   // Sub-tab trong Predict panel: "single" (click 1 điểm) hoặc "address" (nhập địa chỉ → geocode).
   // Cả 2 sub-tab cho mọi user (kể cả admin) — chỉ khác cách lấy lat/lng,
   // cùng vẽ marker qua drawSearchMarker.
@@ -606,7 +687,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   );
   // Toggle "Hiện kết nối điểm đo-gateway" — vẽ đường nét đứt từ mỗi điểm
   // đo đến gateway đã thu được. Chỉ ý nghĩa khi mode === "points".
-  const [showConnectionLines, setShowConnectionLines] = useState(false);
+  const [showConnectionLines, setShowConnectionLines] = useState(
+    persistedRealtime?.showConnectionLines === true,
+  );
+  // Toggle "Hiện toàn bộ gateway" — default false → chỉ marker gateway
+  // state==="online"; true → hiện cả offline/never_seen/unknown.
+  const [showAllGateways, setShowAllGateways] = useState(false);
 
   // Tab "Bản đồ phủ sóng" (mode === "heatmap"): hiện chỉ có 1 layer "estimate"
   // (composite RSSI heatmap cộng dồn 13 gateway). State giữ làm skeleton cho
@@ -656,6 +742,9 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const [timeRange, setTimeRange] = useState(
     () => initialPointsFilterRef.current.timeRange,
   );
+  const [latestCount, setLatestCount] = useState(
+    () => initialPointsFilterRef.current.latestCount,
+  );
 
   // Realtime "Theo dõi trực tiếp" — chỉ active khi contributor === "me".
   // `lastPointTimestampRef` = cursor cho param `since`; advance = max(timestamp)
@@ -664,15 +753,78 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // `realtimeFeatures` accumulator: snapshot lần đầu + append incremental.
   // Refactor 2026-06-15: chỉ XEM live, không tạo batch — ingest qua nút
   // "Tải dữ liệu mới nhất" ở tab Nguồn.
-  const [realtimeEnabled, setRealtimeEnabled] = useState(false);
-  const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
-  const lastPointTimestampRef = useRef(/** @type {string | null} */ (null));
-  const sessionCounterRef = useRef(0);
+  const [realtimeEnabled, setRealtimeEnabled] = useState(
+    persistedRealtime?.realtimeEnabled === true,
+  );
+  // realtimeStarted tách khỏi realtimeEnabled: master toggle mở panel + picker;
+  // realtimeStarted = đã bấm "Xem" → mới bắt đầu poll. Cho phép user chọn nguồn
+  // trước khi commit, và đổi nguồn giữa chừng mà không tắt panel.
+  const [realtimeStarted, setRealtimeStarted] = useState(
+    persistedRealtime?.realtimeStarted === true,
+  );
+  const [autoFollowEnabled, setAutoFollowEnabled] = useState(
+    persistedRealtime ? persistedRealtime.autoFollowEnabled !== false : true,
+  );
+  // Toggle "Chỉ hiện điểm đang live": display-time filter — ẩn packet có
+  // timestamp < sessionStartedAt. Cũng dùng làm cursor init (cursor=now khi
+  // bật → snapshot fetch lần đầu rỗng) để giảm payload nếu user biết trước.
+  // Toggleable mid-watch: lúc đó là pure display filter trên realtimeFeatures
+  // đã accumulate.
+  const [onlyNewAfterStart, setOnlyNewAfterStart] = useState(
+    persistedRealtime?.onlyNewAfterStart === true,
+  );
+  // ISO timestamp khi click Xem — cố định trong suốt session, dùng cho display
+  // filter "Chỉ hiện điểm đang live". null khi chưa Xem hoặc đã Dừng.
+  const [sessionStartedAt, setSessionStartedAt] = useState(
+    /** @type {string | null} */ (
+      typeof persistedRealtime?.sessionStartedAt === "string"
+        ? persistedRealtime.sessionStartedAt
+        : null
+    ),
+  );
+  const lastPointTimestampRef = useRef(
+    /** @type {string | null} */ (
+      typeof persistedRealtime?.lastPointTimestamp === "string"
+        ? persistedRealtime.lastPointTimestamp
+        : null
+    ),
+  );
+  // Cursor init cho lần Xem hiện tại — set lúc click Xem, dùng trong reset
+  // effect để khởi tạo lastPointTimestampRef đúng (null = full snapshot, ISO
+  // string = "chỉ điểm sau startedAt").
+  const startCursorRef = useRef(
+    /** @type {string | null} */ (
+      typeof persistedRealtime?.startCursor === "string"
+        ? persistedRealtime.startCursor
+        : null
+    ),
+  );
+  const sessionCounterRef = useRef(
+    typeof persistedRealtime?.sessionCounter === "number"
+      ? persistedRealtime.sessionCounter
+      : 0,
+  );
+  // Đếm số lần merge effect xử lý surveysQ.data trong session realtime hiện tại.
+  // Dùng để auto-follow / auto-popup phân biệt snapshot ban đầu (poll #1 = data
+  // lịch sử) vs delta thực sự (poll ≥ #2). Reset = 0 mỗi khi toggle on hoặc
+  // filter đổi (qua reset effect bên dưới). KHÔNG persist — restore = coi như
+  // mất "đã thấy snapshot" → poll #1 sau reload sẽ chạy auto-popup, chấp nhận.
+  const sessionPollCountRef = useRef(0);
   const [lastSeenAt, setLastSeenAt] = useState(
-    /** @type {number | null} */ (null),
+    /** @type {number | null} */ (
+      typeof persistedRealtime?.lastSeenAt === "number"
+        ? persistedRealtime.lastSeenAt
+        : null
+    ),
   );
   const [realtimeFeatures, setRealtimeFeatures] = useState(
-    /** @type {import("../api/client.js").SurveyTrainingPointT[]} */ ([]),
+    /** @type {import("../api/client.js").SurveyTrainingPointT[]} */ (
+      Array.isArray(persistedRealtime?.realtimeFeatures)
+        ? /** @type {import("../api/client.js").SurveyTrainingPointT[]} */ (
+            persistedRealtime.realtimeFeatures
+          )
+        : []
+    ),
   );
   // Tick để badge "Mới nhất: Ns trước" tự re-render dù không có điểm mới.
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -680,13 +832,56 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // của nguồn nào). Backend per-source sync sẽ pull all devices về DB; FE
   // chỉ chọn nguồn để lọc, không cần chọn device.
   const [liveSessionSourceId, setLiveSessionSourceId] = useState(
-    /** @type {string | null} */ (null),
+    /** @type {string | null} */ (
+      typeof persistedRealtime?.liveSessionSourceId === "string"
+        ? persistedRealtime.liveSessionSourceId
+        : null
+    ),
+  );
+  // Chu kỳ live-pull (giây) — user nhập trong panel; đổi được cả khi đang xem
+  // (không thuộc queryKey nên chỉ rebound timer, không re-mount query).
+  const [livePullIntervalSec, setLivePullIntervalSec] = useState(
+    typeof persistedRealtime?.livePullIntervalSec === "number"
+      ? persistedRealtime.livePullIntervalSec
+      : REALTIME_LIVE_PULL_DEFAULT_SEC,
+  );
+  // True khi component mount với phiên realtime đã restore từ storage — dùng
+  // để skip các reset effect ở lần render đầu (chúng sẽ wipe state vừa restore).
+  // Áp cho cả trạng thái Dừng (master ON, started=false): picker + cài đặt
+  // vẫn cần giữ qua reload, không được wipe khi user còn null trong auth bootstrap.
+  // Cleared sau khi đã skip 1 lần.
+  const restoredRealtimeRef = useRef(
+    persistedRealtime !== null && persistedRealtime.realtimeEnabled === true,
+  );
+  // Popup "Không có chuyến khảo sát thực địa nào":
+  //   noPacketAlertOpen = popup đang hiển thị; auto-close sau 10s.
+  //   noPacketLastShownAt = epoch ms khi popup hiện gần nhất trong session,
+  //     null = chưa hiện. Dùng để chọn ngưỡng (FIRST 60s khi null, REPEAT
+  //     180s khi đã hiện 1 lần) và làm reference cho countdown lần sau.
+  const [noPacketAlertOpen, setNoPacketAlertOpen] = useState(false);
+  const [noPacketLastShownAt, setNoPacketLastShownAt] = useState(
+    /** @type {number | null} */ (null),
   );
 
   // Logout / token expire khi đang ở mode "me" hoặc "user/..." → fallback
   // về "community" (backend sẽ trả 401 nếu giữ "me" mà không có token, gây
   // toàn bộ map empty + error toast).
+  // Skip lần đầu khi restore phiên realtime: user=null tạm thời trong lúc
+  // auth bootstrap cookie → effect này sẽ flip contributor về community →
+  // cascade clear realtime restored. Áp cho cả master ON dù Dừng — picker
+  // vẫn cần giữ. Chờ user resolve mới chạy bình thường.
+  const skippedAuthFallbackOnceRef = useRef(
+    persistedRealtimeRef.current?.realtimeEnabled === true,
+  );
   useEffect(() => {
+    // Bootstrap auth (HttpOnly cookie → /auth/refresh + /me) chạy async ~50-300ms
+    // sau mount. Trước khi settle, user=null không có nghĩa là logged-out → skip
+    // fallback để tránh wipe contributor đã restore từ URL/storage.
+    if (!authBootstrapped) return;
+    if (skippedAuthFallbackOnceRef.current) {
+      skippedAuthFallbackOnceRef.current = false;
+      return;
+    }
     if (!user) {
       if (contributor !== "community") {
         setContributor("community");
@@ -697,7 +892,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       // ngầm không thấy được trên UI.
       if (sourceType !== null) setSourceType(null);
     }
-  }, [user, contributor, sourceType]);
+  }, [authBootstrapped, user, contributor, sourceType]);
 
   // Sync URL mỗi khi filter đổi.
   useEffect(() => {
@@ -718,8 +913,9 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       rssiRange,
       snrRange,
       timeRange,
+      latestCount,
     });
-  }, [mode, sfList, deviceId, rssiRange, snrRange, timeRange]);
+  }, [mode, sfList, deviceId, rssiRange, snrRange, timeRange, latestCount]);
 
   // Filter pipeline: backend nhận contributor/linked_source/source +
   // (sf_list, device_id, rssi/snr/time range, sort + rank window) và AND
@@ -727,15 +923,41 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   const linkedSourceForQuery = contributor === "me" ? linkedSourceId : null;
   const deviceIdForQuery = contributor === "me" ? deviceId : null;
 
-  // Gateway là hạ tầng chung — luôn dùng community bất kể filter. Trước đây
-  // "Bản đồ của tôi" filter gateway theo survey của user nhưng CSV upload
-  // chưa đóng góp nằm ở quarantine → query gateway INNER JOIN training trượt
-  // → không hiện gateway nào. Gateway list không phụ thuộc data ownership.
+  // Gateway list theo contributor đang chọn:
+  //   community → chỉ gateway is_public=true (admin chưa ẩn).
+  //   me        → bypass is_public + INNER JOIN survey_training/quarantine
+  //                của user → user vẫn thấy gateway của mình kể cả khi admin
+  //                đã ẩn khỏi bản đồ chung.
+  // Logged-out + contributor=me chỉ xảy ra momentary trước khi useEffect reset
+  // về community; fallback community để tránh authFetch fail trong gap đó.
+  const gatewayContributor = contributor === "me" && user ? "me" : "community";
   const gatewaysQ = useQuery({
-    queryKey: ["gateways", "community"],
-    queryFn: () => listGateways(undefined, { contributor: "community" }),
+    queryKey: ["gateways", gatewayContributor],
+    queryFn: () => listGateways(undefined, { contributor: gatewayContributor }),
     retry: 3,
   });
+
+  // Sources list — share cache với LiveSessionSourcePicker (cùng queryKey).
+  // Dùng để lookup source_type của liveSessionSourceId → quyết định route
+  // realtime: lpwanmapper → live-pull endpoint (RAM-only), khác → surveysQ
+  // (DB poll). Chỉ enabled khi user đăng nhập (sources là per-user).
+  const sourcesQ = useQuery({
+    queryKey: ["sources"],
+    queryFn: listSources,
+    enabled: !!user,
+    retry: 1,
+  });
+  const liveSourceType = useMemo(() => {
+    if (!liveSessionSourceId || !sourcesQ.data) return null;
+    return (
+      sourcesQ.data.items.find((s) => s.id === liveSessionSourceId)
+        ?.source_type ?? null
+    );
+  }, [liveSessionSourceId, sourcesQ.data]);
+  // `useLivePull` = đang xem live + nguồn là lpwanmapper → switch sang endpoint
+  // live-pull thay vì surveysQ. ChirpStack vẫn dùng surveysQ (data vào DB qua
+  // webhook). Source khác / chưa chọn → surveysQ default.
+  const useLivePull = realtimeStarted && liveSourceType === "lpwanmapper";
 
   const surveysQ = useQuery({
     queryKey: [
@@ -748,14 +970,15 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       rssiRange,
       snrRange,
       timeRange,
+      latestCount,
       // Tách cache realtime ↔ static — query realtime gửi kèm `since` cursor
       // không nên pollute snapshot mà tab khác / lần switch off đọc lại.
-      realtimeEnabled,
+      realtimeStarted,
     ],
     queryFn: () => {
       // Realtime: cursor null lần đầu (snapshot toàn bộ) → set từ effect
-      // merge bên dưới. Static (realtimeEnabled = false): không gửi since.
-      const since = realtimeEnabled
+      // merge bên dưới. Static (realtimeStarted = false): không gửi since.
+      const since = realtimeStarted
         ? lastPointTimestampRef.current ?? undefined
         : undefined;
       return listSurveyTraining(undefined, {
@@ -770,6 +993,8 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         snrMax: snrRange.max ?? undefined,
         timeFrom: timeRange.from ?? undefined,
         timeTo: timeRange.to ?? undefined,
+        limit: latestCount.count ?? undefined,
+        sortOrder: latestCount.order,
         since,
       });
     },
@@ -778,9 +1003,45 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     // user thấy panel error 1 lần đỡ spam request.
     retry: contributor === "community" ? 3 : false,
     // refetchIntervalInBackground mặc định false → tab ẩn tự pause polling.
+    // useLivePull → tắt poll surveysQ (livePullQ phụ trách).
     refetchInterval:
-      realtimeEnabled && contributor === "me" ? REALTIME_POLL_MS : false,
+      realtimeStarted && contributor === "me" && !useLivePull
+        ? REALTIME_POLL_MS
+        : false,
   });
+
+  // Live-pull query — chỉ active khi useLivePull. Reuse merge effect (cùng
+  // shape SurveyTrainingPoint). Error (502 SourceError) → toast + auto-stop xem.
+  const livePullQ = useQuery({
+    queryKey: ["live-pull", liveSessionSourceId, useLivePull],
+    queryFn: () =>
+      livePullSource(
+        /** @type {string} */ (liveSessionSourceId),
+        lastPointTimestampRef.current ?? null,
+      ),
+    enabled: useLivePull && !!liveSessionSourceId,
+    retry: false,
+    refetchInterval: useLivePull ? livePullIntervalSec * 1000 : false,
+  });
+  // Live-pull lỗi (auth blip lúc reload, network down, source paused...) →
+  // chỉ show toast. KHÔNG auto-stop để phiên còn nguyên qua reload/đổi tab.
+  // User chủ động bấm "Dừng xem" hoặc bỏ tick master mới kết thúc phiên.
+  useEffect(() => {
+    if (!livePullQ.error) return;
+    const msg =
+      livePullQ.error instanceof Error
+        ? livePullQ.error.message
+        : String(livePullQ.error);
+    setRealtimeError(msg);
+  }, [livePullQ.error]);
+  // Clear toast khi user bấm Xem lại / đổi nguồn, HOẶC khi live-pull lần kế
+  // tiếp success trở lại (auto-recover transient error mà không cần user action).
+  useEffect(() => {
+    if (realtimeStarted) setRealtimeError(null);
+  }, [realtimeStarted]);
+  useEffect(() => {
+    if (livePullQ.isSuccess) setRealtimeError(null);
+  }, [livePullQ.isSuccess, livePullQ.dataUpdatedAt]);
 
   // Map devEUI → friendly name. Popup hiển thị tên user-set (vd
   // "STM32F411-Node-01") thay vì hex devEUI khô khan. Source ưu tiên: source
@@ -808,26 +1069,49 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
   // Reset realtime khi rời khỏi mode "me" hoặc logout — toggle realtime chỉ
   // có ý nghĩa với data của chính chủ. Cleanup cursor + counter + features
   // để lần bật lại snapshot từ đầu.
+  // Skip lúc auth bootstrap chưa settle (user=null tạm thời lúc cookie rehydrate)
+  // để không wipe state vừa restore từ storage. Sau khi bootstrap settled, lần
+  // đầu vẫn skip 1 lần (qua restoredRealtimeRef) để chừa cho me/user effects
+  // re-fire khi user resolve thật.
   useEffect(() => {
+    if (!authBootstrapped) return;
+    if (restoredRealtimeRef.current) {
+      restoredRealtimeRef.current = false;
+      return;
+    }
     if (contributor === "me" && user) return;
     setRealtimeEnabled(false);
+    setRealtimeStarted(false);
     setRealtimeFeatures([]);
     setLastSeenAt(null);
+    setSessionStartedAt(null);
     setLiveSessionSourceId(null);
     lastPointTimestampRef.current = null;
+    startCursorRef.current = null;
     sessionCounterRef.current = 0;
-  }, [contributor, user]);
+    sessionPollCountRef.current = 0;
+  }, [authBootstrapped, contributor, user]);
 
   // Reset cursor + accumulator khi filter đổi giữa chừng realtime — kết quả
-  // mới khác hẳn, không thể incremental từ cursor cũ. Cũng fire khi bật/tắt
-  // realtime để lần snapshot mới luôn full-fetch.
+  // mới khác hẳn, không thể incremental từ cursor cũ. Cũng fire khi bấm Xem
+  // (realtimeStarted true) để init cursor = startCursorRef (null = full
+  // snapshot, ISO = "chỉ điểm sau Xem").
+  // Skip lần đầu sau restore (cursor + features đã restore từ storage):
+  // effect sẽ wipe nếu chạy ngay. Mỗi reset effect dùng flag riêng để consume
+  // độc lập với 2 reset effect khác.
+  const skippedFilterResetOnceRef = useRef(persistedRealtimeRef.current?.realtimeStarted === true);
   useEffect(() => {
-    if (!realtimeEnabled) return;
-    lastPointTimestampRef.current = null;
+    if (!realtimeStarted) return;
+    if (skippedFilterResetOnceRef.current) {
+      skippedFilterResetOnceRef.current = false;
+      return;
+    }
+    lastPointTimestampRef.current = startCursorRef.current;
     sessionCounterRef.current = 0;
+    sessionPollCountRef.current = 0;
     setRealtimeFeatures([]);
   }, [
-    realtimeEnabled,
+    realtimeStarted,
     contributor,
     linkedSourceForQuery,
     deviceIdForQuery,
@@ -836,18 +1120,28 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
     rssiRange,
     snrRange,
     timeRange,
+    latestCount,
   ]);
 
   // Merge incremental result: snapshot lần đầu (cursor null) hoặc append
   // điểm mới với dedup theo (timestamp + device_id + serving_gateway_id).
   // Advance cursor = max(timestamp) — server-time, không đụng clock skew.
+  // Source data: useLivePull → livePullQ (lpwanmapper upstream), ngược lại
+  // surveysQ (DB). Cùng shape SurveyTrainingPoint nên logic reuse 1-1.
+  const activeRealtimeData = useLivePull ? livePullQ.data : surveysQ.data;
   useEffect(() => {
-    if (!realtimeEnabled) return;
-    if (!surveysQ.data) return;
-    const items = surveysQ.data.items;
+    if (!realtimeStarted) return;
+    if (!activeRealtimeData) return;
+    sessionPollCountRef.current += 1;
+    const items = activeRealtimeData.items;
+    // Helper: packet "thật sự live" = timestamp ≥ sessionStartedAt. Initial
+    // snapshot cursor=null trả về cả packet lịch sử → KHÔNG bump counter /
+    // lastSeenAt cho chúng (badge chỉ phản ánh gói nhận TRONG session).
+    const isFresh = (/** @type {{ timestamp: string }} */ p) =>
+      sessionStartedAt !== null && p.timestamp >= sessionStartedAt;
     if (lastPointTimestampRef.current === null) {
       setRealtimeFeatures(items);
-      sessionCounterRef.current = 0;
+      sessionCounterRef.current = items.filter(isFresh).length;
     } else if (items.length > 0) {
       // Dedup + counter bump phải nằm NGOÀI updater của setRealtimeFeatures:
       // React 18 StrictMode dev double-invoke updater để check purity → side
@@ -858,15 +1152,15 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
             `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
         ),
       );
-      const fresh = items.filter(
+      const newItems = items.filter(
         (p) =>
           !seen.has(
             `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`,
           ),
       );
-      if (fresh.length > 0) {
-        sessionCounterRef.current += fresh.length;
-        setRealtimeFeatures((prev) => [...prev, ...fresh]);
+      if (newItems.length > 0) {
+        sessionCounterRef.current += newItems.filter(isFresh).length;
+        setRealtimeFeatures((prev) => [...prev, ...newItems]);
       }
     }
     if (items.length > 0) {
@@ -875,50 +1169,155 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         items[0].timestamp,
       );
       lastPointTimestampRef.current = maxTs;
-      setLastSeenAt(Date.now());
+      if (items.some(isFresh)) setLastSeenAt(Date.now());
     }
     // realtimeFeatures DELIBERATELY không vào deps: feature update do effect
     // này set, thêm vào deps → infinite loop. Closure-read là chấp nhận
-    // được vì poll mới đi qua surveysQ.data → re-render trước khi effect chạy.
+    // được vì poll mới đi qua activeRealtimeData → re-render trước khi effect chạy.
+    // sessionStartedAt vào deps để re-fire khi user Xem lại (cùng activeRealtimeData
+    // cũ nhưng sessionStartedAt mới → counter / lastSeenAt recompute đúng).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surveysQ.data, realtimeEnabled]);
+  }, [activeRealtimeData, realtimeStarted, sessionStartedAt]);
 
-  // Idle timer — sau 15 phút không có điểm mới → tự tắt toggle. Reset mỗi
-  // khi lastSeenAt advance (dep đổi → effect re-run → setTimeout mới).
+  // Idle timer — sau 15 phút không có điểm mới → tự dừng (về trạng thái chọn
+  // nguồn). User vẫn đang ở panel; muốn xem tiếp bấm Xem lại. Reset mỗi khi
+  // lastSeenAt advance (dep đổi → effect re-run → setTimeout mới).
   useEffect(() => {
-    if (!realtimeEnabled) return;
+    if (!realtimeStarted) return;
     const timer = setTimeout(() => {
-      setRealtimeEnabled(false);
+      setRealtimeStarted(false);
     }, REALTIME_IDLE_AUTO_OFF_MS);
     return () => clearTimeout(timer);
-  }, [realtimeEnabled, lastSeenAt]);
+  }, [realtimeStarted, lastSeenAt]);
 
-  // Realtime OFF → reset live session picker. Batch row đã tạo (nếu có) còn
-  // trong "Lịch sử upload" với count hiện tại — user tự xoá nếu rỗng. Auto-
-  // off idle 15 phút và end button thành công cũng đi qua đây.
+  // Reset popup state khi user bấm Xem / Dừng — phiên mới bắt đầu lại với
+  // ngưỡng FIRST. Master toggle OFF cũng đi qua đây (realtimeStarted false).
+  useEffect(() => {
+    setNoPacketAlertOpen(false);
+    setNoPacketLastShownAt(null);
+  }, [realtimeStarted]);
+
+  // Detector ngưỡng — chạy mỗi nowTick (5s/lần). Reference = mốc gần nhất
+  // (sessionStartedAt, lastSeenAt, hoặc popup lần trước). Ngưỡng FIRST nếu
+  // chưa hiện lần nào, REPEAT cho các lần sau. Nếu popup đang mở thì skip
+  // để không spam open lần 2 trước khi auto-close.
+  useEffect(() => {
+    if (!realtimeStarted) return;
+    if (contributor !== "me" || mode !== "points") return;
+    if (noPacketAlertOpen) return;
+    const sessionStartedMs = sessionStartedAt
+      ? Date.parse(sessionStartedAt)
+      : null;
+    const reference = Math.max(
+      lastSeenAt ?? 0,
+      noPacketLastShownAt ?? 0,
+      sessionStartedMs ?? 0,
+    );
+    if (reference === 0) return;
+    const threshold =
+      noPacketLastShownAt === null
+        ? REALTIME_NO_PACKET_ALERT_MS_FIRST
+        : REALTIME_NO_PACKET_ALERT_MS_REPEAT;
+    if (nowTick - reference < threshold) return;
+    setNoPacketAlertOpen(true);
+    setNoPacketLastShownAt(Date.now());
+  }, [
+    nowTick,
+    lastSeenAt,
+    sessionStartedAt,
+    realtimeStarted,
+    contributor,
+    mode,
+    noPacketAlertOpen,
+    noPacketLastShownAt,
+  ]);
+
+  // Auto-close popup sau 10s. User vẫn có thể ✕ đóng sớm hơn.
+  useEffect(() => {
+    if (!noPacketAlertOpen) return;
+    const timer = setTimeout(
+      () => setNoPacketAlertOpen(false),
+      REALTIME_NO_PACKET_ALERT_AUTO_CLOSE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [noPacketAlertOpen]);
+
+  // Persist phiên realtime vào sessionStorage để reload / chuyển tab trong
+  // app rồi quay lại vẫn giữ nguyên. Ref values (cursor/counter) đọc qua
+  // .current — refs luôn fresh khi effect chạy vì mọi mutation ref đi cùng
+  // setState trong cùng code path. Master off → clear storage.
+  useEffect(() => {
+    if (!realtimeEnabled) {
+      clearRealtimeSession();
+      return;
+    }
+    saveRealtimeSession({
+      realtimeEnabled,
+      realtimeStarted,
+      realtimePanelOpen,
+      autoFollowEnabled,
+      onlyNewAfterStart,
+      showConnectionLines,
+      sessionStartedAt,
+      liveSessionSourceId,
+      livePullIntervalSec,
+      lastSeenAt,
+      realtimeFeatures,
+      lastPointTimestamp: lastPointTimestampRef.current,
+      startCursor: startCursorRef.current,
+      sessionCounter: sessionCounterRef.current,
+    });
+  }, [
+    realtimeEnabled,
+    realtimeStarted,
+    realtimePanelOpen,
+    autoFollowEnabled,
+    onlyNewAfterStart,
+    showConnectionLines,
+    sessionStartedAt,
+    liveSessionSourceId,
+    livePullIntervalSec,
+    lastSeenAt,
+    realtimeFeatures,
+  ]);
+
+  // Master toggle OFF → reset toàn bộ state realtime (picker + started + cursor
+  // + accumulator). Auto-off idle 15 phút chỉ tắt realtimeStarted, master vẫn
+  // ON nếu user chưa tắt thủ công.
   useEffect(() => {
     if (realtimeEnabled) return;
+    setRealtimeStarted(false);
     setLiveSessionSourceId(null);
+    setRealtimeFeatures([]);
+    setLastSeenAt(null);
+    lastPointTimestampRef.current = null;
+    startCursorRef.current = null;
+    sessionCounterRef.current = 0;
+    sessionPollCountRef.current = 0;
   }, [realtimeEnabled]);
 
   // Tick re-render badge "Mới nhất: Ns trước" — dù không có điểm mới counter
   // vẫn cần update.
   useEffect(() => {
-    if (!realtimeEnabled) return;
+    if (!realtimeStarted) return;
     const interval = setInterval(
       () => setNowTick(Date.now()),
       REALTIME_BADGE_TICK_MS,
     );
     return () => clearInterval(interval);
-  }, [realtimeEnabled]);
+  }, [realtimeStarted]);
 
-  // Auto-pan tới điểm mới nhất khi user bật "Tự theo dõi vị trí". Lấy điểm
-  // cuối array — merge logic append fresh vào cuối nên đây là điểm mới nhất
-  // về cả thời gian lẫn thứ tự nhận.
+  // Auto-pan tới điểm mới nhất khi user bật "Tự theo dõi vị trí". Skip poll
+  // #1 (snapshot lịch sử) — chỉ fly khi có delta thật. Newest tính theo max
+  // timestamp vì surveysQ trả DESC nên index cuối array = cũ nhất.
   useEffect(() => {
-    if (!realtimeEnabled || !autoFollowEnabled) return;
+    if (!realtimeStarted || !autoFollowEnabled) return;
     if (realtimeFeatures.length === 0) return;
-    const newest = realtimeFeatures[realtimeFeatures.length - 1];
+    if (sessionPollCountRef.current <= 1) return;
+    const newest = realtimeFeatures.reduce(
+      (m, p) => (p.timestamp > m.timestamp ? p : m),
+      realtimeFeatures[0],
+    );
     const map = mapRef.current;
     if (!map) return;
     map.flyTo({
@@ -926,14 +1325,17 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       zoom: Math.max(map.getZoom(), REALTIME_AUTO_FOLLOW_MIN_ZOOM),
       duration: 800,
     });
-  }, [realtimeFeatures, realtimeEnabled, autoFollowEnabled]);
+  }, [realtimeFeatures, realtimeStarted, autoFollowEnabled]);
 
   // Auto mở popup cho điểm real-time mới nhất (yêu cầu UX: theo dõi trực tiếp
   // → mỗi packet mới tự mở popup chi tiết, đồng thời đóng popup cũ). Chỉ fire
   // khi length thực sự tăng — tránh re-open khi realtimeFeatures được tạo
-  // reference mới do filter/reset (length không đổi hoặc giảm).
+  // reference mới do filter/reset (length không đổi hoặc giảm). Skip poll #1
+  // (snapshot lịch sử) — popup chỉ pop khi có packet THỰC SỰ MỚI sau khi bật.
+  // Newest tính theo max(timestamp) vì surveysQ trả DESC nên index cuối array
+  // = điểm CŨ NHẤT (bug cũ: pop điểm tháng 11/2025 khi bật).
   useEffect(() => {
-    if (!realtimeEnabled) {
+    if (!realtimeStarted) {
       lastRealtimeFeatureCountRef.current = realtimeFeatures.length;
       return;
     }
@@ -942,9 +1344,13 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       return;
     }
     lastRealtimeFeatureCountRef.current = realtimeFeatures.length;
+    if (sessionPollCountRef.current <= 1) return;
     const map = mapRef.current;
     if (!map) return;
-    const newest = realtimeFeatures[realtimeFeatures.length - 1];
+    const newest = realtimeFeatures.reduce(
+      (m, p) => (p.timestamp > m.timestamp ? p : m),
+      realtimeFeatures[0],
+    );
     // 1 packet → N row (1/gateway). Group sibling theo (timestamp, device_id)
     // để popup show đủ list "Gateway kết nối" giống click thường.
     const sameKey = `${newest.timestamp}|${newest.device_id ?? ""}`;
@@ -994,15 +1400,39 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       if (surveyPopupRef.current === popup) surveyPopupRef.current = null;
     });
     surveyPopupRef.current = popup;
-  }, [realtimeFeatures, realtimeEnabled]);
+  }, [realtimeFeatures, realtimeStarted]);
 
-  // Render source: realtime → accumulated features; static → snapshot từ
-  // useQuery. EMPTY_TRAINING_ITEMS giữ ref ổn định khi data chưa có (tránh
-  // `?? []` tạo array mới mỗi render gây setData effect re-fire).
+  // Render source:
+  // - realtime OFF: snapshot DB từ surveysQ.
+  // - realtime ON + "Chỉ hiện điểm đang live" ON: chỉ realtimeFeatures filter
+  //   theo sessionStartedAt (giấu lịch sử).
+  // - realtime ON + toggle OFF: merge snapshot DB + live packets (dedup theo
+  //   timestamp|device|gateway) — giữ điểm lịch sử trên map, ADD packet mới
+  //   từ live-pull thay vì replace toàn bộ.
+  // EMPTY_TRAINING_ITEMS giữ ref ổn định khi data chưa có (tránh `?? []` tạo
+  // array mới mỗi render gây setData effect re-fire).
   const displayedItems = useMemo(() => {
-    if (realtimeEnabled) return realtimeFeatures;
-    return surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
-  }, [realtimeEnabled, realtimeFeatures, surveysQ.data]);
+    if (!realtimeStarted) {
+      return surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
+    }
+    if (onlyNewAfterStart && sessionStartedAt) {
+      return realtimeFeatures.filter((p) => p.timestamp >= sessionStartedAt);
+    }
+    const base = surveysQ.data?.items ?? EMPTY_TRAINING_ITEMS;
+    if (realtimeFeatures.length === 0) return base;
+    const key = (/** @type {any} */ p) =>
+      `${p.timestamp}|${p.device_id ?? ""}|${p.serving_gateway_id ?? ""}`;
+    const seen = new Set(base.map(key));
+    const extras = realtimeFeatures.filter((p) => !seen.has(key(p)));
+    if (extras.length === 0) return base;
+    return base.length === 0 ? extras : [...base, ...extras];
+  }, [
+    realtimeStarted,
+    realtimeFeatures,
+    surveysQ.data,
+    onlyNewAfterStart,
+    sessionStartedAt,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1170,6 +1600,14 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       // 1 packet → N row (1/gateway nhận) cùng (device_id+timestamp); group
       // sibling rows từ displayedItemsRef để list "Gateway kết nối".
       map.on("click", SURVEYS_LAYER_ID, (e) => {
+        // Khi gateway marker đè lên survey circle, click trên marker vẫn
+        // được map dispatch xuống layer này (queryRenderedFeatures theo
+        // e.point, không quan tâm DOM target). Skip nếu target nằm trong
+        // gateway marker DOM — để maplibre chỉ mở popup gateway.
+        const target = /** @type {HTMLElement | null} */ (
+          e.originalEvent?.target ?? null
+        );
+        if (target && target.closest(".cm-gw-marker")) return;
         const f = e.features?.[0];
         if (!f) return;
         const p = /** @type {{
@@ -1312,12 +1750,17 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       src.setData({ type: "FeatureCollection", features: [] });
       return;
     }
-    const gateways = gatewaysQ.data?.items ?? [];
+    // Chỉ vẽ line nối tới gateway đang hiện marker (đồng bộ filter
+    // showAllGateways). Gateway bị ẩn → line trỏ vào hư không sẽ rối.
+    const gateways = (gatewaysQ.data?.items ?? []).filter(
+      (g) => showAllGateways || g.state === "online",
+    );
     src.setData(buildSurveyConnectionLinesGeoJson(displayedItems, gateways));
   }, [
     displayedItems,
     gatewaysQ.data,
     showConnectionLines,
+    showAllGateways,
     mode,
     mapLoaded,
   ]);
@@ -1509,6 +1952,10 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
 
     for (const g of gatewaysQ.data.items) {
       if (filterEstimateGw && g.code !== estimateGatewayCode) continue;
+      // Mặc định chỉ hiện marker khi gateway đang online (ChirpStack hoặc
+      // fallback MAX(timestamp) trong 5 phút, hoặc manual_state_override=
+      // 'online'). User tick "Hiện toàn bộ gateway" → bỏ qua filter này.
+      if (!showAllGateways && g.state !== "online") continue;
       const el = document.createElement("div");
       el.className = "cm-gw-marker";
       el.setAttribute("aria-label", `Gateway ${g.code}`);
@@ -1608,6 +2055,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       const pulseFeatures = gatewaysQ.data.items
         .filter((g) => {
           if (filterEstimateGw && g.code !== estimateGatewayCode) return false;
+          if (!showAllGateways && g.state !== "online") return false;
           return g.latitude != null && g.longitude != null;
         })
         .map((g) => ({
@@ -1628,7 +2076,7 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
       for (const m of gatewayMarkersRef.current) m.remove();
       gatewayMarkersRef.current = [];
     };
-  }, [gatewaysQ.data, mapLoaded, mode, coverageViewMode, estimateGatewayCode]);
+  }, [gatewaysQ.data, mapLoaded, mode, coverageViewMode, estimateGatewayCode, showAllGateways]);
 
   /**
    * Build popup DOM 2 layer cho marker dự đoán (chỉ tab "Dự đoán điểm").
@@ -2227,27 +2675,76 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
             contributor=me + mode=points. Refactor 2026-06-15: chỉ hiển thị
             trạng thái LIVE + counter + lastSeen — không còn Start/End vì
             view-only, không tạo batch. */}
-        {realtimeEnabled && contributor === "me" && mode === "points" && (
-          <div className="absolute top-3 left-1/2 z-20 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                <span className="font-semibold text-red-700">
-                  {t.filters.realtime.liveBadge}
-                </span>
-              </div>
-              <div className="text-slate-600">
-                {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
-              </div>
-              <div className="text-slate-500">
-                {t.filters.realtime.lastSeenLabel}:{" "}
-                {formatLastSeenLabel(
-                  lastSeenAt,
-                  nowTick,
-                  t.filters.realtime,
-                )}
+        {realtimeStarted && contributor === "me" && mode === "points" && (() => {
+          // Tên thiết bị mới nhất — chỉ tính packet có timestamp ≥ sessionStartedAt
+          // (gói THẬT SỰ đến trong session, không phải lịch sử cursor=null trả về).
+          // Lookup devicesQ.data (state-backed, reactive) thay vì deviceNameRef.
+          const freshPackets = sessionStartedAt
+            ? realtimeFeatures.filter((p) => p.timestamp >= sessionStartedAt)
+            : [];
+          const newest = freshPackets.length
+            ? freshPackets.reduce(
+                (m, p) => (p.timestamp > m.timestamp ? p : m),
+                freshPackets[0],
+              )
+            : null;
+          let deviceLabel = null;
+          if (newest && newest.device_id) {
+            const named = devicesQ.data?.items.find(
+              (d) => d.dev_eui === newest.device_id && d.name?.trim(),
+            );
+            deviceLabel = named?.name ?? newest.device_id;
+          }
+          return (
+            <div className="absolute top-3 left-1/2 z-20 -translate-x-1/2 flex items-center gap-3 rounded-md bg-white/95 px-3 py-1.5 text-xs shadow-md">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                  <span className="font-semibold text-red-700">
+                    {t.filters.realtime.liveBadge}
+                  </span>
+                </div>
+                <div className="text-slate-700">
+                  {t.filters.realtime.deviceLabel}:{" "}
+                  <span className="font-medium">
+                    {deviceLabel ?? t.filters.realtime.deviceWaiting}
+                  </span>
+                </div>
+                <div className="text-slate-600">
+                  {t.filters.realtime.sessionCounter(sessionCounterRef.current)}
+                </div>
+                <div className="text-slate-500">
+                  {t.filters.realtime.lastSeenLabel}:{" "}
+                  {formatLastSeenLabel(
+                    lastSeenAt,
+                    nowTick,
+                    t.filters.realtime,
+                  )}
+                </div>
               </div>
             </div>
+          );
+        })()}
+
+        {/* Popup "Không có chuyến khảo sát thực địa nào" — hiển thị qua state
+            noPacketAlertOpen (detector + auto-close timer ở effect trên).
+            Lần đầu sau 60s, các lần sau cách 3 phút. Auto-close sau 10s. */}
+        {noPacketAlertOpen && (
+          <div className="absolute top-28 left-1/2 z-20 flex max-w-sm -translate-x-1/2 items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-md">
+            <div className="flex-1">
+              <div className="font-semibold">
+                {t.filters.realtime.noPacketTitle}
+              </div>
+              <div className="mt-1">{t.filters.realtime.noPacketHint}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNoPacketAlertOpen(false)}
+              className="text-amber-700 hover:text-amber-900"
+              aria-label="Đóng"
+            >
+              ✕
+            </button>
           </div>
         )}
 
@@ -2464,14 +2961,22 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
               <div className="flex flex-col gap-2 shrink-0">
                 <PointsFilterToggleBtn
                   open={pointsFilterOpen}
-                  onToggle={() => setPointsFilterOpen((v) => !v)}
+                  onToggle={() => {
+                    setPointsFilterOpen((v) => !v);
+                    setRealtimePanelOpen(false);
+                  }}
                 />
                 {/* Realtime toggle luôn hiển thị (kể cả guest). Body kiểm
-                    tra login trước khi cho tick "Bật theo dõi trực tiếp". */}
+                    tra login trước khi cho tick "Bật theo dõi trực tiếp".
+                    Mở panel này thì đóng panel filter để chỉ 1 panel mở 1 lúc
+                    (panels-column hẹp, mở cả 2 sẽ chồng). */}
                 <RealtimeToggleBtn
                   open={realtimePanelOpen}
-                  onToggle={() => setRealtimePanelOpen((v) => !v)}
-                  realtimeEnabled={realtimeEnabled}
+                  onToggle={() => {
+                    setRealtimePanelOpen((v) => !v);
+                    setPointsFilterOpen(false);
+                  }}
+                  realtimeEnabled={realtimeStarted}
                 />
               </div>
               {(pointsFilterOpen || realtimePanelOpen) && (
@@ -2495,8 +3000,12 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
                       onSnrRangeChange={setSnrRange}
                       timeRange={timeRange}
                       onTimeRangeChange={setTimeRange}
+                      latestCount={latestCount}
+                      onLatestCountChange={setLatestCount}
                       connectionLinesEnabled={showConnectionLines}
                       onConnectionLinesEnabledChange={setShowConnectionLines}
+                      showAllGatewaysEnabled={showAllGateways}
+                      onShowAllGatewaysEnabledChange={setShowAllGateways}
                     />
                   )}
                   {realtimePanelOpen && (
@@ -2510,10 +3019,56 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
                         // fail nếu user đang xem community/all.
                         if (v) setContributor("me");
                       }}
+                      realtimeStarted={realtimeStarted}
+                      onStartWatching={() => {
+                        if (!liveSessionSourceId) return;
+                        // sessionStartedAt LUÔN set để display filter
+                        // "Chỉ hiện điểm đang live" hoạt động khi user bật
+                        // mid-watch. Cursor fetch riêng: chỉ bật khi toggle
+                        // initial ON (tối ưu payload).
+                        const now = new Date().toISOString();
+                        const cursor = onlyNewAfterStart ? now : null;
+                        startCursorRef.current = cursor;
+                        lastPointTimestampRef.current = cursor;
+                        sessionCounterRef.current = 0;
+                        sessionPollCountRef.current = 0;
+                        setSessionStartedAt(now);
+                        setRealtimeFeatures([]);
+                        setLastSeenAt(null);
+                        setRealtimeStarted(true);
+                      }}
+                      onChangeSource={() => {
+                        setRealtimeStarted(false);
+                        setRealtimeFeatures([]);
+                        setLastSeenAt(null);
+                        setSessionStartedAt(null);
+                        lastPointTimestampRef.current = null;
+                        startCursorRef.current = null;
+                        sessionCounterRef.current = 0;
+                        sessionPollCountRef.current = 0;
+                      }}
+                      onStopWatching={() => {
+                        setRealtimeStarted(false);
+                        setRealtimeFeatures([]);
+                        setLastSeenAt(null);
+                        setSessionStartedAt(null);
+                        lastPointTimestampRef.current = null;
+                        startCursorRef.current = null;
+                        sessionCounterRef.current = 0;
+                        sessionPollCountRef.current = 0;
+                      }}
                       autoFollowEnabled={autoFollowEnabled}
                       onAutoFollowEnabledChange={setAutoFollowEnabled}
+                      connectionLinesEnabled={showConnectionLines}
+                      onConnectionLinesEnabledChange={setShowConnectionLines}
+                      onlyNewAfterStart={onlyNewAfterStart}
+                      onOnlyNewAfterStartChange={setOnlyNewAfterStart}
                       liveSessionSourceId={liveSessionSourceId}
                       onLiveSessionSourceIdChange={setLiveSessionSourceId}
+                      livePullIntervalSec={livePullIntervalSec}
+                      onLivePullIntervalSecChange={setLivePullIntervalSec}
+                      livePullIntervalMin={REALTIME_LIVE_PULL_MIN_SEC}
+                      livePullIntervalMax={REALTIME_LIVE_PULL_MAX_SEC}
                     />
                   )}
                 </div>
@@ -2536,7 +3091,15 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
         {mode !== "heatmap" && (
           <div className="absolute bottom-10 left-2 z-10" data-map-legend>
             <MapLegend
-              gatewayCount={gatewaysQ.data?.total}
+              gatewayCount={
+                gatewaysQ.data
+                  ? showAllGateways
+                    ? (gatewaysQ.data.total ?? gatewaysQ.data.items.length)
+                    : gatewaysQ.data.items.filter(
+                        (g) => g.state === "online",
+                      ).length
+                  : null
+              }
               surveyCount={mode === "points" ? surveysQ.data?.total : null}
             />
           </div>
@@ -2552,6 +3115,23 @@ export function CoverageMap({ mode = "points", onRequestLogin }) {
           <div className="absolute bottom-3 right-3 z-10 max-w-sm rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-md">
             <div className="font-semibold">{t.tileErrorTitle}</div>
             <div className="mt-1">{tileError}</div>
+          </div>
+        )}
+
+        {realtimeError && (
+          <div className="absolute bottom-3 right-3 z-20 flex max-w-sm items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900 shadow-md">
+            <div className="flex-1">
+              <div className="font-semibold">{t.realtimeErrorTitle}</div>
+              <div className="mt-1 break-words">{realtimeError}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRealtimeError(null)}
+              className="text-red-700 hover:text-red-900"
+              aria-label="Đóng"
+            >
+              ✕
+            </button>
           </div>
         )}
 

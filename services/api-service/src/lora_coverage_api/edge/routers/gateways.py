@@ -33,6 +33,12 @@ router = APIRouter(prefix="/api/v1/gateways", tags=["gateways"])
 
 def _to_response(g: Gateway, state_map: dict[str, GatewayState] | None = None) -> GatewayResponse:
     live = state_map.get(g.code.lower()) if state_map else None
+    # Manual override (admin "ghim") thắng derived state. last_seen_at vẫn lấy
+    # từ ChirpStack/DB (nếu có) để user biết lần cuối thực tế.
+    if g.manual_state_override is not None:
+        state_value: str = g.manual_state_override
+    else:
+        state_value = live.state if live else "unknown"
     return GatewayResponse(
         id=g.id,
         code=g.code,
@@ -47,8 +53,10 @@ def _to_response(g: Gateway, state_map: dict[str, GatewayState] | None = None) -
         rx_antenna_gain_dbi=g.rx_antenna_gain_dbi,
         rx_sensitivity_dbm=g.rx_sensitivity_dbm,
         noise_floor_dbm=g.noise_floor_dbm,
-        state=live.state if live else "unknown",
+        state=state_value,
         last_seen_at=live.last_seen_at if live else None,
+        is_public=g.is_public,
+        manual_state_override=g.manual_state_override,
     )
 
 
@@ -71,6 +79,8 @@ def _etag_for(g: Gateway) -> str:
             g.rx_antenna_gain_dbi,
             g.rx_sensitivity_dbm,
             g.noise_floor_dbm,
+            g.is_public,
+            g.manual_state_override,
         )
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
@@ -106,6 +116,13 @@ async def list_gateways(
     max_lon: float | None = Query(default=None, ge=-180, le=180),
     max_lat: float | None = Query(default=None, ge=-90, le=90),
     limit: int = Query(default=500, ge=1, le=5000),
+    include_hidden: bool = Query(
+        default=False,
+        description=(
+            "Admin only: bypass is_public filter để hiện cả gateway đã ẩn khỏi "
+            "bản đồ chung. Non-admin gửi True sẽ bị ignore."
+        ),
+    ),
 ) -> GatewayListResponse:
     bbox: tuple[float, float, float, float] | None
     bbox_parts = (min_lon, min_lat, max_lon, max_lat)
@@ -128,9 +145,19 @@ async def list_gateways(
             current_user=user,
         )
 
+    # contributor=community → chỉ gateway is_public=true (đã duyệt + chưa bị ẩn).
+    # contributor=self/user → bypass is_public để user vẫn thấy gateway của
+    # mình đã bị admin ẩn khỏi bản đồ chung.
+    # include_hidden=true: chỉ honor cho admin (admin panel cần thấy cả gw ẩn
+    # để restore). Non-admin bị ignore (im lặng, không 403 — tránh leak schema).
+    admin_override = include_hidden and user is not None and user.is_admin
+    if admin_override:
+        is_public_filter = None
+    else:
+        is_public_filter = True if spec.mode == "community" else None
     items = directory.list_gateways(
         bbox=bbox,
-        is_public=True,
+        is_public=is_public_filter,
         limit=limit,
         contributor=spec,
     )
@@ -285,9 +312,16 @@ async def patch_gateway(
                 },
             )
 
-    patch_dict: dict[str, object] = {
-        k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None
-    }
+    # `manual_state_override` cho phép explicit-null (clear ghim → về derived
+    # state). Các field khác: null = "không gửi", lọc bỏ. exclude_unset đã chỉ
+    # giữ field user thực sự gửi nên distinguish được 2 trường hợp.
+    raw = payload.model_dump(exclude_unset=True)
+    patch_dict: dict[str, object] = {}
+    for k, v in raw.items():
+        if k == "manual_state_override":
+            patch_dict[k] = v  # giữ cả None để UPDATE SET = NULL
+        elif v is not None:
+            patch_dict[k] = v
     updated = directory.update(GatewayId(gateway_id), patch_dict)
     if updated is None:
         # Race: gateway xóa giữa GET-current và UPDATE.

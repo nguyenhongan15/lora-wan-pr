@@ -92,14 +92,6 @@ _UPDATE_POINTS_COUNT = text(
     """
 )
 
-_INCREMENT_POINTS_COUNT = text(
-    """
-    UPDATE me.upload_batches
-    SET points_count = points_count + :delta
-    WHERE id = :batch_id
-    """
-)
-
 # Aggregate count quarantine + training per batch. LEFT JOIN LATERAL với 2
 # subquery: Postgres planner đẩy `batch_id = b.id` filter vào trong, hit
 # index ix_survey_quarantine_batch / ix_survey_training_batch nên O(rows
@@ -282,13 +274,6 @@ def create_upload_batch(
 def set_batch_points_count(conn: Connection, *, batch_id: UUID, count: int) -> None:
     """Cập nhật cache count sau khi biết số rows thực insert (sau ON CONFLICT)."""
     conn.execute(_UPDATE_POINTS_COUNT, {"batch_id": batch_id, "count": count})
-
-
-def add_batch_points_count(conn: Connection, *, batch_id: UUID, delta: int) -> None:
-    """Cộng dồn count cho live session (mỗi sync incremental chỉ insert delta
-    rows mới — `set` sẽ ghi đè counter sai). Caller pass `delta=m_inserted`
-    sau mỗi sync chu kỳ."""
-    conn.execute(_INCREMENT_POINTS_COUNT, {"batch_id": batch_id, "delta": delta})
 
 
 def list_upload_batches(

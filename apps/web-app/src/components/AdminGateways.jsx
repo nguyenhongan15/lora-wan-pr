@@ -13,12 +13,8 @@ import {
   listGateways,
   patchGateway,
 } from "../api/client.js";
-import {
-  approveGateway,
-  listPendingGateways,
-  rejectGateway,
-} from "../admin/client.js";
-import { AlertModal } from "./Modal.jsx";
+import { listPendingGateways } from "../admin/client.js";
+import { AlertModal, ConfirmModal } from "./Modal.jsx";
 import { strings } from "../strings.js";
 
 const t = strings.adminGateways;
@@ -89,12 +85,37 @@ function ManageGatewaysTab({ editable }) {
   const qc = useQueryClient();
   const listQ = useQuery({
     queryKey: ["gateways", "admin"],
-    queryFn: () => listGateways(),
+    // includeHidden=true: admin cần thấy gw đã bị ẩn khỏi bản đồ chung để restore.
+    queryFn: () => listGateways(undefined, { includeHidden: true }),
   });
 
   const [editing, setEditing] = useState(
     /** @type {string | null} */ (null),
   );
+
+  // Visibility toggle: ConfirmModal cần biết gateway hiện tại + chiều đổi.
+  const [visTarget, setVisTarget] = useState(
+    /** @type {{ id: string, code: string, makePublic: boolean } | null} */ (null),
+  );
+  const [visError, setVisError] = useState(/** @type {string | null} */ (null));
+
+  const visMutation = useMutation({
+    /** @param {{ id: string, makePublic: boolean }} args */
+    mutationFn: async ({ id, makePublic }) => {
+      // patchGateway cần ETag — fetch fresh detail trước khi PATCH.
+      const detail = await getGateway(id);
+      if (!detail.etag) throw new Error("missing etag");
+      return patchGateway(id, detail.etag, { is_public: makePublic });
+    },
+    onSuccess: () => {
+      setVisTarget(null);
+      setVisError(null);
+      qc.invalidateQueries({ queryKey: ["gateways"] });
+    },
+    onError: () => {
+      setVisError(t.visibilityError);
+    },
+  });
 
   return (
     <>
@@ -146,15 +167,41 @@ function ManageGatewaysTab({ editable }) {
                   <td className="px-3 py-2">{g.frequency_mhz}</td>
                   <td className="px-3 py-2">
                     <StateBadge state={g.state} lastSeenAt={g.last_seen_at ?? null} />
+                    {g.is_public === false && (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 ring-1 ring-inset ring-amber-200">
+                        {t.hiddenBadge}
+                      </span>
+                    )}
                   </td>
                   {editable && (
                     <td className="px-3 py-2 text-right">
-                      <button
-                        onClick={() => setEditing(g.id)}
-                        className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
-                      >
-                        {t.editButton}
-                      </button>
+                      <div className="inline-flex gap-1">
+                        <button
+                          onClick={() => setEditing(g.id)}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                        >
+                          {t.editButton}
+                        </button>
+                        <button
+                          onClick={() =>
+                            setVisTarget({
+                              id: g.id,
+                              code: g.code,
+                              makePublic: g.is_public === false,
+                            })
+                          }
+                          className={
+                            "rounded-md border px-2 py-1 text-xs " +
+                            (g.is_public === false
+                              ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                              : "border-rose-300 text-rose-700 hover:bg-rose-50")
+                          }
+                        >
+                          {g.is_public === false
+                            ? t.restoreToCommunity
+                            : t.hideFromCommunity}
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -184,12 +231,41 @@ function ManageGatewaysTab({ editable }) {
           }}
         />
       )}
+
+      {visTarget && (
+        <ConfirmModal
+          title={
+            visTarget.makePublic ? t.confirmRestoreTitle : t.confirmHideTitle
+          }
+          body={
+            <>
+              <div>{visTarget.makePublic ? t.confirmRestoreBody : t.confirmHideBody}</div>
+              <div className="mt-2 font-mono text-xs text-slate-500">
+                {visTarget.code}
+              </div>
+              {visError && (
+                <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">
+                  {visError}
+                </div>
+              )}
+            </>
+          }
+          confirmLabel={visMutation.isPending ? t.visibilityUpdating : t.confirmYes}
+          danger={!visTarget.makePublic}
+          onConfirm={() =>
+            visMutation.mutate({ id: visTarget.id, makePublic: visTarget.makePublic })
+          }
+          onCancel={() => {
+            setVisTarget(null);
+            setVisError(null);
+          }}
+        />
+      )}
     </>
   );
 }
 
 function PendingGatewaysTab() {
-  const qc = useQueryClient();
   const pendingQ = useQuery({
     queryKey: ["gateways", "admin", "pending"],
     queryFn: () => listPendingGateways(),
@@ -197,33 +273,14 @@ function PendingGatewaysTab() {
 
   const tp = t.pending;
 
-  const approveM = useMutation({
-    mutationFn: (/** @type {string} */ id) => approveGateway(id),
-    onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ["gateways", "admin", "pending"] });
-      qc.invalidateQueries({ queryKey: ["gateways", "admin"] });
-      window.alert(tp.approveSuccess.replace("{n}", String(res.measurements_backfilled)));
-    },
-  });
-
-  const rejectM = useMutation({
-    mutationFn: (/** @type {{ id: string, note: string | null }} */ args) =>
-      rejectGateway(args.id, args.note),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["gateways", "admin", "pending"] });
-    },
-  });
-
-  /** @param {string} id */
-  function handleReject(id) {
-    const note = window.prompt(tp.rejectNotePrompt) ?? null;
-    rejectM.mutate({ id, note: note?.trim() ? note.trim() : null });
-  }
-
   return (
     <>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-900">{tp.title}</h2>
+      </div>
+
+      <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        {tp.banner}
       </div>
 
       {pendingQ.isLoading && (
@@ -232,19 +289,6 @@ function PendingGatewaysTab() {
       {pendingQ.isError && (
         <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
           {tp.listError}
-        </div>
-      )}
-
-      {(approveM.isError && approveM.error instanceof ApiError) && (
-        <div className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-          {approveM.error.problem.title}
-          {approveM.error.problem.detail && <div>{approveM.error.problem.detail}</div>}
-        </div>
-      )}
-      {(rejectM.isError && rejectM.error instanceof ApiError) && (
-        <div className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-          {rejectM.error.problem.title}
-          {rejectM.error.problem.detail && <div>{rejectM.error.problem.detail}</div>}
         </div>
       )}
 
@@ -264,48 +308,21 @@ function PendingGatewaysTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {pendingQ.data.items.map((g, i) => {
-                const busy =
-                  (approveM.isPending && approveM.variables === g.id) ||
-                  (rejectM.isPending && rejectM.variables?.id === g.id);
-                return (
-                  <tr key={g.id}>
-                    <td className="px-3 py-2 text-right font-mono text-xs text-slate-500">{i + 1}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{g.code}</td>
-                    <td className="px-3 py-2">{g.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{g.latitude.toFixed(4)}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{g.longitude.toFixed(4)}</td>
-                    <td className="px-3 py-2">{g.frequency_mhz}</td>
-                    <td className="px-3 py-2 text-xs">{g.source_type}</td>
-                    <td className="px-3 py-2 text-xs">{g.contributor_email ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">
-                      {new Date(g.created_at).toLocaleString("vi-VN")}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => approveM.mutate(g.id)}
-                          disabled={busy}
-                          className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                        >
-                          {approveM.isPending && approveM.variables === g.id
-                            ? tp.approving
-                            : tp.approveButton}
-                        </button>
-                        <button
-                          onClick={() => handleReject(g.id)}
-                          disabled={busy}
-                          className="rounded-md border border-rose-300 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                        >
-                          {rejectM.isPending && rejectM.variables?.id === g.id
-                            ? tp.rejecting
-                            : tp.rejectButton}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+              {pendingQ.data.items.map((g, i) => (
+                <tr key={g.id}>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-slate-500">{i + 1}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{g.code}</td>
+                  <td className="px-3 py-2">{g.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{g.latitude.toFixed(4)}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{g.longitude.toFixed(4)}</td>
+                  <td className="px-3 py-2">{g.frequency_mhz}</td>
+                  <td className="px-3 py-2 text-xs">{g.source_type}</td>
+                  <td className="px-3 py-2 text-xs">{g.contributor_email ?? "—"}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">
+                    {new Date(g.created_at).toLocaleString("vi-VN")}
+                  </td>
+                </tr>
+              ))}
               {pendingQ.data.items.length === 0 && (
                 <tr>
                   <td colSpan={tp.tableHeaders.length} className="px-3 py-6 text-center text-slate-500">
@@ -434,6 +451,11 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
   const [antennaHeightM, setAntennaHeightM] = useState(String(initial.antenna_height_m));
   const [antennaGainDbi, setAntennaGainDbi] = useState(String(initial.antenna_gain_dbi));
   const [txPowerDbm, setTxPowerDbm] = useState(String(initial.tx_power_dbm));
+  // "" = auto (= null phía BE); enum literal = ghim. Dùng string để bind <select>.
+  const initialManualState = initial.manual_state_override ?? "";
+  const [manualState, setManualState] = useState(
+    /** @type {"" | "online" | "offline" | "never_seen"} */ (initialManualState),
+  );
   const [etagAlert, setEtagAlert] = useState(false);
 
   /** @param {import("react").FormEvent} e */
@@ -450,6 +472,10 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
     if (Number(antennaHeightM) !== initial.antenna_height_m) patch.antenna_height_m = Number(antennaHeightM);
     if (Number(antennaGainDbi) !== initial.antenna_gain_dbi) patch.antenna_gain_dbi = Number(antennaGainDbi);
     if (Number(txPowerDbm) !== initial.tx_power_dbm) patch.tx_power_dbm = Number(txPowerDbm);
+    if (manualState !== initialManualState) {
+      // "" → null (clear ghim, BE distinguish exclude_unset → SET = NULL).
+      patch.manual_state_override = manualState === "" ? null : manualState;
+    }
 
     if (Object.keys(patch).length === 0) {
       onCancel();
@@ -471,6 +497,24 @@ function EditGatewayForm({ initial, etag, submitting, error, onCancel, onSubmit 
         <Field label={t.fields.antennaGain} value={antennaGainDbi} onChange={setAntennaGainDbi} type="number" />
         <Field label={t.fields.txPower} value={txPowerDbm} onChange={setTxPowerDbm} type="number" />
         <ReadonlyField label={t.fields.frequency} value={String(initial.frequency_mhz)} />
+        <label className="block sm:col-span-2">
+          <span className="block text-xs font-medium text-slate-700">{t.fields.manualState}</span>
+          <select
+            value={manualState}
+            onChange={(e) =>
+              setManualState(
+                /** @type {"" | "online" | "offline" | "never_seen"} */ (e.target.value),
+              )
+            }
+            className="mt-1 w-full rounded-md border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">{t.manualState.auto}</option>
+            <option value="online">{t.manualState.online}</option>
+            <option value="offline">{t.manualState.offline}</option>
+            <option value="never_seen">{t.manualState.never_seen}</option>
+          </select>
+          <p className="mt-1 text-[11px] text-slate-500">{t.manualState.hint}</p>
+        </label>
       </div>
 
       {etag && (

@@ -95,30 +95,47 @@ export const PendingContributionList = z.object({
   total: z.number().int().nonnegative(),
 });
 
-export const ContributionReview = z.object({
-  id: z.string().uuid(),
-  review_status: z.enum(["approved", "rejected"]),
-});
-
 export const PendingReviewBatch = z.object({
   uploader_id: z.string().uuid(),
   uploader_email: z.string().nullable(),
   uploaded_at: z.string(),
   pending_review_count: z.number().int().nonnegative(),
   total_count: z.number().int().nonnegative(),
-  earliest_timestamp: z.string(),
-  latest_timestamp: z.string(),
+  earliest_timestamp: z.string().nullable(),
+  latest_timestamp: z.string().nullable(),
+  new_gateway_count: z.number().int().nonnegative().default(0),
 });
 
 export const PendingReviewBatchList = z.object({
   items: z.array(PendingReviewBatch),
 });
 
+export const BatchGateway = z.object({
+  id: z.string().uuid(),
+  code: z.string(),
+  name: z.string().nullable(),
+  latitude: z.number(),
+  longitude: z.number(),
+  frequency_mhz: z.number(),
+  source_type: z.string().nullable(),
+  is_new: z.boolean(),
+});
+
+export const BatchRowsResponse = z.object({
+  points: z.array(PendingContribution),
+  gateways: z.array(BatchGateway),
+  total_points: z.number().int().nonnegative(),
+  new_gateway_count: z.number().int().nonnegative(),
+});
+
 export const BatchReviewResponse = z.object({
   uploader_id: z.string().uuid(),
   uploaded_at: z.string(),
   approved_count: z.number().int().nonnegative().default(0),
+  deferred_count: z.number().int().nonnegative().default(0),
   rejected_count: z.number().int().nonnegative().default(0),
+  gateways_approved_count: z.number().int().nonnegative().default(0),
+  gateways_rejected_count: z.number().int().nonnegative().default(0),
 });
 
 export const CoverageRebuildEnqueue = z.object({
@@ -252,17 +269,6 @@ export const PendingGatewayList = z.object({
   total: z.number().int().nonnegative(),
 });
 
-export const GatewayApprove = z.object({
-  quarantine_id: z.string().uuid(),
-  gateway_id: z.string().uuid(),
-  measurements_backfilled: z.number().int().nonnegative(),
-});
-
-export const GatewayReject = z.object({
-  quarantine_id: z.string().uuid(),
-  review_status: z.literal("rejected"),
-});
-
 /**
  * @typedef {z.infer<typeof UserAdmin>} UserAdminT
  * @typedef {z.infer<typeof UserListAdmin>} UserListAdminT
@@ -271,9 +277,10 @@ export const GatewayReject = z.object({
  * @typedef {z.infer<typeof AdminStats>} AdminStatsT
  * @typedef {z.infer<typeof PendingContribution>} PendingContributionT
  * @typedef {z.infer<typeof PendingContributionList>} PendingContributionListT
- * @typedef {z.infer<typeof ContributionReview>} ContributionReviewT
  * @typedef {z.infer<typeof PendingReviewBatch>} PendingReviewBatchT
  * @typedef {z.infer<typeof PendingReviewBatchList>} PendingReviewBatchListT
+ * @typedef {z.infer<typeof BatchGateway>} BatchGatewayT
+ * @typedef {z.infer<typeof BatchRowsResponse>} BatchRowsResponseT
  * @typedef {z.infer<typeof BatchReviewResponse>} BatchReviewResponseT
  * @typedef {z.infer<typeof CoverageRebuildEnqueue>} CoverageRebuildEnqueueT
  * @typedef {z.infer<typeof CoverageRebuildJob>} CoverageRebuildJobT
@@ -289,8 +296,6 @@ export const GatewayReject = z.object({
  * @typedef {z.infer<typeof TopGatewayResponseSchema>} TopGatewayResponseT
  * @typedef {z.infer<typeof PendingGateway>} PendingGatewayT
  * @typedef {z.infer<typeof PendingGatewayList>} PendingGatewayListT
- * @typedef {z.infer<typeof GatewayApprove>} GatewayApproveT
- * @typedef {z.infer<typeof GatewayReject>} GatewayRejectT
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -408,39 +413,6 @@ export async function listPendingContributions(opts = {}) {
 }
 
 /**
- * POST /api/v1/admin/contributions/{id}/approve — đẩy vào survey_training.
- * @param {string} id
- * @returns {Promise<ContributionReviewT>}
- */
-export async function approveContribution(id) {
-  const res = await authFetch(
-    `${API_BASE_URL}/api/v1/admin/contributions/${id}/approve`,
-    { method: "POST" },
-  );
-  if (!res.ok) await _throwProblem(res);
-  return ContributionReview.parse(await res.json());
-}
-
-/**
- * POST /api/v1/admin/contributions/{id}/reject — đóng góp giữ trong quarantine.
- * @param {string} id
- * @param {string|null} [note]
- * @returns {Promise<ContributionReviewT>}
- */
-export async function rejectContribution(id, note = null) {
-  const res = await authFetch(
-    `${API_BASE_URL}/api/v1/admin/contributions/${id}/reject`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ note }),
-    },
-  );
-  if (!res.ok) await _throwProblem(res);
-  return ContributionReview.parse(await res.json());
-}
-
-/**
  * GET /api/v1/admin/contributions/batches — list batch (1 file CSV upload =
  * 1 batch) còn rows ở review_status='pending_review'.
  * @returns {Promise<PendingReviewBatchListT>}
@@ -454,12 +426,12 @@ export async function listPendingBatches() {
 }
 
 /**
- * GET /api/v1/admin/contributions/batches/rows — list rows trong 1 batch
- * (drill-in: admin xem chi tiết từng điểm để có thể reject lẻ trước khi
- * approve cả batch).
+ * GET /api/v1/admin/contributions/batches/rows — list rows + gateway của 1
+ * batch (drill-in: admin xem map preview cả điểm đo lẫn gateway, gateway
+ * mới gắn batch này show `is_new=true`).
  * @param {string} uploaderId UUID
  * @param {string} uploadedAt ISO timestamp (giá trị `uploaded_at` từ batch)
- * @returns {Promise<PendingContributionListT>}
+ * @returns {Promise<BatchRowsResponseT>}
  */
 export async function listBatchRows(uploaderId, uploadedAt) {
   const params = new URLSearchParams({
@@ -470,18 +442,25 @@ export async function listBatchRows(uploaderId, uploadedAt) {
     `${API_BASE_URL}/api/v1/admin/contributions/batches/rows?${params.toString()}`,
   );
   if (!res.ok) await _throwProblem(res);
-  return PendingContributionList.parse(await res.json());
+  return BatchRowsResponse.parse(await res.json());
 }
 
 /**
- * POST /api/v1/admin/contributions/batches/approve — duyệt toàn bộ rows
- * còn `review_status='pending_review'` trong batch. Email cảm ơn gửi 1 lần
- * (summary).
+ * POST /api/v1/admin/contributions/batches/approve — duyệt batch với 1
+ * trong 3 mode:
+ *   - "all": duyệt cả điểm đo + gateway pending (auto-promote rows
+ *     pending_gateway của các EUI vừa duyệt).
+ *   - "points_only": điểm trỏ gateway cũ → training; điểm trỏ gateway
+ *     mới → status pending_gateway (defer); gateway quarantine giữ nguyên.
+ *   - "gateways_only": gateway pending → geo.gateways; toàn bộ điểm
+ *     pending của batch → rejected.
+ * Email cảm ơn gửi 1 lần (summary).
  * @param {string} uploaderId UUID
  * @param {string} uploadedAt ISO timestamp
+ * @param {"all"|"points_only"|"gateways_only"} [mode]
  * @returns {Promise<BatchReviewResponseT>}
  */
-export async function approveBatch(uploaderId, uploadedAt) {
+export async function approveBatch(uploaderId, uploadedAt, mode = "all") {
   const res = await authFetch(
     `${API_BASE_URL}/api/v1/admin/contributions/batches/approve`,
     {
@@ -490,6 +469,7 @@ export async function approveBatch(uploaderId, uploadedAt) {
       body: JSON.stringify({
         uploader_id: uploaderId,
         uploaded_at: uploadedAt,
+        mode,
       }),
     },
   );
@@ -705,37 +685,3 @@ export async function listPendingGateways() {
   return PendingGatewayList.parse(await res.json());
 }
 
-/**
- * POST /api/v1/admin/gateway-contributions/{quarantine_id}/approve —
- * promote quarantine row → geo.gateways, backfill measurement FK.
- * @param {string} quarantineId UUID
- * @returns {Promise<GatewayApproveT>}
- */
-export async function approveGateway(quarantineId) {
-  const res = await authFetch(
-    `${API_BASE_URL}/api/v1/admin/gateway-contributions/${quarantineId}/approve`,
-    { method: "POST" },
-  );
-  if (!res.ok) await _throwProblem(res);
-  return GatewayApprove.parse(await res.json());
-}
-
-/**
- * POST /api/v1/admin/gateway-contributions/{quarantine_id}/reject —
- * giữ row trong quarantine với review_status='rejected'.
- * @param {string} quarantineId UUID
- * @param {string|null} [note]
- * @returns {Promise<GatewayRejectT>}
- */
-export async function rejectGateway(quarantineId, note = null) {
-  const res = await authFetch(
-    `${API_BASE_URL}/api/v1/admin/gateway-contributions/${quarantineId}/reject`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ note }),
-    },
-  );
-  if (!res.ok) await _throwProblem(res);
-  return GatewayReject.parse(await res.json());
-}

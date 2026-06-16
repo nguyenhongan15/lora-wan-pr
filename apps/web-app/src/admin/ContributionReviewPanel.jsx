@@ -1,14 +1,24 @@
 // @ts-check
-// Admin manual review queue — gom theo file CSV (batch = 1 lần user upload).
-// Default view: danh sách batch. Mỗi batch = 1 dòng (uploader + uploaded_at)
-// với nút Duyệt-cả-file / Từ chối-cả-file / Xem-bản-đồ.
+// Admin manual review queue — gom theo batch (1 file CSV/JSON, hoặc 1 lượt
+// sync lpwanmapper/chirpstack). Mỗi batch có thể đi kèm GATEWAY MỚI nếu sync
+// tạo gateway lạ (gateway_quarantine.batch_id trỏ về batch này).
 //
-// Drill-in: nhấn "Xem bản đồ" mở modal hiển thị toàn bộ điểm trên 1 map
-// (maplibre GeoJSON layer, scalable cho batch lớn 1000+ điểm). Click marker
-// → popup chi tiết 1 điểm. KHÔNG còn per-row approve/reject — admin chỉ
-// thao tác cấp batch (đúng pattern khi file lớn).
+// Default view: list batch. Mỗi batch hiển thị "${pending}/${total} điểm +
+// ${newGw} gateway mới". Click "Xem chi tiết" → BatchMapModal: maplibre map
+// vẽ cả điểm đo (color theo RSSI) lẫn gateway (cam pulse = mới, xám = cũ).
+// Filter toggle góc trên-phải cho phép ẩn/hiện từng layer.
 //
-// Approve cả batch → backend gửi 1 email summary đến uploader.
+// 4 nút phê duyệt (cấp batch, không có per-row action):
+//   • Từ chối — reject toàn bộ điểm đo + gateway pending của batch.
+//   • Duyệt cả file — duyệt cả điểm đo + gateway.
+//   • Duyệt điểm đo (không duyệt gateway) — điểm trỏ gateway cũ promote ngay;
+//     điểm trỏ gateway mới defer (status pending_gateway, auto-promote khi
+//     gateway được duyệt sau).
+//   • Duyệt gateway (không duyệt điểm đo) — gateway lên geo.gateways; điểm
+//     đo của batch reject hết.
+//
+// Khi batch không có gateway mới (new_gateway_count=0), 2 nút mode chia đôi
+// disable (degenerate — chính là "Duyệt cả file").
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +37,8 @@ const t = strings.admin.review;
 const tErr = strings.admin.errors;
 const tb = t.batch;
 
+/** @typedef {"all" | "points_only" | "gateways_only"} ApproveMode */
+
 /**
  * @param {string} iso
  */
@@ -37,9 +49,10 @@ function _formatTime(iso) {
 }
 
 /**
- * @param {string} earliest @param {string} latest
+ * @param {string|null} earliest @param {string|null} latest
  */
 function _formatRange(earliest, latest) {
+  if (!earliest || !latest) return "—";
   return `${_formatTime(earliest)} → ${_formatTime(latest)}`;
 }
 
@@ -56,10 +69,24 @@ export function ContributionReviewPanel() {
     ),
   );
 
+  /**
+   * @typedef {{
+   *   kind: "approve",
+   *   mode: ApproveMode,
+   *   uploader_id: string,
+   *   uploaded_at: string,
+   *   points: number,
+   *   newGw: number,
+   * } | {
+   *   kind: "reject",
+   *   uploader_id: string,
+   *   uploaded_at: string,
+   *   points: number,
+   *   newGw: number,
+   * }} BatchConfirmState
+   */
   const [confirmBatch, setConfirmBatch] = useState(
-    /** @type {{ kind: "approve" | "reject", uploader_id: string, uploaded_at: string, pending: number } | null} */ (
-      null
-    ),
+    /** @type {BatchConfirmState | null} */ (null),
   );
   const [rejectBatchNote, setRejectBatchNote] = useState("");
 
@@ -67,12 +94,13 @@ export function ContributionReviewPanel() {
     qc.invalidateQueries({ queryKey: ["admin", "pending", "batches"] });
     qc.invalidateQueries({ queryKey: ["admin", "pending", "batch"] });
     qc.invalidateQueries({ queryKey: ["admin", "stats"] });
+    qc.invalidateQueries({ queryKey: ["gateways"] });
   };
 
   const approveBatchM = useMutation({
     mutationFn: (
-      /** @type {{ uploader_id: string, uploaded_at: string }} */ vars,
-    ) => approveBatch(vars.uploader_id, vars.uploaded_at),
+      /** @type {{ uploader_id: string, uploaded_at: string, mode: ApproveMode }} */ vars,
+    ) => approveBatch(vars.uploader_id, vars.uploaded_at, vars.mode),
     onSuccess: () => {
       invalidateAll();
       setConfirmBatch(null);
@@ -148,7 +176,11 @@ export function ContributionReviewPanel() {
                     {_formatTime(b.uploaded_at)}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-slate-700">
-                    {tb.countLabel(b.pending_review_count, b.total_count)}
+                    {tb.countLabel(
+                      b.pending_review_count,
+                      b.total_count,
+                      b.new_gateway_count,
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-600">
                     {_formatRange(b.earliest_timestamp, b.latest_timestamp)}
@@ -157,6 +189,7 @@ export function ContributionReviewPanel() {
                     <div className="flex justify-end gap-1">
                       <button
                         type="button"
+                        disabled={busy}
                         onClick={() =>
                           setDrillIn({
                             uploader_id: b.uploader_id,
@@ -164,40 +197,9 @@ export function ContributionReviewPanel() {
                             uploader_email: b.uploader_email,
                           })
                         }
-                        className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                        className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
                       >
                         {tb.btnViewRows}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          setConfirmBatch({
-                            kind: "approve",
-                            uploader_id: b.uploader_id,
-                            uploaded_at: b.uploaded_at,
-                            pending: b.pending_review_count,
-                          })
-                        }
-                        className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                      >
-                        {tb.btnApproveBatch}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setRejectBatchNote("");
-                          setConfirmBatch({
-                            kind: "reject",
-                            uploader_id: b.uploader_id,
-                            uploaded_at: b.uploaded_at,
-                            pending: b.pending_review_count,
-                          });
-                        }}
-                        className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                      >
-                        {tb.btnRejectBatch}
                       </button>
                     </div>
                   </td>
@@ -221,21 +223,24 @@ export function ContributionReviewPanel() {
           uploadedAt={drillIn.uploaded_at}
           uploaderEmail={drillIn.uploader_email}
           onClose={() => setDrillIn(null)}
-          onApprove={(pending) =>
+          onApprove={(mode, points, newGw) =>
             setConfirmBatch({
               kind: "approve",
+              mode,
               uploader_id: drillIn.uploader_id,
               uploaded_at: drillIn.uploaded_at,
-              pending,
+              points,
+              newGw,
             })
           }
-          onReject={(pending) => {
+          onReject={(points, newGw) => {
             setRejectBatchNote("");
             setConfirmBatch({
               kind: "reject",
               uploader_id: drillIn.uploader_id,
               uploaded_at: drillIn.uploaded_at,
-              pending,
+              points,
+              newGw,
             });
           }}
         />
@@ -244,14 +249,19 @@ export function ContributionReviewPanel() {
       {confirmBatch && confirmBatch.kind === "approve" && (
         <ConfirmModal
           title={t.confirm.title}
-          message={tb.confirm.approve(confirmBatch.pending)}
-          confirmLabel={tb.btnApproveBatch}
+          message={_approveMessage(
+            confirmBatch.mode,
+            confirmBatch.points,
+            confirmBatch.newGw,
+          )}
+          confirmLabel={_approveLabel(confirmBatch.mode)}
           confirmClass="bg-emerald-600 hover:bg-emerald-700"
           onCancel={() => setConfirmBatch(null)}
           onConfirm={() =>
             approveBatchM.mutate({
               uploader_id: confirmBatch.uploader_id,
               uploaded_at: confirmBatch.uploaded_at,
+              mode: confirmBatch.mode,
             })
           }
           pending={approveBatchM.isPending}
@@ -261,7 +271,7 @@ export function ContributionReviewPanel() {
       {confirmBatch && confirmBatch.kind === "reject" && (
         <RejectModal
           title={t.confirm.title}
-          message={tb.confirm.reject(confirmBatch.pending)}
+          message={tb.confirm.reject(confirmBatch.points, confirmBatch.newGw)}
           note={rejectBatchNote}
           onNoteChange={setRejectBatchNote}
           onCancel={() => {
@@ -283,17 +293,33 @@ export function ContributionReviewPanel() {
 }
 
 /**
- * Drill-in modal: hiển thị toàn batch trên 1 map (maplibre GeoJSON circle
- * layer) — scale tốt cho batch ngàn điểm. Click marker → popup chi tiết.
- * Approve/Reject ở footer kích hoạt ConfirmModal/RejectModal của parent.
+ * @param {ApproveMode} mode @param {number} points @param {number} newGw
+ */
+function _approveMessage(mode, points, newGw) {
+  if (mode === "points_only") return tb.confirm.approvePointsOnly(points, newGw);
+  if (mode === "gateways_only") return tb.confirm.approveGatewaysOnly(points, newGw);
+  return tb.confirm.approveAll(points, newGw);
+}
+
+/** @param {ApproveMode} mode */
+function _approveLabel(mode) {
+  if (mode === "points_only") return tb.btnApprovePointsOnly;
+  if (mode === "gateways_only") return tb.btnApproveGatewaysOnly;
+  return tb.btnApproveBatch;
+}
+
+/**
+ * Drill-in modal: vẽ batch (điểm đo + gateway) trên 1 maplibre map. Footer
+ * có 4 nút mode (Từ chối / Duyệt cả file / Duyệt điểm đo / Duyệt gateway).
+ * Filter toggle góc trên-phải ẩn/hiện từng layer.
  *
  * @param {{
  *   uploaderId: string,
  *   uploadedAt: string,
  *   uploaderEmail: string | null,
  *   onClose: () => void,
- *   onApprove: (pending: number) => void,
- *   onReject: (pending: number) => void,
+ *   onApprove: (mode: ApproveMode, points: number, newGw: number) => void,
+ *   onReject: (points: number, newGw: number) => void,
  * }} props
  */
 function BatchMapModal({
@@ -312,17 +338,23 @@ function BatchMapModal({
   const mapDiv = useRef(/** @type {HTMLDivElement | null} */ (null));
   const mapRef = useRef(/** @type {maplibregl.Map | null} */ (null));
   const popupRef = useRef(/** @type {maplibregl.Popup | null} */ (null));
-  const [selected, setSelected] = useState(
+  const [selectedPoint, setSelectedPoint] = useState(
     /** @type {import("./client.js").PendingContributionT | null} */ (null),
   );
+  const [selectedGateway, setSelectedGateway] = useState(
+    /** @type {import("./client.js").BatchGatewayT | null} */ (null),
+  );
+  const [showPoints, setShowPoints] = useState(true);
+  const [showGateways, setShowGateways] = useState(true);
+  const [showFilter, setShowFilter] = useState(false);
 
-  // useMemo: q.data?.items ?? [] tạo array mới mỗi render → useEffect deps
-  // luôn trigger lại, recreate map source/listeners không cần thiết.
-  const items = useMemo(() => q.data?.items ?? [], [q.data]);
+  const points = useMemo(() => q.data?.points ?? [], [q.data]);
+  const gateways = useMemo(() => q.data?.gateways ?? [], [q.data]);
+  const newGwCount = q.data?.new_gateway_count ?? 0;
+  const hasContent = points.length > 0 || gateways.length > 0;
 
-  // Init map CHỈ khi container đã visible và có data → tránh tạo map khi
-  // div còn display:none (size 0×0) làm canvas mãi mãi sai.
-  const mapReady = q.isSuccess && items.length > 0;
+  // Init map khi có content (tránh tạo map khi div đang display:none).
+  const mapReady = q.isSuccess && hasContent;
   useEffect(() => {
     const el = mapDiv.current;
     if (!el || mapRef.current || !mapReady) return;
@@ -350,8 +382,6 @@ function BatchMapModal({
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
 
-    // ResizeObserver: nếu modal/layout đổi kích thước (ví dụ legend +
-    // footer nhảy vào sau khi data về), gọi map.resize() để canvas khớp.
     const ro = new ResizeObserver(() => {
       mapRef.current?.resize();
     });
@@ -365,30 +395,30 @@ function BatchMapModal({
     };
   }, [mapReady]);
 
-  // Khi data tới, push lên map (chờ map.loaded để addSource an toàn).
+  // Render layers khi data về.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || items.length === 0) return;
+    if (!map || !hasContent) return;
 
     const apply = () => {
-      // rssi expression: lookup theo properties.id thì phức tạp; thay vào
-      // đó nhét rssi vào properties để paint-step dùng trực tiếp.
-      const featuresWithRssi = items.map((it) => ({
-        type: /** @type {"Feature"} */ ("Feature"),
-        geometry: {
-          type: /** @type {"Point"} */ ("Point"),
-          coordinates: [it.longitude, it.latitude],
-        },
-        properties: { id: it.id, rssi_dbm: it.rssi_dbm },
-      }));
-      /** @type {GeoJSON.FeatureCollection} */
-      const fcWithRssi = { type: "FeatureCollection", features: featuresWithRssi };
+      // Points layer
+      const pointFc = {
+        type: /** @type {"FeatureCollection"} */ ("FeatureCollection"),
+        features: points.map((it) => ({
+          type: /** @type {"Feature"} */ ("Feature"),
+          geometry: {
+            type: /** @type {"Point"} */ ("Point"),
+            coordinates: [it.longitude, it.latitude],
+          },
+          properties: { id: it.id, rssi_dbm: it.rssi_dbm },
+        })),
+      };
 
-      const existing = map.getSource("batch_points");
-      if (existing && "setData" in existing) {
-        /** @type {maplibregl.GeoJSONSource} */ (existing).setData(fcWithRssi);
+      const pointsSrc = map.getSource("batch_points");
+      if (pointsSrc && "setData" in pointsSrc) {
+        /** @type {maplibregl.GeoJSONSource} */ (pointsSrc).setData(pointFc);
       } else {
-        map.addSource("batch_points", { type: "geojson", data: fcWithRssi });
+        map.addSource("batch_points", { type: "geojson", data: pointFc });
         map.addLayer({
           id: "batch_points_layer",
           type: "circle",
@@ -404,8 +434,9 @@ function BatchMapModal({
           const f = e.features?.[0];
           if (!f) return;
           const fid = /** @type {string} */ (f.properties?.id);
-          const item = items.find((it) => it.id === fid) ?? null;
-          setSelected(item);
+          const item = points.find((it) => it.id === fid) ?? null;
+          setSelectedPoint(item);
+          setSelectedGateway(null);
         });
         map.on("mouseenter", "batch_points_layer", () => {
           map.getCanvas().style.cursor = "pointer";
@@ -415,38 +446,137 @@ function BatchMapModal({
         });
       }
 
-      // Resize trước khi fit-bounds để bounds tính theo canvas hiện tại.
+      // Gateway layer (1 source, 2 layer: existing xám + new cam viền pulse-look).
+      const gwFc = {
+        type: /** @type {"FeatureCollection"} */ ("FeatureCollection"),
+        features: gateways.map((g) => ({
+          type: /** @type {"Feature"} */ ("Feature"),
+          geometry: {
+            type: /** @type {"Point"} */ ("Point"),
+            coordinates: [g.longitude, g.latitude],
+          },
+          properties: {
+            id: g.id,
+            code: g.code,
+            name: g.name ?? "",
+            is_new: g.is_new,
+          },
+        })),
+      };
+      const gwSrc = map.getSource("batch_gateways");
+      if (gwSrc && "setData" in gwSrc) {
+        /** @type {maplibregl.GeoJSONSource} */ (gwSrc).setData(gwFc);
+      } else {
+        map.addSource("batch_gateways", { type: "geojson", data: gwFc });
+        // Outer halo cho gateway mới (đứng giả pulse — static, không animate
+        // vì maplibre không có CSS animation cho layer; user vẫn nhận diện
+        // được nhờ size+color khác hẳn).
+        map.addLayer({
+          id: "batch_gateways_halo",
+          type: "circle",
+          source: "batch_gateways",
+          filter: ["==", ["get", "is_new"], true],
+          paint: /** @type {any} */ ({
+            "circle-radius": 16,
+            "circle-color": "#FF6B00",
+            "circle-opacity": 0.25,
+          }),
+        });
+        map.addLayer({
+          id: "batch_gateways_layer",
+          type: "circle",
+          source: "batch_gateways",
+          paint: /** @type {any} */ ({
+            "circle-radius": 9,
+            "circle-color": [
+              "case",
+              ["==", ["get", "is_new"], true],
+              "#FF6B00",
+              "#64748b",
+            ],
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#ffffff",
+          }),
+        });
+        map.on("click", "batch_gateways_layer", (e) => {
+          const f = e.features?.[0];
+          if (!f) return;
+          const fid = /** @type {string} */ (f.properties?.id);
+          const g = gateways.find((it) => it.id === fid) ?? null;
+          setSelectedGateway(g);
+          setSelectedPoint(null);
+        });
+        map.on("mouseenter", "batch_gateways_layer", () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", "batch_gateways_layer", () => {
+          map.getCanvas().style.cursor = "";
+        });
+      }
+
       map.resize();
 
-      // Fit bounds to all points (+ small padding). maplibre LngLatBounds.
+      // Fit bounds tới mọi điểm + gateway.
       const bounds = new maplibregl.LngLatBounds();
-      for (const it of items) bounds.extend([it.longitude, it.latitude]);
-      if (items.length === 1) {
-        map.flyTo({ center: [items[0].longitude, items[0].latitude], zoom: 14 });
-      } else {
+      for (const it of points) bounds.extend([it.longitude, it.latitude]);
+      for (const g of gateways) bounds.extend([g.longitude, g.latitude]);
+      const totalFeatures = points.length + gateways.length;
+      if (totalFeatures === 1) {
+        const first = points[0] ?? gateways[0];
+        map.flyTo({ center: [first.longitude, first.latitude], zoom: 14 });
+      } else if (totalFeatures > 1) {
         map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 600 });
       }
     };
 
     if (map.loaded()) apply();
     else map.once("load", apply);
-  }, [items]);
+  }, [points, gateways, hasContent]);
 
-  // Khi user click 1 marker, mở popup tại toạ độ điểm đó.
+  // Toggle visibility từng layer khi user click filter.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const setVis = (/** @type {string} */ id, /** @type {boolean} */ show) => {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, "visibility", show ? "visible" : "none");
+      }
+    };
+    setVis("batch_points_layer", showPoints);
+    setVis("batch_gateways_layer", showGateways);
+    setVis("batch_gateways_halo", showGateways);
+  }, [showPoints, showGateways, points, gateways]);
+
+  // Popup cho điểm đo.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     popupRef.current?.remove();
-    if (!selected) return;
+    if (!selectedPoint) return;
     const popup = new maplibregl.Popup({ closeOnClick: false, offset: 12 })
-      .setLngLat([selected.longitude, selected.latitude])
-      .setHTML(_pointPopupHtml(selected))
+      .setLngLat([selectedPoint.longitude, selectedPoint.latitude])
+      .setHTML(_pointPopupHtml(selectedPoint))
       .addTo(map);
-    popup.on("close", () => setSelected(null));
+    popup.on("close", () => setSelectedPoint(null));
     popupRef.current = popup;
-  }, [selected]);
+  }, [selectedPoint]);
 
-  const pending = items.length;
+  // Popup cho gateway.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    popupRef.current?.remove();
+    if (!selectedGateway) return;
+    const popup = new maplibregl.Popup({ closeOnClick: false, offset: 12 })
+      .setLngLat([selectedGateway.longitude, selectedGateway.latitude])
+      .setHTML(_gatewayPopupHtml(selectedGateway))
+      .addTo(map);
+    popup.on("close", () => setSelectedGateway(null));
+    popupRef.current = popup;
+  }, [selectedGateway]);
+
+  const totalPoints = points.length;
+  const canSplit = newGwCount > 0;
 
   return (
     <div
@@ -467,7 +597,7 @@ function BatchMapModal({
               {tb.btnBack}
             </button>
             <h3 className="mt-1 text-base font-semibold text-slate-900">
-              {tb.mapHeading(pending)}
+              {tb.mapHeading(totalPoints, newGwCount)}
             </h3>
             <p className="mt-1 text-xs text-slate-500">
               {uploaderEmail ?? "—"} · {_formatTime(uploadedAt)}
@@ -490,37 +620,64 @@ function BatchMapModal({
         )}
         {q.isError && <ReviewError error={q.error} fallback={t.errorLoad} />}
 
-        {q.isSuccess && items.length === 0 && (
+        {q.isSuccess && !hasContent && (
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-500">
             {tb.mapNoPoints}
           </div>
         )}
 
         <div
-          ref={mapDiv}
           className={
-            "flex-1 overflow-hidden rounded-md border border-slate-200 " +
-            (q.isSuccess && items.length > 0 ? "block" : "hidden")
+            "relative flex-1 overflow-hidden rounded-md border border-slate-200 " +
+            (q.isSuccess && hasContent ? "block" : "hidden")
           }
-        />
+        >
+          <div ref={mapDiv} className="h-full w-full" />
+          <FilterToggle
+            open={showFilter}
+            onToggle={() => setShowFilter((v) => !v)}
+            showPoints={showPoints}
+            showGateways={showGateways}
+            onChangePoints={setShowPoints}
+            onChangeGateways={setShowGateways}
+          />
+        </div>
 
-        {q.isSuccess && items.length > 0 && (
+        {q.isSuccess && hasContent && (
           <>
-            <MapLegend />
+            <MapLegend showGatewayLegend={gateways.length > 0} />
             <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => onReject(pending)}
+                onClick={() => onReject(totalPoints, newGwCount)}
                 className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
               >
                 {tb.btnRejectBatch}
               </button>
               <button
                 type="button"
-                onClick={() => onApprove(pending)}
+                onClick={() => onApprove("all", totalPoints, newGwCount)}
                 className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
               >
                 {tb.btnApproveBatch}
+              </button>
+              <button
+                type="button"
+                disabled={!canSplit}
+                onClick={() => onApprove("points_only", totalPoints, newGwCount)}
+                title={canSplit ? undefined : tb.btnApproveBatch}
+                className="rounded border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {tb.btnApprovePointsOnly}
+              </button>
+              <button
+                type="button"
+                disabled={!canSplit}
+                onClick={() => onApprove("gateways_only", totalPoints, newGwCount)}
+                title={canSplit ? undefined : tb.btnApproveBatch}
+                className="rounded border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {tb.btnApproveGatewaysOnly}
               </button>
             </div>
           </>
@@ -530,25 +687,94 @@ function BatchMapModal({
   );
 }
 
-function MapLegend() {
-  // Dùng chung palette SURVEY_RSSI_BINS với "Bản đồ điểm đo" — reverse để
-  // hiển thị strong → weak (top/left → bottom/right).
+/**
+ * @param {{
+ *   open: boolean,
+ *   onToggle: () => void,
+ *   showPoints: boolean,
+ *   showGateways: boolean,
+ *   onChangePoints: (v: boolean) => void,
+ *   onChangeGateways: (v: boolean) => void,
+ * }} props
+ */
+function FilterToggle({
+  open,
+  onToggle,
+  showPoints,
+  showGateways,
+  onChangePoints,
+  onChangeGateways,
+}) {
+  const tf = tb.filterToggle;
+  return (
+    <div className="absolute right-2 top-2 z-10">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={tf.title}
+        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow hover:bg-slate-50"
+      >
+        {/* funnel icon SVG inline */}
+        <svg
+          className="inline h-3.5 w-3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          viewBox="0 0 24 24"
+        >
+          <path d="M3 4h18l-7 9v6l-4 2v-8L3 4z" />
+        </svg>
+      </button>
+      {open && (
+        <div className="mt-1 w-44 rounded-md border border-slate-200 bg-white p-2 text-xs shadow-lg">
+          <div className="mb-1 font-semibold text-slate-700">{tf.title}</div>
+          <label className="flex items-center gap-2 py-0.5 text-slate-700">
+            <input
+              type="checkbox"
+              checked={showPoints}
+              onChange={(e) => onChangePoints(e.target.checked)}
+            />
+            <span>{tf.showPoints}</span>
+          </label>
+          <label className="flex items-center gap-2 py-0.5 text-slate-700">
+            <input
+              type="checkbox"
+              checked={showGateways}
+              onChange={(e) => onChangeGateways(e.target.checked)}
+            />
+            <span>{tf.showGateways}</span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** @param {{ showGatewayLegend: boolean }} props */
+function MapLegend({ showGatewayLegend }) {
   const rows = [...SURVEY_RSSI_BINS].reverse();
   return (
     <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
       {rows.map((bin) => (
         <LegendDot key={bin.label} color={bin.color} label={bin.label} />
       ))}
+      {showGatewayLegend && (
+        <>
+          <span className="mx-1 text-slate-300">|</span>
+          <LegendDot color="#FF6B00" label={tb.gatewayLegend.newLabel} ring />
+          <LegendDot color="#64748b" label={tb.gatewayLegend.existingLabel} ring />
+        </>
+      )}
     </div>
   );
 }
 
-/** @param {{ color: string, label: string }} props */
-function LegendDot({ color, label }) {
+/** @param {{ color: string, label: string, ring?: boolean }} props */
+function LegendDot({ color, label, ring }) {
   return (
     <span className="inline-flex items-center gap-1">
       <span
-        className="inline-block h-3 w-3 rounded-full ring-1 ring-white"
+        className={"inline-block h-3 w-3 rounded-full " + (ring ? "ring-2 ring-white" : "ring-1 ring-white")}
         style={{ backgroundColor: color, boxShadow: "0 0 0 1px rgba(0,0,0,0.3)" }}
       />
       <span>{label}</span>
@@ -557,7 +783,6 @@ function LegendDot({ color, label }) {
 }
 
 /**
- * HTML popup khi click 1 marker — info-only, không có action button.
  * @param {import("./client.js").PendingContributionT} it
  */
 function _pointPopupHtml(it) {
@@ -576,6 +801,35 @@ function _pointPopupHtml(it) {
   ];
   return (
     `<div style="font-size:12px;line-height:1.5;min-width:200px">` +
+    rows
+      .map(
+        ([k, v]) =>
+          `<div><span style="color:#64748b">${esc(k)}:</span> <strong>${esc(String(v))}</strong></div>`,
+      )
+      .join("") +
+    `</div>`
+  );
+}
+
+/** @param {import("./client.js").BatchGatewayT} g */
+function _gatewayPopupHtml(g) {
+  const esc = (/** @type {string} */ s) =>
+    s.replace(/[&<>"]/g, (c) =>
+      c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;",
+    );
+  const rows = [
+    ["Code", g.code],
+    ["Tên", g.name ?? "—"],
+    ["Toạ độ", `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)}`],
+    ["Tần số", `${g.frequency_mhz} MHz`],
+    ["Nguồn", g.source_type ?? "—"],
+    [
+      "Trạng thái",
+      g.is_new ? tb.gatewayLegend.newLabel : tb.gatewayLegend.existingLabel,
+    ],
+  ];
+  return (
+    `<div style="font-size:12px;line-height:1.5;min-width:220px">` +
     rows
       .map(
         ([k, v]) =>

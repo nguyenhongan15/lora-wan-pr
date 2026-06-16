@@ -117,7 +117,7 @@ export const strings = {
         {
           num: "F · 04",
           title: "Theo dõi trực tiếp chuyến đi khảo sát",
-          desc: "Liên kết với ChirpStack webhook để tự động cập nhật điểm đo mới nhất lên bản đồ khi đang khảo sát thực địa. Theo dõi tiến trình khảo sát theo thời gian thực.",
+          desc: "Đăng nhập và xem trực tiếp điểm đo mới nhất lên bản đồ khi đang khảo sát thực địa.",
           cta: "Xem ngay",
           target: "map",
           mockUrl: "lora-estimate-map/#page=map",
@@ -130,15 +130,6 @@ export const strings = {
           target: "sources",
           subTab: "overview",
           mockUrl: "lora-estimate-map/#page=sources&tab=overview",
-        },
-        {
-          num: "F · 06",
-          title: "Đóng góp dữ liệu cho bản đồ chung",
-          desc: "Chia sẻ dữ liệu khảo sát của cá nhân vào bản đồ công khai, yêu cầu xác thực email. Càng nhiều dữ liệu, mô hình hiệu chỉnh phủ sóng ước lượng càng chính xác.",
-          cta: "Đóng góp dữ liệu",
-          target: "sources",
-          subTab: "manage",
-          mockUrl: "lora-estimate-map/#page=sources&tab=manage",
         },
       ],
     },
@@ -344,6 +335,7 @@ export const strings = {
     apiError:
       "Không tải được dữ liệu API. Kiểm tra api-service đang chạy chưa (http://localhost:8000/healthz).",
     tileErrorTitle: "Tile không load được",
+    realtimeErrorTitle: "Lỗi xem trực tiếp",
     environmentPicker: {
       label: "Môi trường",
       
@@ -420,7 +412,10 @@ export const strings = {
       connectionLines: {
         sectionLabel: "Kết nối điểm đo - gateway",
         toggleLabel: "Hiện kết nối điểm đo-gateway",
-        
+
+      },
+      showAllGateways: {
+        toggleLabel: "Hiện toàn bộ gateway",
       },
       realtime: {
         sectionLabel: "Theo dõi trực tiếp",
@@ -433,11 +428,10 @@ export const strings = {
           "Bạn cần đăng nhập để bật theo dõi trực tiếp. Bấm để đăng nhập.",
         loginRequiredCta: "Đăng nhập để tiếp tục",
         toggleLabel: "Bật theo dõi trực tiếp",
-        toggleHint:
-          "Tự cập nhật điểm đo từ thiết bị trên bản đồ. Để tải dữ liệu lưu vào hệ thống, dùng nút \"Tải dữ liệu mới nhất\" trong tab Nguồn.",
         autoFollowLabel: "Tự theo dõi vị trí",
-        autoFollowHint: "Tự dịch bản đồ tới điểm đo mới nhất.",
         liveBadge: "● TRỰC TIẾP",
+        deviceLabel: "Thiết bị",
+        deviceWaiting: "đang chờ…",
         lastSeenLabel: "Mới nhất",
         lastSeenNever: "chưa có",
         /** @param {number} s */
@@ -447,12 +441,27 @@ export const strings = {
         /** @param {number} n */
         sessionCounter: (n) => `Đã ghi nhận ${n} điểm`,
         viewButton: "Xem",
-        stopButton: "Dừng",
+        viewButtonDisabledHint: "Chọn nguồn trước khi bắt đầu xem.",
+        changeSourceButton: "Đổi nguồn",
+        stopButton: "Dừng xem",
+        onlyNewLabel: "Chỉ hiện điểm đang live",
+        connectionLinesLabel: "Hiện kết nối điểm-gateway",
+        intervalLabel: "Chu kỳ cập nhật",
+        intervalUnit: "s",
         sourcePickerLabel: "Nguồn",
         sourcePickerPlaceholder: "— Chưa chọn nguồn —",
         sourcePickerNoActive:
           "Chưa có nguồn nào ở trạng thái Đang dùng. Vào trang Nguồn dữ liệu để thêm/bật.",
         sourcePickerErrorLoad: "Không tải được danh sách nguồn.",
+        noPacketTitle: "Không có thiết bị nào đang phát gói tin",
+      },
+      latestCount: {
+        legend: "Số điểm gần nhất",
+        placeholder: "vd: 100",
+        orders: {
+          desc: "Mới nhất",
+          asc: "Cũ nhất",
+        },
       },
       timeRange: {
         legend: "Khoảng thời gian",
@@ -616,6 +625,18 @@ export const strings = {
       lastSeenNever: "Chưa từng",
     },
     editButton: "Sửa",
+    hideFromCommunity: "Xoá gateway",
+    restoreToCommunity: "Khôi phục về bản đồ chung",
+    hiddenBadge: "Đã ẩn",
+    confirmHideTitle: "Xác nhận xoá gateway khỏi bản đồ chung",
+    confirmHideBody:
+      "Gateway sẽ bị ẩn khỏi bản đồ chung (community). Người đóng góp vẫn thấy gateway này ở bản đồ \"Của tôi\" và admin vẫn tìm thấy ở đây để khôi phục sau. Tiếp tục?",
+    confirmRestoreTitle: "Khôi phục về bản đồ chung",
+    confirmRestoreBody:
+      "Gateway sẽ hiện lại trên bản đồ chung. Tiếp tục?",
+    confirmYes: "Xác nhận",
+    visibilityUpdating: "Đang cập nhật…",
+    visibilityError: "Không cập nhật được trạng thái hiển thị.",
     editTitle: "Sửa gateway",
     createTitle: "Thêm gateway",
     fields: {
@@ -631,6 +652,15 @@ export const strings = {
       antennaGain: "Antenna gain (dBi)",
       txPower: "TX power (dBm)",
       frequency: "Frequency (MHz)",
+      manualState: "Trạng thái (ghim thủ công)",
+    },
+    manualState: {
+      auto: "Tự động (theo dữ liệu)",
+      online: "Online",
+      offline: "Offline",
+      never_seen: "Chưa từng kết nối",
+      hint:
+        "Khi chọn ngoài \"Tự động\", trạng thái sẽ bỏ qua dữ liệu thực tế từ ChirpStack / lịch sử packet và luôn hiển thị giá trị đã chọn.",
     },
     cancel: "Hủy",
     save: "Lưu",
@@ -649,6 +679,8 @@ export const strings = {
     },
     pending: {
       title: "Gateway chờ duyệt",
+      banner:
+        "Gateway chờ duyệt được phê duyệt theo batch ở tab \"Phê duyệt\" — tab này chỉ liệt kê để tra cứu.",
       loading: "Đang tải…",
       listError: "Không tải được danh sách gateway chờ duyệt.",
       emptyState: "Không có gateway nào đang chờ duyệt.",
@@ -662,14 +694,7 @@ export const strings = {
         "Nguồn",
         "Người đóng góp",
         "Gửi lúc",
-        "",
       ],
-      approveButton: "Phê duyệt",
-      rejectButton: "Từ chối",
-      approving: "Đang duyệt…",
-      rejecting: "Đang từ chối…",
-      approveSuccess: "Đã phê duyệt. {n} điểm đo được liên kết.",
-      rejectNotePrompt: "Lý do từ chối (tùy chọn):",
     },
   },
 
@@ -861,42 +886,72 @@ export const strings = {
       sourceWebhook: "Webhook",
       sourceUnknown: "Khác",
       batch: {
-        heading: "Các file CSV chờ duyệt",
-        empty: "Không có file CSV nào đang chờ duyệt.",
+        heading: "Các file đang chờ duyệt",
+        empty: "Không có file nào đang chờ duyệt.",
         errorLoad: "Không tải được danh sách file chờ duyệt.",
         headers: [
           "Người gửi",
           "Upload lúc",
-          "Số điểm chờ",
+          "Chờ duyệt",
           "Khoảng thời gian đo",
           "",
         ],
-        /** @param {number} pending @param {number} total */
-        countLabel: (pending, total) =>
-          `${pending}/${total} điểm chờ duyệt`,
+        /** @param {number} pending @param {number} total @param {number} newGw */
+        countLabel: (pending, total, newGw) => {
+          const ptLabel = `${pending}/${total} điểm`;
+          return newGw > 0
+            ? `${ptLabel} + ${newGw} gateway mới`
+            : ptLabel;
+        },
         btnViewRows: "Xem chi tiết",
         btnApproveBatch: "Duyệt cả file",
+        btnApprovePointsOnly: "Duyệt điểm đo",
+        btnApproveGatewaysOnly: "Duyệt gateway",
         btnRejectBatch: "Từ chối cả file",
         btnBack: "← Quay lại danh sách file",
-        /** @param {number} n */
-        mapHeading: (n) =>
-          `Bản đồ ${n} điểm đang chờ duyệt trong file này`,
+        /** @param {number} points @param {number} newGw */
+        mapHeading: (points, newGw) =>
+          newGw > 0
+            ? `Bản đồ ${points} điểm + ${newGw} gateway mới đang chờ duyệt trong file này`
+            : `Bản đồ ${points} điểm đang chờ duyệt trong file này`,
         mapHint:
-          "Click vào marker để xem chi tiết 1 điểm. Màu sắc theo RSSI (xanh = mạnh, đỏ = rất yếu).",
+          "Click vào marker để xem chi tiết. Điểm đo có màu theo RSSI; gateway cam = mới, xám = đã có.",
         mapLegend: {
           strong: "≥ -100 dBm",
           medium: "-100 đến -115",
           weak: "-115 đến -120",
           veryWeak: "< -120",
         },
-        mapNoPoints: "Batch này không còn điểm nào chờ duyệt.",
+        gatewayLegend: {
+          newLabel: "Gateway mới (chờ duyệt)",
+          existingLabel: "Gateway đã có",
+        },
+        filterToggle: {
+          title: "Hiển thị",
+          showPoints: "Điểm đo",
+          showGateways: "Gateway",
+        },
+        mapNoPoints: "Batch này không còn điểm/gateway nào chờ duyệt.",
         confirm: {
-          /** @param {number} n */
-          approve: (n) =>
-            `Duyệt cả file CSV này lên bản đồ cộng đồng (${n} điểm)? Người đóng góp sẽ nhận email cảm ơn.`,
-          /** @param {number} n */
-          reject: (n) =>
-            `Từ chối toàn bộ file CSV này (${n} điểm)? Các điểm sẽ giữ trong quarantine, không lên bản đồ.`,
+          /** @param {number} points @param {number} newGw */
+          approveAll: (points, newGw) =>
+            newGw > 0
+              ? `Duyệt cả file: ${points} điểm + ${newGw} gateway mới? Gateway sẽ vào danh sách chung, điểm đo lên bản đồ cộng đồng. Người đóng góp nhận email cảm ơn.`
+              : `Duyệt cả file CSV này lên bản đồ cộng đồng (${points} điểm)? Người đóng góp sẽ nhận email cảm ơn.`,
+          /** @param {number} points @param {number} newGw */
+          approvePointsOnly: (points, newGw) =>
+            `Duyệt ${points} điểm đo nhưng KHÔNG duyệt ${newGw} gateway mới? ` +
+            `Điểm trỏ gateway đã có sẽ vào training ngay; điểm trỏ gateway mới ` +
+            `sẽ chờ — auto-promote khi gateway được duyệt sau.`,
+          /** @param {number} points @param {number} newGw */
+          approveGatewaysOnly: (points, newGw) =>
+            `Duyệt ${newGw} gateway mới nhưng TỪ CHỐI ${points} điểm đo? ` +
+            `Gateway sẽ vào danh sách chung; toàn bộ điểm đo của file này sẽ bị reject.`,
+          /** @param {number} points @param {number} newGw */
+          reject: (points, newGw) =>
+            newGw > 0
+              ? `Từ chối toàn bộ file: ${points} điểm + ${newGw} gateway mới? Tất cả giữ trong quarantine, không lên bản đồ.`
+              : `Từ chối toàn bộ file CSV này (${points} điểm)? Các điểm sẽ giữ trong quarantine, không lên bản đồ.`,
         },
         /** @param {number} n */
         approvedToast: (n) => `Đã duyệt ${n} điểm trong file.`,

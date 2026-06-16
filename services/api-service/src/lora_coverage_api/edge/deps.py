@@ -37,7 +37,7 @@ from ..application.repositories import (
     GatewayDirectory,
     SurveyIngest,
 )
-from ..application.sync import SyncService
+from ..application.sync import LivePullService, SyncService
 from ..application.trust import TrustValidator
 from ..application.webhook_auth import WebhookAuthService
 from ..config import Settings, get_settings
@@ -386,6 +386,15 @@ def _sync_service() -> SyncService:
 
 def sync_service() -> SyncService:
     return _sync_service()
+
+
+@lru_cache(maxsize=1)
+def _live_pull_service() -> LivePullService:
+    return LivePullService(cipher=_credential_cipher())
+
+
+def live_pull_service() -> LivePullService:
+    return _live_pull_service()
 
 
 # ── ChirpStack per-user webhook auth ──────────────────────────────────────

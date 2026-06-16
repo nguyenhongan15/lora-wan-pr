@@ -169,11 +169,16 @@ class GatewayResponse(BaseModel):
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
     noise_floor_dbm: float | None = None
-    # Live state từ ChirpStack (linked source đầu tiên). Cache TTL 60s
-    # (config gateway_state_cache_*). "unknown" = ChirpStack down hoặc gw
-    # không tồn tại trong tenant LNS.
+    # Live state — ChirpStack ưu tiên (real-time); fallback derive từ
+    # MAX(survey_training.timestamp) per gateway (window 5 phút = online).
+    # "unknown" = cả 2 nguồn fail; never_seen = chưa có packet nào.
     state: Literal["online", "offline", "never_seen", "unknown"] = "unknown"
     last_seen_at: datetime | None = None
+    # is_public=False → admin ẩn khỏi bản đồ chung; vẫn hiện ở "Của tôi".
+    is_public: bool = True
+    # Admin "ghim" trạng thái thủ công (mig 0033). Khi non-null, _to_response
+    # trả luôn state này thay vì derived từ ChirpStack + survey_training.
+    manual_state_override: Literal["online", "offline", "never_seen"] | None = None
 
 
 class GatewayListResponse(BaseModel):
@@ -215,6 +220,10 @@ class GatewayPatchRequest(BaseModel):
     rx_antenna_gain_dbi: float | None = Field(default=None, ge=-10, le=30)
     rx_sensitivity_dbm: float | None = Field(default=None, ge=-150, le=-50)
     noise_floor_dbm: float | None = Field(default=None, ge=-130, le=-80)
+    # null = clear override (về derived state); literal = ghim trạng thái.
+    # Extra-forbid + sentinel-explicit nên cần phân biệt "không gửi" vs "gửi null":
+    # router patch dict chỉ apply key khi explicit set ở body.
+    manual_state_override: Literal["online", "offline", "never_seen"] | None = None
 
 
 # ── Survey training (read-only) ───────────────────────────────────────────
@@ -723,21 +732,10 @@ class PendingContributionListResponse(BaseModel):
     total: int = Field(..., ge=0)
 
 
-class ContributionRejectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    note: str | None = Field(default=None, max_length=500)
-
-
-class ContributionReviewResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: UUID
-    review_status: Literal["approved", "rejected"]
-
-
 class PendingReviewBatchResponse(BaseModel):
-    """1 batch CSV upload (= 1 file user upload) còn ≥1 row chờ duyệt."""
+    """1 batch CSV upload (= 1 file user upload) còn ≥1 row chờ duyệt
+    HOẶC ≥1 gateway pending. earliest/latest_timestamp có thể null khi batch
+    chỉ có gateway pending mà không có điểm đo chờ duyệt nào."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -746,8 +744,9 @@ class PendingReviewBatchResponse(BaseModel):
     uploaded_at: datetime
     pending_review_count: int = Field(..., ge=0)
     total_count: int = Field(..., ge=0)
-    earliest_timestamp: datetime
-    latest_timestamp: datetime
+    earliest_timestamp: datetime | None = None
+    latest_timestamp: datetime | None = None
+    new_gateway_count: int = Field(default=0, ge=0)
 
 
 class PendingReviewBatchListResponse(BaseModel):
@@ -756,15 +755,52 @@ class PendingReviewBatchListResponse(BaseModel):
     items: list[PendingReviewBatchResponse]
 
 
+class BatchGatewayResponse(BaseModel):
+    """1 gateway trong map preview của batch review.
+
+    is_new=True → gateway pending (chưa vào geo.gateways), id là quarantine.id.
+    is_new=False → gateway đã promoted, id là geo.gateways.id.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    code: str
+    name: str | None
+    latitude: float
+    longitude: float
+    frequency_mhz: float
+    source_type: str | None
+    is_new: bool
+
+
+class BatchRowsResponse(BaseModel):
+    """Response của GET /contributions/batches/rows — gộp cả điểm đo + gateway
+    cho map preview. Admin "Xem chi tiết" 1 batch nhận data này."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    points: list[PendingContributionResponse]
+    gateways: list[BatchGatewayResponse]
+    total_points: int = Field(..., ge=0)
+    new_gateway_count: int = Field(..., ge=0)
+
+
 class BatchReviewRequest(BaseModel):
     """Identifier 1 batch CSV (uploader + uploaded_at). Admin gửi body POST
-    cho approve/reject — uploaded_at là ISO 8601 datetime."""
+    cho approve/reject — uploaded_at là ISO 8601 datetime.
+
+    `mode` chỉ dùng cho /approve: "all" (mặc định, duyệt cả file), "points_only"
+    (defer điểm trỏ gateway mới), "gateways_only" (promote gateway, reject điểm).
+    /reject bỏ qua mode.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     uploader_id: UUID
     uploaded_at: datetime
     note: str | None = Field(default=None, max_length=500)
+    mode: Literal["all", "points_only", "gateways_only"] = "all"
 
 
 class BatchReviewResponse(BaseModel):
@@ -773,7 +809,10 @@ class BatchReviewResponse(BaseModel):
     uploader_id: UUID
     uploaded_at: datetime
     approved_count: int = Field(default=0, ge=0)
+    deferred_count: int = Field(default=0, ge=0)
     rejected_count: int = Field(default=0, ge=0)
+    gateways_approved_count: int = Field(default=0, ge=0)
+    gateways_rejected_count: int = Field(default=0, ge=0)
 
 
 # ── Coverage map rebuild (admin) ────────────────────────────────────────
@@ -963,26 +1002,3 @@ class PendingGatewayListResponse(BaseModel):
 
     items: list[PendingGatewayResponse]
     total: int = Field(..., ge=0)
-
-
-class GatewayRejectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    note: str | None = Field(default=None, max_length=500)
-
-
-class GatewayApproveResponse(BaseModel):
-    """Trả id geo.gateways mới + số measurement backfill được FK."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    quarantine_id: UUID
-    gateway_id: UUID
-    measurements_backfilled: int = Field(..., ge=0)
-
-
-class GatewayRejectResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    quarantine_id: UUID
-    review_status: Literal["rejected"]

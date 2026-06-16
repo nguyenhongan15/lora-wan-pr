@@ -45,12 +45,16 @@ function _readPageFromHash() {
  */
 function _writePageToHash(next, subTab) {
   if (typeof window === "undefined") return;
+  // Giữ nguyên `?...` để filter URL state (contributor, linked_source, source)
+  // sống qua đổi tab. Nếu wipe search, "qua trang chủ rồi quay lại map" sẽ
+  // mất contributor=me → me/user effect wipe phiên realtime đã restore.
+  const base = `${window.location.pathname}${window.location.search}`;
   if (next === "home") {
-    window.history.replaceState(null, "", window.location.pathname);
+    window.history.replaceState(null, "", base);
   } else if (subTab) {
-    window.history.replaceState(null, "", `#page=${next}&tab=${subTab}`);
+    window.history.replaceState(null, "", `${base}#page=${next}&tab=${subTab}`);
   } else {
-    window.history.replaceState(null, "", `#page=${next}`);
+    window.history.replaceState(null, "", `${base}#page=${next}`);
   }
 }
 
@@ -429,9 +433,9 @@ export function App() {
             />
           </div>
         )}
-        {tab === "map" && <CoverageMap mode="points" onRequestLogin={requestLogin} />}
-        {tab === "heatmap" && <CoverageMap mode="heatmap" onRequestLogin={requestLogin} />}
-        {tab === "predict" && <CoverageMap mode="predict" onRequestLogin={requestLogin} />}
+        {tab === "map" && <CoverageMap mode="points" onRequestLogin={requestLogin} authBootstrapped={bootstrapped} />}
+        {tab === "heatmap" && <CoverageMap mode="heatmap" onRequestLogin={requestLogin} authBootstrapped={bootstrapped} />}
+        {tab === "predict" && <CoverageMap mode="predict" onRequestLogin={requestLogin} authBootstrapped={bootstrapped} />}
         {tab === "admin" && (
           <div className="h-full overflow-y-auto">
             <AdminGateways />

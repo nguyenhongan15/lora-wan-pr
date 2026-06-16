@@ -13,6 +13,7 @@ webhook` là CHỖ DUY NHẤT trả plaintext token. List/get endpoint chỉ ph�
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -21,13 +22,14 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from ...application.identity import User
 from ...application.linking import LinkedSource, LinkingError, LinkingService, LinkResult
 from ...application.repositories import DeviceQuery
-from ...application.sync import SyncResult, SyncService
+from ...application.sync import LivePullService, SyncResult, SyncService
 from ...config import Settings
 from ..deps import (
     _engine,
     current_user,
     device_query,
     linking_service,
+    live_pull_service,
     settings_dep,
     sync_service,
 )
@@ -39,6 +41,8 @@ from ..schemas import (
     LinkedSourceResponse,
     LinkSourceCreatedResponse,
     LinkSourceRequest,
+    SurveyTrainingListResponse,
+    SurveyTrainingPointResponse,
     SyncResultResponse,
     WebhookSecretResponse,
 )
@@ -250,3 +254,36 @@ def sync_source(
     with _engine().begin() as conn:
         result = sync.sync(conn, user=user, linked_source_id=linked_source_id)
     return _sync_to_response(result)
+
+
+# Live-pull view-only — KHÔNG ghi DB. FE poll mỗi 10s khi "Theo dõi trực tiếp"
+# bật + nguồn là lpwanmapper. SourceError → 502 problem+json qua exception
+# handler chung; FE catch + toast + auto-stop.
+@router.get(
+    "/{linked_source_id}/live-pull",
+    response_model=SurveyTrainingListResponse,
+)
+def live_pull(
+    linked_source_id: UUID,
+    user: Annotated[User, Depends(current_user)],
+    live: Annotated[LivePullService, Depends(live_pull_service)],
+    since: datetime | None = Query(default=None),
+) -> SurveyTrainingListResponse:
+    with _engine().begin() as conn:
+        points = live.pull(conn, user=user, linked_source_id=linked_source_id, since=since)
+    items = [
+        SurveyTrainingPointResponse(
+            latitude=p.latitude,
+            longitude=p.longitude,
+            rssi_dbm=p.rssi_dbm,
+            snr_db=p.snr_db,
+            spreading_factor=p.spreading_factor,
+            serving_gateway_id=p.serving_gateway_id,
+            device_id=p.device_id,
+            frequency_mhz=p.frequency_mhz,
+            timestamp=p.timestamp,
+            code_rate=p.code_rate,
+        )
+        for p in points
+    ]
+    return SurveyTrainingListResponse(items=items, total=len(items))

@@ -1,15 +1,19 @@
-"""Gateway state service — query ChirpStack ListGateways, cache map vào Valkey.
+"""Gateway state service — derive {code: state} từ ChirpStack + DB packet activity.
 
 Flow:
   GET /api/v1/gateways → router gọi `get_state_map()` →
-  hit cache (Valkey, key "gw_state:v1", TTL config) → trả dict {code: state}.
-  Miss → SELECT auth.linked_sources WHERE source_type='chirpstack' ORDER BY
-  created_at LIMIT 1 → decrypt → ChirpStack `GatewayService.List` (paginated) →
-  build map → setex cache → return.
+  hit cache (Valkey, key "gw_state:v1", TTL config) → trả merged dict.
+  Miss → (a) ChirpStack `GatewayService.List` để lấy live state cho gw có
+  trong tenant LNS; (b) DB query `MAX(ts.survey_training.timestamp)` per
+  gateway code để derive state cho gw KHÔNG có trong ChirpStack
+  (vd: lpwanmapper gateway). Merge: ChirpStack thắng (real-time), DB fill gap.
 
-Failure mode: ChirpStack down / no linked source → trả dict rỗng (router
-fallback state='unknown' cho mọi gw). KHÔNG raise — endpoint /api/v1/gateways
-phải hoạt động dù ChirpStack down.
+Threshold DB-derived:
+  - last_packet_at NULL → never_seen
+  - last_packet_at trong 5 phút gần đây → online
+  - else → offline
+
+Failure mode: cả 2 nguồn fail → router fallback state='unknown'. KHÔNG raise.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 
 from sqlalchemy import Engine, text
@@ -43,6 +47,7 @@ _CS_STATE_MAP: dict[int, StateLiteral] = {
 }
 _CACHE_KEY = "gw_state:v1"
 _LIST_PAGE_SIZE = 100
+_DB_ONLINE_WINDOW = timedelta(minutes=5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +70,7 @@ class GatewayStateService:
         self._cache = cache
 
     def get_state_map(self) -> dict[str, GatewayState]:
-        """Return {gateway_code: GatewayState}. Empty dict nếu fail."""
+        """Return {gateway_code: GatewayState}. Empty dict nếu fail cả 2 nguồn."""
         if self._cache is not None:
             try:
                 cached = self._cache.get(_CACHE_KEY)
@@ -75,7 +80,13 @@ class GatewayStateService:
             if isinstance(cached, str) and cached:
                 return _deserialize(cached)
 
-        state_map = self._fetch_from_chirpstack()
+        # DB-derived: bao trùm mọi gateway trong geo.gateways. ChirpStack
+        # chỉ biết gateway thuộc tenant LNS → cần DB fill gap cho lpwanmapper.
+        # Merge ChirpStack đè DB vì real-time hơn (last_seen_at chính xác hơn
+        # MAX(survey_training.timestamp) nhiều phút vì retrain interval).
+        db_map = self._fetch_from_db()
+        cs_map = self._fetch_from_chirpstack()
+        state_map: dict[str, GatewayState] = {**db_map, **cs_map}
 
         if self._cache is not None and state_map:
             try:
@@ -84,6 +95,43 @@ class GatewayStateService:
                 log.warning("gateway-state cache write failed: %s", exc)
 
         return state_map
+
+    def _fetch_from_db(self) -> dict[str, GatewayState]:
+        """Derive state từ MAX(ts.survey_training.timestamp) per gateway code.
+
+        Fallback duy nhất cho gateway không có ChirpStack — ví dụ lpwanmapper
+        gateway đã promote vào geo.gateways nhưng không thuộc tenant LNS.
+        """
+        sql = text(
+            """
+            SELECT g.code, MAX(t.timestamp) AS last_packet_at
+            FROM geo.gateways g
+            LEFT JOIN ts.survey_training t ON t.serving_gateway_id = g.id
+            GROUP BY g.code
+            """
+        )
+        try:
+            with self._eng.connect() as conn:
+                rows = conn.execute(sql).all()
+        except Exception as exc:
+            log.warning("gateway-state DB fetch failed: %s", exc)
+            return {}
+
+        now = datetime.now(UTC)
+        out: dict[str, GatewayState] = {}
+        for row in rows:
+            code = str(row.code).lower()
+            ts = row.last_packet_at
+            if ts is None:
+                out[code] = GatewayState(state="never_seen", last_seen_at=None)
+                continue
+            # survey_training.timestamp lưu UTC nhưng SQLAlchemy có thể trả
+            # naive datetime tùy driver — ép tz để so sánh an toàn.
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            state: StateLiteral = "online" if (now - ts) <= _DB_ONLINE_WINDOW else "offline"
+            out[code] = GatewayState(state=state, last_seen_at=ts)
+        return out
 
     def _fetch_from_chirpstack(self) -> dict[str, GatewayState]:
         with self._eng.connect() as conn:

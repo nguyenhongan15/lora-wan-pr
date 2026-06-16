@@ -15,12 +15,14 @@ import { SourceTypeFilter } from "./SourceTypeFilter.jsx";
 import { SfMultiFilter } from "./SfMultiFilter.jsx";
 import { NumericRangeFilter } from "./NumericRangeFilter.jsx";
 import { TimeRangeFilter } from "./TimeRangeFilter.jsx";
+import { LatestPointsFilter } from "./LatestPointsFilter.jsx";
 
 const t = strings.coverageMap.filters;
 
 /**
  * @typedef {{ min: number | null, max: number | null }} NumericRange
  * @typedef {{ from: string | null, to: string | null }} TimeRange
+ * @typedef {{ count: number | null, order: "desc" | "asc" }} LatestCount
  */
 
 /**
@@ -76,8 +78,12 @@ export function PointsFilterToggleBtn({ open, onToggle }) {
  *   onSnrRangeChange: (v: NumericRange) => void,
  *   timeRange: TimeRange,
  *   onTimeRangeChange: (v: TimeRange) => void,
+ *   latestCount: LatestCount,
+ *   onLatestCountChange: (v: LatestCount) => void,
  *   connectionLinesEnabled: boolean,
  *   onConnectionLinesEnabledChange: (v: boolean) => void,
+ *   showAllGatewaysEnabled: boolean,
+ *   onShowAllGatewaysEnabledChange: (v: boolean) => void,
  * }} props
  */
 export function PointsFilterBody({
@@ -98,8 +104,12 @@ export function PointsFilterBody({
   onSnrRangeChange,
   timeRange,
   onTimeRangeChange,
+  latestCount,
+  onLatestCountChange,
   connectionLinesEnabled,
   onConnectionLinesEnabledChange,
+  showAllGatewaysEnabled,
+  onShowAllGatewaysEnabledChange,
 }) {
   return (
     <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-md border border-slate-200 bg-white text-xs text-slate-700 shadow-sm md:w-64 md:flex-initial">
@@ -162,6 +172,22 @@ export function PointsFilterBody({
               </span>
             </span>
           </label>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={showAllGatewaysEnabled}
+              onChange={(e) => onShowAllGatewaysEnabledChange(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">
+                {t.showAllGateways.toggleLabel}
+              </span>
+              <span className="block text-xs text-slate-500">
+                {t.showAllGateways.toggleHint}
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="border-t border-slate-200 pt-2.5 space-y-2.5">
@@ -183,6 +209,10 @@ export function PointsFilterBody({
             step={0.5}
             value={snrRange}
             onChange={onSnrRangeChange}
+          />
+          <LatestPointsFilter
+            value={latestCount}
+            onChange={onLatestCountChange}
           />
           <TimeRangeFilter value={timeRange} onChange={onTimeRangeChange} />
         </div>

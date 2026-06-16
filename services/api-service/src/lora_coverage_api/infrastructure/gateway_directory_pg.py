@@ -28,6 +28,7 @@ _UPDATABLE_COLUMNS = frozenset(
         "rx_antenna_gain_dbi",
         "rx_sensitivity_dbm",
         "noise_floor_dbm",
+        "manual_state_override",
     }
 )
 
@@ -51,6 +52,8 @@ def _row_to_gateway(r: dict[str, Any]) -> Gateway:
         rx_antenna_gain_dbi=_opt_float(r.get("rx_antenna_gain_dbi")),
         rx_sensitivity_dbm=_opt_float(r.get("rx_sensitivity_dbm")),
         noise_floor_dbm=_opt_float(r.get("noise_floor_dbm")),
+        is_public=bool(r.get("is_public", True)),
+        manual_state_override=r.get("manual_state_override"),
     )
 
 
@@ -61,7 +64,7 @@ _SELECT_COLS = """
     altitude_m, antenna_height_m, antenna_gain_dbi,
     tx_power_dbm, frequency_mhz,
     rx_antenna_gain_dbi, rx_sensitivity_dbm,
-    noise_floor_dbm
+    noise_floor_dbm, is_public, manual_state_override
 """
 
 
@@ -131,14 +134,15 @@ class PgGatewayDirectory:
             )
             params.update(min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
 
-        # Mode self/user: chỉ trả gateway có survey từ user đó. INNER JOIN
-        # + DISTINCT (1 gateway có nhiều survey) — query plan dùng index
-        # ts.survey_training(contributor_user_id) đã tồn tại từ migration.
-        #
-        # UNION training + quarantine: gateway chỉ xuất hiện ở quarantine
-        # (data chưa promote sang training) cũng phải hiện, parity với map
-        # mode='me'. UNION (không ALL) dedup gateway_id ngay trong subquery
-        # → outer DISTINCT chỉ cần handle bbox/is_public collisions.
+        # Mode self/user: trả gateway "thuộc về" user đó. UNION 3 nguồn:
+        #   1. ts.survey_training — gateway từng phục vụ survey đã duyệt.
+        #   2. ts.survey_quarantine — gateway từng phục vụ survey còn pending.
+        #   3. geo.gateway_quarantine — gateway DO user đóng góp (đã được
+        #      promote vào geo.gateways) → user vẫn thấy gateway của mình
+        #      kể cả khi (a) chưa có survey nào dùng nó, (b) admin đã ẩn
+        #      khỏi bản đồ chung (is_public=false).
+        # linked_source filter chỉ áp lên 2 nguồn survey; nguồn gateway
+        # contribution không có khái niệm "linked source per gateway".
         if contributor is not None and contributor.mode in ("self", "user"):
             ls_clause = ""
             if contributor.linked_source_id is not None:
@@ -146,12 +150,18 @@ class PgGatewayDirectory:
                 params["linked_source_id"] = contributor.linked_source_id
             join_sql = (
                 "INNER JOIN ("
-                "  SELECT serving_gateway_id FROM ts.survey_training t"
+                "  SELECT serving_gateway_id AS gid FROM ts.survey_training t"
                 f"  WHERE t.contributor_user_id = :contributor_user_id {ls_clause}"
                 "  UNION"
-                "  SELECT serving_gateway_id FROM ts.survey_quarantine t"
+                "  SELECT serving_gateway_id AS gid FROM ts.survey_quarantine t"
                 f"  WHERE t.contributor_user_id = :contributor_user_id {ls_clause}"
-                ") t ON t.serving_gateway_id = g.id"
+                "  UNION"
+                "  SELECT gq.promoted_gateway_id AS gid"
+                "  FROM geo.gateway_quarantine gq"
+                "  WHERE gq.contributor_user_id = :contributor_user_id"
+                "    AND gq.review_status = 'approved'"
+                "    AND gq.promoted_gateway_id IS NOT NULL"
+                ") t ON t.gid = g.id"
             )
             params["contributor_user_id"] = contributor.target_user_id
 
@@ -164,7 +174,7 @@ class PgGatewayDirectory:
             g.altitude_m, g.antenna_height_m, g.antenna_gain_dbi,
             g.tx_power_dbm, g.frequency_mhz,
             g.rx_antenna_gain_dbi, g.rx_sensitivity_dbm,
-            g.noise_floor_dbm
+            g.noise_floor_dbm, g.is_public, g.manual_state_override
         """
         sql = text(
             f"""

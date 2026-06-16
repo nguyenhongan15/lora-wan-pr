@@ -77,15 +77,12 @@ _GATEWAY_UPSERT_SQL = text("""
             THEN EXCLUDED.altitude_m
             ELSE geo.gateways.altitude_m
         END,
-        -- Name update: owner-scoped + skip placeholder (EXCLUDED.name=code
-        -- nghĩa là adapter không trả label, vd lpwanmapper /login).
-        name                = CASE
-            WHEN EXCLUDED.name = EXCLUDED.code THEN geo.gateways.name
-            WHEN geo.gateways.contributor_user_id IS NULL
-              OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
-            THEN EXCLUDED.name
-            ELSE geo.gateways.name
-        END,
+        -- Name: KHÔNG cho sync overwrite (2026-06-17). Admin có thể đổi tên
+        -- gateway qua PATCH endpoint; nếu sync re-write tên theo label từ
+        -- source thì chỉnh tay sẽ bị mất sau mỗi lần sync. Đồng nhất chính
+        -- sách với manual_state_override / is_public — các field admin-edit
+        -- đều immutable từ phía sync.
+        name                = geo.gateways.name,
         -- First-writer-wins (plan-auth §3.3 fix): existing trước EXCLUDED →
         -- giữ contributor đầu tiên, không cho user link sau ghi đè data
         -- của user link trước. NULL legacy → fall back EXCLUDED tag dần.
@@ -186,14 +183,14 @@ _GATEWAY_QUARANTINE_UPSERT_SQL = text("""
     INSERT INTO geo.gateway_quarantine (
         code, name, location, altitude_m, frequency_mhz,
         external_id, source_type, contributor_user_id, linked_source_id,
-        review_status
+        review_status, batch_id
     )
     VALUES (
         :code, :name,
         ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
         :altitude_m, :freq_mhz,
         :external_id, :source_type, :contributor_user_id, :linked_source_id,
-        'pending_review'
+        'pending_review', :batch_id
     )
     ON CONFLICT (source_type, external_id) DO UPDATE SET
         -- Re-sync cùng quarantine row: cho phép owner refresh metadata. Khác
@@ -217,6 +214,7 @@ _GATEWAY_QUARANTINE_UPSERT_SQL = text("""
         END,
         contributor_user_id = COALESCE(geo.gateway_quarantine.contributor_user_id, EXCLUDED.contributor_user_id),
         linked_source_id    = COALESCE(geo.gateway_quarantine.linked_source_id,    EXCLUDED.linked_source_id),
+        batch_id     = COALESCE(geo.gateway_quarantine.batch_id, EXCLUDED.batch_id),
         updated_at   = now()
     RETURNING (xmax = 0) AS inserted, id, review_status
 """)
@@ -230,6 +228,7 @@ def upsert_gateway_quarantine(
     contributor_user_id: UUID | None = None,
     linked_source_id: UUID | None = None,
     frequency_mhz: float = DEFAULT_FREQUENCY_MHZ,
+    batch_id: UUID | None = None,
 ) -> tuple[UpsertResult, UUID, str]:
     """Insert hoặc update 1 gateway quarantine row. Trả (status, id, review_status).
 
@@ -256,6 +255,7 @@ def upsert_gateway_quarantine(
             "source_type": source_type,
             "contributor_user_id": contributor_user_id,
             "linked_source_id": linked_source_id,
+            "batch_id": batch_id,
         },
     ).one()
     return ("inserted" if row.inserted else "updated", row.id, row.review_status)

@@ -177,10 +177,17 @@ export const Gateway = z.object({
   antenna_gain_dbi: z.number(),
   tx_power_dbm: z.number(),
   frequency_mhz: z.number(),
-  // Live state từ ChirpStack — backend trả "unknown" nếu gw không có trong
-  // tenant LNS hoặc ChirpStack down (cache TTL 60s ở api-service).
+  // Live state — ChirpStack ưu tiên; fallback derive từ MAX(survey_training.timestamp)
+  // window 5 phút = online (cache TTL 60s ở api-service).
   state: z.enum(["online", "offline", "never_seen", "unknown"]).default("unknown"),
   last_seen_at: z.string().datetime({ offset: true }).nullable().optional(),
+  // is_public=false → admin đã ẩn khỏi bản đồ chung; default true cho gw cũ.
+  is_public: z.boolean().default(true),
+  // Admin "ghim" trạng thái thủ công (mig 0033). null = derive tự động.
+  manual_state_override: z
+    .enum(["online", "offline", "never_seen"])
+    .nullable()
+    .optional(),
 });
 
 export const GatewayList = z.object({
@@ -203,6 +210,7 @@ export const GatewayList = z.object({
  * @param {{
  *   contributor?: ContributorMode,
  *   linkedSourceId?: string,
+ *   includeHidden?: boolean,
  * }=} opts
  * @returns {Promise<z.infer<typeof GatewayList>>}
  */
@@ -219,8 +227,12 @@ export async function listGateways(bbox, opts) {
     url.searchParams.set("contributor", contributor);
   }
   if (opts?.linkedSourceId) url.searchParams.set("linked_source", opts.linkedSourceId);
+  // include_hidden chỉ honor cho admin (BE gate); admin panel cần thấy gw đã ẩn để restore.
+  if (opts?.includeHidden) url.searchParams.set("include_hidden", "true");
 
-  const doFetch = contributor === "community" ? fetch : authFetch;
+  // include_hidden cần auth (admin) → buộc dùng authFetch ngay cả khi contributor=community.
+  const needsAuth = contributor !== "community" || !!opts?.includeHidden;
+  const doFetch = needsAuth ? authFetch : fetch;
   const res = await doFetch(url);
   if (!res.ok) {
     throw new ApiError({
@@ -252,6 +264,13 @@ export const GatewayPatchRequest = z.object({
   antenna_height_m: z.number().min(0).optional(),
   antenna_gain_dbi: z.number().optional(),
   tx_power_dbm: z.number().min(-10).max(30).optional(),
+  is_public: z.boolean().optional(),
+  // null = clear override (về derived state); enum = ghim. Backend phân biệt
+  // "không gửi" vs "gửi null" qua exclude_unset → null phải qua được parse.
+  manual_state_override: z
+    .enum(["online", "offline", "never_seen"])
+    .nullable()
+    .optional(),
 });
 
 /**
@@ -284,7 +303,8 @@ export async function getGateway(id) {
  */
 export async function createGateway(req) {
   const parsed = GatewayCreateRequest.parse(req);
-  const res = await fetch(`${API_BASE_URL}/api/v1/gateways`, {
+  // require_admin → cần Bearer token; dùng authFetch.
+  const res = await authFetch(`${API_BASE_URL}/api/v1/gateways`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(parsed),
@@ -308,7 +328,8 @@ export async function createGateway(req) {
  */
 export async function patchGateway(id, etag, patch) {
   const parsed = GatewayPatchRequest.parse(patch);
-  const res = await fetch(`${API_BASE_URL}/api/v1/gateways/${id}`, {
+  // require_admin → cần Bearer token; dùng authFetch.
+  const res = await authFetch(`${API_BASE_URL}/api/v1/gateways/${id}`, {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
@@ -518,6 +539,7 @@ export async function lookupCoverageBatch(req, signal) {
  *   since?: string,
  *   rankFrom?: number,
  *   rankTo?: number,
+ *   sortOrder?: "asc" | "desc",
  * }=} opts
  * @returns {Promise<z.infer<typeof SurveyTrainingList>>}
  */
@@ -551,6 +573,7 @@ export async function listSurveyTraining(bbox, opts) {
   if (opts?.since) url.searchParams.set("since", opts.since);
   if (opts?.rankFrom != null) url.searchParams.set("rank_from", String(opts.rankFrom));
   if (opts?.rankTo != null) url.searchParams.set("rank_to", String(opts.rankTo));
+  if (opts?.sortOrder) url.searchParams.set("sort_order", opts.sortOrder);
 
   const doFetch = contributor === "community" ? fetch : authFetch;
   const res = await doFetch(url);

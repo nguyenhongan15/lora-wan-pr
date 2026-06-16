@@ -274,26 +274,56 @@ _REJECT_PENDING = text(
 
 # ── batch (file) review ──────────────────────────────────────────────────
 # Group quarantine rows by (uploader_id, uploaded_at) — đây là key tự nhiên
-# cho 1 lần upload CSV. Chỉ list batch có ít nhất 1 row pending_review (admin
-# không cần thấy file đã duyệt xong hoặc chưa promote).
+# cho 1 lần upload CSV. Chỉ list batch có ít nhất 1 row pending_review/pending_gateway
+# HOẶC ≥1 gateway quarantine row gắn batch (sync mang gateway mới mà điểm đo
+# đã reject hoặc đã promote — admin vẫn cần duyệt phần gateway).
+# new_gateway_count: số gateway pending_review thuộc batch của (uploader, uploaded_at).
 _LIST_PENDING_REVIEW_BATCHES = text(
     """
+    WITH point_batches AS (
+        SELECT
+            q.uploader_id,
+            u.email AS uploader_email,
+            q.uploaded_at,
+            COUNT(*) FILTER (
+                WHERE q.review_status IN ('pending_review', 'pending_gateway')
+            )::int AS pending_review_count,
+            COUNT(*)::int AS total_count,
+            MIN(q.timestamp) AS earliest_ts,
+            MAX(q.timestamp) AS latest_ts
+        FROM ts.survey_quarantine q
+        LEFT JOIN auth.users u ON u.id = q.uploader_id
+        WHERE q.uploader_id IS NOT NULL
+        GROUP BY q.uploader_id, u.email, q.uploaded_at
+    ),
+    gw_batches AS (
+        SELECT
+            b.user_id AS uploader_id,
+            u.email AS uploader_email,
+            b.uploaded_at,
+            COUNT(*)::int AS new_gateway_count
+        FROM geo.gateway_quarantine gq
+        JOIN me.upload_batches b ON b.id = gq.batch_id
+        LEFT JOIN auth.users u ON u.id = b.user_id
+        WHERE gq.review_status = 'pending_review'
+        GROUP BY b.user_id, u.email, b.uploaded_at
+    )
     SELECT
-        q.uploader_id,
-        u.email AS uploader_email,
-        q.uploaded_at,
-        COUNT(*) FILTER (
-            WHERE q.review_status = 'pending_review'
-        )::int AS pending_review_count,
-        COUNT(*)::int AS total_count,
-        MIN(q.timestamp) AS earliest_ts,
-        MAX(q.timestamp) AS latest_ts
-    FROM ts.survey_quarantine q
-    LEFT JOIN auth.users u ON u.id = q.uploader_id
-    WHERE q.uploader_id IS NOT NULL
-    GROUP BY q.uploader_id, u.email, q.uploaded_at
-    HAVING COUNT(*) FILTER (WHERE q.review_status = 'pending_review') > 0
-    ORDER BY q.uploaded_at DESC
+        COALESCE(p.uploader_id, g.uploader_id) AS uploader_id,
+        COALESCE(p.uploader_email, g.uploader_email) AS uploader_email,
+        COALESCE(p.uploaded_at, g.uploaded_at) AS uploaded_at,
+        COALESCE(p.pending_review_count, 0) AS pending_review_count,
+        COALESCE(p.total_count, 0) AS total_count,
+        p.earliest_ts AS earliest_ts,
+        p.latest_ts AS latest_ts,
+        COALESCE(g.new_gateway_count, 0) AS new_gateway_count
+    FROM point_batches p
+    FULL OUTER JOIN gw_batches g
+      ON p.uploader_id = g.uploader_id AND p.uploaded_at = g.uploaded_at
+    WHERE
+        COALESCE(p.pending_review_count, 0) > 0
+        OR COALESCE(g.new_gateway_count, 0) > 0
+    ORDER BY COALESCE(p.uploaded_at, g.uploaded_at) DESC
     """
 )
 
@@ -312,6 +342,31 @@ _SELECT_PENDING_REVIEW_FOR_BATCH = text(
     LEFT JOIN auth.users u ON u.id = q.contributor_user_id
     LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
     WHERE q.review_status = 'pending_review'
+      AND q.uploader_id = :uploader_id
+      AND q.uploaded_at = :uploaded_at
+    ORDER BY q.timestamp ASC
+    """
+)
+
+# Map preview cần show CẢ pending_review CẢ pending_gateway (deferred rows
+# vẫn là điểm đang chờ admin xử lý, chỉ chờ gateway thay vì admin click).
+# Gateway_code lấy từ serving_gateway_eui (raw từ sync) cho rows trỏ gateway
+# mới (g.code không match vì chưa có ở geo.gateways).
+_SELECT_QUARANTINE_FOR_BATCH_DISPLAY = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        COALESCE(g.code, q.serving_gateway_eui) AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.review_status IN ('pending_review', 'pending_gateway')
       AND q.uploader_id = :uploader_id
       AND q.uploaded_at = :uploaded_at
     ORDER BY q.timestamp ASC
@@ -351,8 +406,372 @@ class PendingReviewBatch:
     uploaded_at: datetime
     pending_review_count: int
     total_count: int
-    earliest_timestamp: datetime
-    latest_timestamp: datetime
+    earliest_timestamp: datetime | None
+    latest_timestamp: datetime | None
+    new_gateway_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchGateway:
+    """1 gateway hiển thị trong map preview của batch review.
+
+    `is_new=True` → gateway pending (chưa vào geo.gateways), id là quarantine.id.
+    `is_new=False` → gateway đã promoted, id là geo.gateways.id.
+    """
+
+    id: UUID
+    code: str
+    name: str | None
+    latitude: float
+    longitude: float
+    frequency_mhz: float
+    source_type: str | None
+    is_new: bool
+
+
+# Gateway pending của 1 batch (uploader_id + uploaded_at) → JOIN
+# me.upload_batches để lấy batch_id. Filter review_status='pending_review' để
+# không show gateway đã approve/reject từ vòng trước.
+_SELECT_PENDING_GATEWAYS_FOR_BATCH = text(
+    """
+    SELECT
+        gq.id, gq.code, gq.name,
+        ST_Y(gq.location::geometry) AS latitude,
+        ST_X(gq.location::geometry) AS longitude,
+        gq.frequency_mhz, gq.source_type
+    FROM geo.gateway_quarantine gq
+    JOIN me.upload_batches b ON b.id = gq.batch_id
+    WHERE gq.review_status = 'pending_review'
+      AND b.user_id = :uploader_id
+      AND b.uploaded_at = :uploaded_at
+    ORDER BY gq.created_at ASC
+    """
+)
+
+# Gateway đã promoted mà điểm đo của batch tham chiếu tới. DISTINCT g.id để
+# tránh dup khi 1 gateway phục vụ nhiều rows. Bao gồm cả rows pending_review,
+# pending_gateway, approved, rejected — admin cần thấy đầy đủ context bản đồ.
+_SELECT_KNOWN_GATEWAYS_FOR_BATCH = text(
+    """
+    SELECT DISTINCT
+        g.id, g.code, g.name,
+        ST_Y(g.location::geometry) AS latitude,
+        ST_X(g.location::geometry) AS longitude,
+        g.frequency_mhz, g.source_type
+    FROM geo.gateways g
+    JOIN ts.survey_quarantine q ON q.serving_gateway_id = g.id
+    WHERE q.uploader_id = :uploader_id
+      AND q.uploaded_at = :uploaded_at
+    """
+)
+
+# Đếm new_gateway_count cho 1 batch — dùng trong response single-batch.
+_COUNT_NEW_GATEWAYS_FOR_BATCH = text(
+    """
+    SELECT COUNT(*)::int AS new_gw
+    FROM geo.gateway_quarantine gq
+    JOIN me.upload_batches b ON b.id = gq.batch_id
+    WHERE gq.review_status = 'pending_review'
+      AND b.user_id = :uploader_id
+      AND b.uploaded_at = :uploaded_at
+    """
+)
+
+# Rows pending_review trỏ tới gateway MỚI (cùng batch): serving_gateway_id NULL
+# nhưng serving_gateway_eui khớp với 1 gateway quarantine pending của batch.
+# Dùng ở mode points_only: rows này phải chờ → 'pending_gateway'.
+_SELECT_POINTS_TIED_TO_NEW_GW = text(
+    """
+    SELECT q.id, q.timestamp, q.serving_gateway_eui
+    FROM ts.survey_quarantine q
+    WHERE q.uploader_id = :uploader_id
+      AND q.uploaded_at = :uploaded_at
+      AND q.review_status = 'pending_review'
+      AND q.serving_gateway_id IS NULL
+      AND q.serving_gateway_eui IS NOT NULL
+      AND EXISTS (
+          SELECT 1 FROM geo.gateway_quarantine gq
+          JOIN me.upload_batches b ON b.id = gq.batch_id
+          WHERE gq.code = q.serving_gateway_eui
+            AND gq.review_status = 'pending_review'
+            AND b.user_id = :uploader_id
+            AND b.uploaded_at = :uploaded_at
+      )
+    """
+)
+
+# Defer rows tới pending_gateway thay vì approved. Giữ batch_id, reviewer_id
+# để audit. KHÔNG ghi reviewed_at vì chưa thực sự "duyệt cuối".
+_MARK_PENDING_GATEWAY = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'pending_gateway',
+        reviewed_by_user_id = :reviewer_id
+    WHERE id = :qid AND review_status = 'pending_review'
+    """
+)
+
+# ── Auto-promote deferred rows khi admin approve gateway ────────────────
+# Khi admin "Duyệt điểm đo (không duyệt gateway)" → rows ở status pending_gateway.
+# Sau đó admin approve gateway có cùng EUI → rows này phải tự lên training.
+# Backfill _BACKFILL_QUARANTINE_FK (admin.py) chạy trước → serving_gateway_id
+# đã set khi INSERT chạy ở đây.
+_INSERT_TRAINING_FROM_DEFERRED = text(
+    """
+    INSERT INTO ts.survey_training (
+        id, timestamp, location, rssi_dbm, snr_db,
+        spreading_factor, frequency_mhz, device_id,
+        serving_gateway_id, uploader_id,
+        external_id, source_type, contributor_user_id, linked_source_id,
+        submitted_for_community, code_rate, batch_id
+    )
+    SELECT
+        gen_random_uuid(), q.timestamp, q.location, q.rssi_dbm, q.snr_db,
+        q.spreading_factor, q.frequency_mhz, q.device_id,
+        q.serving_gateway_id, q.uploader_id,
+        q.external_id, q.source_type, q.contributor_user_id, q.linked_source_id,
+        true, q.code_rate, q.batch_id
+    FROM ts.survey_quarantine q
+    WHERE q.review_status = 'pending_gateway'
+      AND q.serving_gateway_eui = :code
+      AND q.serving_gateway_id IS NOT NULL
+    ON CONFLICT (timestamp, source_type, external_id) WHERE external_id IS NOT NULL
+    DO NOTHING
+    """
+)
+
+_MARK_DEFERRED_APPROVED = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'approved',
+        reviewed_at = now()
+    WHERE review_status = 'pending_gateway'
+      AND serving_gateway_eui = :code
+    RETURNING id, contributor_user_id, serving_gateway_id
+    """
+)
+
+# Cascade reject pending_gateway rows khi admin reject gateway cùng EUI.
+_CASCADE_REJECT_DEFERRED = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'rejected',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now(),
+        review_note = :note
+    WHERE review_status = 'pending_gateway'
+      AND serving_gateway_eui = :code
+    RETURNING id, contributor_user_id
+    """
+)
+
+# Reject mọi rows ở quarantine của 1 batch (cả pending_review và pending_gateway).
+# Dùng cho mode "Từ chối cả file" và "Duyệt gateway, không duyệt điểm đo".
+_SELECT_QUARANTINE_FOR_BATCH_REJECT = text(
+    """
+    SELECT
+        q.id, q.timestamp,
+        ST_Y(q.location::geometry) AS lat,
+        ST_X(q.location::geometry) AS lon,
+        q.rssi_dbm, q.snr_db, q.spreading_factor, q.frequency_mhz,
+        q.source_type, q.contributor_user_id, q.serving_gateway_id,
+        q.linked_source_id, q.uploaded_at,
+        u.email AS contributor_email,
+        g.code AS gateway_code
+    FROM ts.survey_quarantine q
+    LEFT JOIN auth.users u ON u.id = q.contributor_user_id
+    LEFT JOIN geo.gateways g ON g.id = q.serving_gateway_id
+    WHERE q.review_status IN ('pending_review', 'pending_gateway')
+      AND q.uploader_id = :uploader_id
+      AND q.uploaded_at = :uploaded_at
+    ORDER BY q.timestamp ASC
+    """
+)
+
+_REJECT_QUARANTINE_ANY = text(
+    """
+    UPDATE ts.survey_quarantine
+    SET review_status = 'rejected',
+        reviewed_by_user_id = :reviewer_id,
+        reviewed_at = now(),
+        review_note = :note
+    WHERE id = :qid AND review_status IN ('pending_review', 'pending_gateway')
+    RETURNING timestamp, contributor_user_id
+    """
+)
+
+
+def list_pending_gateways_for_batch(
+    conn: Connection, *, uploader_id: UUID, uploaded_at: datetime
+) -> list[BatchGateway]:
+    """Gateway pending_review thuộc batch (uploader, uploaded_at). is_new=True."""
+    rows = conn.execute(
+        _SELECT_PENDING_GATEWAYS_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    return [
+        BatchGateway(
+            id=r.id,
+            code=r.code,
+            name=r.name,
+            latitude=float(r.latitude),
+            longitude=float(r.longitude),
+            frequency_mhz=float(r.frequency_mhz),
+            source_type=r.source_type,
+            is_new=True,
+        )
+        for r in rows
+    ]
+
+
+def list_known_gateways_for_batch(
+    conn: Connection, *, uploader_id: UUID, uploaded_at: datetime
+) -> list[BatchGateway]:
+    """Gateway đã promoted mà điểm đo của batch tham chiếu. is_new=False."""
+    rows = conn.execute(
+        _SELECT_KNOWN_GATEWAYS_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    return [
+        BatchGateway(
+            id=r.id,
+            code=r.code,
+            name=r.name,
+            latitude=float(r.latitude),
+            longitude=float(r.longitude),
+            frequency_mhz=float(r.frequency_mhz),
+            source_type=r.source_type,
+            is_new=False,
+        )
+        for r in rows
+    ]
+
+
+def count_new_gateways_for_batch(
+    conn: Connection, *, uploader_id: UUID, uploaded_at: datetime
+) -> int:
+    return int(
+        conn.execute(
+            _COUNT_NEW_GATEWAYS_FOR_BATCH,
+            {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+        ).scalar_one()
+        or 0
+    )
+
+
+def defer_points_tied_to_new_gateways(
+    conn: Connection,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+) -> int:
+    """Mode points_only: rows trỏ gateway MỚI giữ ở 'pending_gateway' (defer)
+    thay vì approved. Trả số rows được defer."""
+    rows = conn.execute(
+        _SELECT_POINTS_TIED_TO_NEW_GW,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    deferred = 0
+    for row in rows:
+        res = conn.execute(_MARK_PENDING_GATEWAY, {"qid": row.id, "reviewer_id": reviewer_id})
+        if (res.rowcount or 0) > 0:
+            deferred += 1
+    return deferred
+
+
+def promote_deferred_for_gateway(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    gateway_code: str,
+    reviewer_id: UUID,
+) -> int:
+    """Auto-promote rows pending_gateway → training khi admin approve gateway
+    cùng EUI. Caller (approve_gateway endpoint) phải đã chạy
+    `_BACKFILL_QUARANTINE_FK` trước → serving_gateway_id đã set, INSERT mới
+    đầy đủ FK.
+
+    Bump stats.accepted cho contributor (defer = chưa accept thật; promote
+    mới là accept). Trả số rows đã promote.
+    """
+    conn.execute(_INSERT_TRAINING_FROM_DEFERRED, {"code": gateway_code})
+    promoted = conn.execute(
+        _MARK_DEFERRED_APPROVED, {"code": gateway_code, "reviewer_id": reviewer_id}
+    ).all()
+    for row in promoted:
+        if row.contributor_user_id is not None:
+            validator.update_stats(conn, row.contributor_user_id, passed=True)
+    if promoted:
+        logger.info(
+            "deferred_rows_auto_promoted",
+            gateway_code=gateway_code,
+            reviewer_id=str(reviewer_id),
+            promoted_count=len(promoted),
+        )
+    return len(promoted)
+
+
+def cascade_reject_deferred_for_gateway(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    gateway_code: str,
+    reviewer_id: UUID,
+    note: str | None,
+) -> int:
+    """Cascade reject rows pending_gateway khi admin reject gateway cùng EUI.
+    Không có gateway hợp pháp → điểm đo trỏ tới gateway đó cũng không khả tín.
+    Bump stats.rejected cho contributor.
+    """
+    rejected = conn.execute(
+        _CASCADE_REJECT_DEFERRED,
+        {"code": gateway_code, "reviewer_id": reviewer_id, "note": note},
+    ).all()
+    for row in rejected:
+        if row.contributor_user_id is not None:
+            validator.update_stats(conn, row.contributor_user_id, passed=False)
+    if rejected:
+        logger.info(
+            "deferred_rows_cascade_rejected",
+            gateway_code=gateway_code,
+            reviewer_id=str(reviewer_id),
+            rejected_count=len(rejected),
+        )
+    return len(rejected)
+
+
+def reject_quarantine_for_batch(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+    note: str | None,
+) -> list[PendingContribution]:
+    """Reject mọi rows quarantine của batch ở cả 'pending_review' và
+    'pending_gateway'. Dùng cho mode "Từ chối cả file" và "Duyệt gateway,
+    không duyệt điểm đo".
+
+    Trả list rows đã reject. Bump stats.rejected per contributor.
+    """
+    rows = conn.execute(
+        _SELECT_QUARANTINE_FOR_BATCH_REJECT,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    rejected: list[PendingContribution] = []
+    for row in rows:
+        updated = conn.execute(
+            _REJECT_QUARANTINE_ANY,
+            {"qid": row.id, "reviewer_id": reviewer_id, "note": note},
+        ).first()
+        if updated is None:
+            continue
+        if updated.contributor_user_id is not None:
+            validator.update_stats(conn, updated.contributor_user_id, passed=False)
+        rejected.append(_row_to_pending(row))
+    return rejected
 
 
 def _row_to_pending(row: Any) -> PendingContribution:
@@ -394,7 +813,13 @@ def get_pending_review(conn: Connection, qid: UUID) -> PendingContribution | Non
 
 
 def list_pending_review_batches(conn: Connection) -> list[PendingReviewBatch]:
-    """List các file (uploader + uploaded_at) còn ≥1 row pending_review."""
+    """List các batch (uploader + uploaded_at) còn ≥1 row pending hoặc gateway pending.
+
+    `new_gateway_count` đếm gateway_quarantine review_status='pending_review'
+    gắn batch_id của batch (uploader_id + uploaded_at). Nếu batch chỉ có
+    gateway pending mà không có rows pending_review → vẫn hiện trong queue
+    (earliest/latest_ts có thể NULL).
+    """
     rows = conn.execute(_LIST_PENDING_REVIEW_BATCHES).all()
     return [
         PendingReviewBatch(
@@ -405,6 +830,7 @@ def list_pending_review_batches(conn: Connection) -> list[PendingReviewBatch]:
             total_count=int(row.total_count or 0),
             earliest_timestamp=row.earliest_ts,
             latest_timestamp=row.latest_ts,
+            new_gateway_count=int(row.new_gateway_count or 0),
         )
         for row in rows
     ]
@@ -416,6 +842,18 @@ def list_pending_review_for_batch(
     """Detail rows pending_review của 1 batch — admin drill-in xem trước duyệt."""
     rows = conn.execute(
         _SELECT_PENDING_REVIEW_FOR_BATCH,
+        {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
+    ).all()
+    return [_row_to_pending(r) for r in rows]
+
+
+def list_quarantine_for_batch_display(
+    conn: Connection, *, uploader_id: UUID, uploaded_at: datetime
+) -> list[PendingContribution]:
+    """Map-preview rows: gộp 'pending_review' + 'pending_gateway' của batch.
+    Khác `list_pending_review_for_batch`: KHÔNG dùng cho approve flow."""
+    rows = conn.execute(
+        _SELECT_QUARANTINE_FOR_BATCH_DISPLAY,
         {"uploader_id": uploader_id, "uploaded_at": uploaded_at},
     ).all()
     return [_row_to_pending(r) for r in rows]
@@ -444,6 +882,33 @@ def approve_pending_review_batch(
         if ok:
             approved.append(_row_to_pending(row))
     return approved
+
+
+def approve_points_only_for_batch(
+    conn: Connection,
+    validator: TrustValidator,
+    *,
+    uploader_id: UUID,
+    uploaded_at: datetime,
+    reviewer_id: UUID,
+) -> tuple[list[PendingContribution], int]:
+    """Mode points_only: rows trỏ gateway CŨ → promote training; rows trỏ
+    gateway MỚI (cùng batch) → status 'pending_gateway' chờ admin duyệt
+    gateway. Gateway pending KHÔNG đụng.
+
+    Trả (approved_rows, deferred_count). Caller dùng approved cho email +
+    cache invalidate; deferred cho UI message.
+    """
+    deferred = defer_points_tied_to_new_gateways(
+        conn,
+        uploader_id=uploader_id,
+        uploaded_at=uploaded_at,
+        reviewer_id=reviewer_id,
+    )
+    approved = approve_pending_review_batch(
+        conn, validator, uploader_id=uploader_id, uploaded_at=uploaded_at, reviewer_id=reviewer_id
+    )
+    return approved, deferred
 
 
 def approve_pending_review_for_batch_id(
@@ -639,12 +1104,27 @@ def _run_loop(
 
 
 __all__ = [
+    "BatchGateway",
     "PendingContribution",
+    "PendingReviewBatch",
     "PromotionResult",
     "approve_pending_contribution",
+    "approve_pending_review_batch",
+    "approve_points_only_for_batch",
+    "cascade_reject_deferred_for_gateway",
+    "count_new_gateways_for_batch",
+    "defer_points_tied_to_new_gateways",
     "get_pending_review",
+    "list_known_gateways_for_batch",
+    "list_pending_gateways_for_batch",
     "list_pending_review",
+    "list_pending_review_batches",
+    "list_pending_review_for_batch",
+    "list_quarantine_for_batch_display",
     "mark_submitted_for_linked_source",
+    "promote_deferred_for_gateway",
     "promote_pending_for_linked_source",
     "reject_pending_contribution",
+    "reject_pending_review_batch",
+    "reject_quarantine_for_batch",
 ]

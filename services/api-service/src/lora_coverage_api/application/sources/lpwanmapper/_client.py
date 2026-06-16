@@ -23,7 +23,7 @@ import httpx
 from ..errors import SourceAuthError, SourceFetchError, SourceUnreachableError
 
 DEFAULT_BASE_URL = "https://api.lpwanmapper.com"
-DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_TIMEOUT_S = 180.0
 
 
 class _AuthExpiredError(Exception):

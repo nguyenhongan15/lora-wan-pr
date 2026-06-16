@@ -28,9 +28,11 @@ from ..errors import SourceAuthError
 from . import _client, _mapping
 
 # Bao nhiêu measurement pull mỗi lần. API /data có param `limit` (max chưa
-# doc). Lấy 10k làm safe ceiling cho v1; nếu user có > 10k records mới sẽ
-# bị truncate — chấp nhận trade-off này v1, paginate ở v2 nếu cần.
-_FETCH_LIMIT = 10_000
+# doc, không có pagination/offset). 100k = ceiling đủ cho dataset hiện tại
+# (~12k điểm) + headroom; nếu server cap thực ở 10k thì kết quả vẫn 10k —
+# ta không biết tới khi probe thử. Tăng kèm timeout ở _client.py để tránh
+# payload lớn time out.
+_FETCH_LIMIT = 100_000
 
 
 class LpwanmapperSource(DataSource):
