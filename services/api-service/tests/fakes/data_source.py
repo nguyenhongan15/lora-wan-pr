@@ -57,7 +57,10 @@ class FakeDataSource(DataSource):
         self,
         handle: Any,
         since: datetime | None,
+        *,
+        limit: int | None = None,
     ) -> Iterator[MeasurementRecord]:
+        del limit  # fake ignore — không cần cap; real adapter (lpwanmapper) dùng
         for m in self._measurements:
             if since is None or m.time > since:
                 yield m

@@ -117,13 +117,15 @@ class ChirpStackSource(DataSource):
         self,
         handle: ConnectionHandle,
         since: datetime | None,
+        *,
+        limit: int | None = None,
     ) -> Iterator[MeasurementRecord]:
         # ChirpStack v4 không expose bulk historical uplink qua REST. Frame log
         # là buffer nhỏ realtime cho UI debug, không phải data store. Cách
         # tích hợp đúng = ChirpStack HTTP integration push uplinks về
         # webhook của ta (v2). v1 trả empty: link + sync gateways vẫn hoạt
         # động, đủ validate multi-source architecture.
-        del handle, since
+        del handle, since, limit
         return iter(())
 
     def fetch_devices(self, handle: ConnectionHandle) -> Iterator[DeviceRecord]:

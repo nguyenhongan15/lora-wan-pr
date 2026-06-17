@@ -140,8 +140,14 @@ class DataSource(ABC):
         self,
         handle: ConnectionHandle,
         since: datetime | None,
+        *,
+        limit: int | None = None,
     ) -> Iterator[MeasurementRecord]:
         """Yield measurements với time > since. None = fetch all.
+
+        `limit` cap số record gốc adapter request từ upstream (None = adapter
+        default; thường = full). Live-pull truyền limit nhỏ để giảm bandwidth;
+        sync DB không truyền → adapter pull đủ.
 
         Order: ascending time within same device, ngược lại không xác định.
         Caller dedup theo external_id.

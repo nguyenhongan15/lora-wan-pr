@@ -65,13 +65,17 @@ _GATEWAY_UPSERT_SQL = text("""
         -- được "cướp" gateway và bẻ lại metadata. Legacy row có
         -- contributor_user_id IS NULL → bất kỳ sync nào cũng update được
         -- (grandfather 15 seed gateway).
+        -- Thêm guard `metadata_locked` (mig 0034): admin tick khoá thì sync
+        -- KHÔNG bao giờ ghi đè location + altitude_m, bất kể contributor.
         location            = CASE
+            WHEN geo.gateways.metadata_locked THEN geo.gateways.location
             WHEN geo.gateways.contributor_user_id IS NULL
               OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
             THEN EXCLUDED.location
             ELSE geo.gateways.location
         END,
         altitude_m          = CASE
+            WHEN geo.gateways.metadata_locked THEN geo.gateways.altitude_m
             WHEN geo.gateways.contributor_user_id IS NULL
               OR geo.gateways.contributor_user_id = EXCLUDED.contributor_user_id
             THEN EXCLUDED.altitude_m

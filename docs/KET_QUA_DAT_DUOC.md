@@ -60,7 +60,7 @@ Tài liệu báo cáo trạng thái dự án tính tới **16/06/2026**. Số li
 
 ### 1.6. Dữ liệu
 
-- ✅ **~10.000 điểm khảo sát Đà Nẵng** (11 gateway DNIIT) + ~2.000 điểm Hải Phòng (2 gateway pilot).
+- ✅ **~10.000 điểm khảo sát Đà Nẵng** (11 gateway DNIIT).
 - ✅ **DEM/DSM gap-fill:** Copernicus 30m + ESA WorldCover land cover + Google Buildings + Microsoft Buildings.
 - ✅ **Tách tập rõ ràng:** train+val = Nov–Dec 2025 random; test = Jan–Feb 2026 temporal hold-out.
 
@@ -70,12 +70,36 @@ Tài liệu báo cáo trạng thái dự án tính tới **16/06/2026**. Số li
 
 - ❌ **Benchmark thuật toán hẹp:** chỉ so sánh Extra Trees vs XGBoost cùng 21 features. Chưa test RandomForest / LightGBM / CatBoost / Ridge baseline → không có căn cứ định lượng đầy đủ cho lựa chọn ET.
 - ❌ **Bias +2.61 dB trên temporal hold-out** (over-predict RSSI ~2.6 dB), tập trung ở khoảng cách <2km (+3.87 dB) — chưa fix; từng thử hardcode -4.67 dB rồi revert vì overfit-to-holdout.
-- ❌ **Tập kiểm chứng hẹp:** temporal hold-out chỉ bao 4/13 gateway Đà Nẵng outdoor. Indoor gateway + 9 gateway còn lại chưa được validate.
-- ❌ **Cross-region chưa eval:** Hải Phòng chỉ 2 gateway pilot, chưa chạy `--bbox haiphong` để kiểm tra generalization.
+- ❌ **Tập kiểm chứng hẹp:** temporal hold-out chỉ bao 4/11 gateway Đà Nẵng outdoor. Indoor gateway + 7 gateway còn lại chưa được validate.
 - ❌ **Stage 2 ML cho heatmap bị drop** (từ 2026-06-09) vì không ổn định ở vùng thưa dữ liệu → heatmap hiện thuần vật lý + overlay khảo sát.
+- ❌ **API vs offline gap chưa khép:** `/coverage/predict` cho bias +4.55 / RMSE 13.47 dB trên cùng hold-out (offline script cho bias −0.25 / RMSE 10.58), do drift wiring serve-side; mọi đánh giá chính thức phải chạy script offline.
 
+### 2.2. Backend & API
 
+- ❌ **Số liệu prediction qua API lệch khỏi offline eval** (đã ghi ở 2.1) — cần thống nhất pipeline feature giữa `ml-service` runtime và script eval để đo trực tiếp trên `/coverage/predict`.
+- ❌ **Real-time pipeline đang tạm dừng:** ChirpStack webhook + SSE fanout đã wire xong nhưng pause từ 2026-06-09; panel "Theo dõi trực tiếp" hiện chỉ view-only, KHÔNG tạo batch khảo sát.
+- ❌ **CSV/JSON upload gặp gateway lạ thì reject row** — chưa cho phép luồng "đề xuất gateway mới ngay khi upload"; admin phải tạo gateway trước qua tab "Tạo mới gateway".
+- ❌ **OpenAPI thiếu các response 5xx có cấu trúc:** một số endpoint chỉ trả 500 generic thay vì RFC 7807 `problem+json` đầy đủ.
+- ❌ **Chưa expose metric Prometheus** và **chưa wire OpenTelemetry trace** (deferred); observability mới dừng ở structured log + `/healthz` + `/readyz`.
 
+### 2.3. Frontend
+
+- ❌ **Bản đồ phụ thuộc GeoJSON tĩnh** (`public/coverage/rssi/*.geojson`) — file lớn (vài MB) phải tải hết về client, chưa chuyển sang tile-server PMTiles.
+- ❌ **Tile-server riêng chưa kích hoạt** (`apps/tile-server/` mới ở giai đoạn skeleton); MapLibre vẫn lấy raster basemap qua provider ngoài.
+- ❌ **Chưa có mobile native app:** việc nhập khảo sát phụ thuộc app bên thứ ba (LPWANMapper) hoặc ChirpStack server riêng.
+- ❌ **Frontend chưa update sang luồng refresh cookie HttpOnly:** backend đã hỗ trợ rotate refresh-cookie (2026-05-19) nhưng web client vẫn dùng access-token-only.
+- ❌ **i18n đơn ngữ tiếng Việt** (`strings.js`); chưa có cấu trúc đa ngôn ngữ dù string đã tập trung 1 nguồn.
+- ❌ **Phân trang admin có nhưng chưa virtualize:** với batch lớn (>500 điểm), render danh sách trong dialog duyệt vẫn nặng.
+
+### 2.4. DevOps, hạ tầng & dữ liệu
+
+- ❌ **Cloudflare R2 chưa kích hoạt prod:** artifact ML và tile vẫn dùng bind mount trong container, chưa lên object storage; rollback model phải copy file thủ công.
+- ❌ **Demo public qua Cloudflare tunnel có stale cache nhiều layer** — bắt buộc test ở `localhost:5173`; tunnel `demo.*` không phải nguồn sự thật cho development.
+- ❌ **Một service VPS đơn lẻ** (Hetzner CPX31 8GB): chưa có high availability, chưa có replica DB, snapshot dump Postgres thủ công.
+- ❌ **CI smoke chạy `docker run` healthcheck đơn,** chưa có end-to-end test thật trên stack Compose; coverage test hiện ưu tiên `domain/application/integration` của api-service.
+- ❌ **DEM/DSM phải build offline:** `build_dsm --landcover-dir` + `build_buildings.py` chạy ngoài CI; nếu khu vực mới phải re-run thủ công trên máy có dữ liệu raster gốc.
+- ❌ **Dataset 1 vùng:** chỉ Đà Nẵng (~10.000 điểm walk-survey) → ngoại suy ra vùng nông thôn hoặc địa hình khác Việt Nam chưa có cơ sở định lượng.
+- ❌ **Khu vực thưa walk-survey không cover được:** vùng núi / vùng nước / khu công nghiệp ít người đi bộ → ML extrapolation không tin cậy.
 
 
 
@@ -84,5 +108,6 @@ Tài liệu báo cáo trạng thái dự án tính tới **16/06/2026**. Số li
 
 - ❌ **Bug D — shadowed quarantine never-promote** (`project_bug_d_shadowed_quarantine_2026_06_05.md`): quarantine row của contributor A bị shadow bởi training row của B sẽ kẹt vĩnh viễn vì SQL promotion dùng `NOT EXISTS` không match contributor.
 
+## 3. Tóm tắt
 
-
+Hệ thống đã hoàn thiện trục **chính**: pipeline vật lý ITU-R P.1812 + Extra Trees end-to-end, ba chế độ bản đồ, luồng đóng góp dữ liệu cộng đồng có kiểm duyệt, retrain tự động và hot-reload artifact. Trục **chưa khép kín**: hiệu chỉnh bias serving-side, mở rộng tập kiểm chứng ngoài 4 gateway, thay heatmap GeoJSON bằng tile-server, kích hoạt R2 cho artifact, và phục hồi pipeline thời gian thực sau khi pause. Mọi số liệu báo cáo defense lấy theo temporal hold-out Jan–Feb 2026, n=337, 4 gateway Đà Nẵng.

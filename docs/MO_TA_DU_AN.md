@@ -12,8 +12,7 @@ Xây dựng nền tảng web ước lượng và hiển thị vùng phủ sóng 
 
 - **Khu vực:** Việt Nam, băng tần AS923-2 (921.4–924.8 MHz).
 - **Trọng tâm:** Đà Nẵng (11 gateway DNIIT, ~10.000 điểm khảo sát).
-- **Phụ:** Hải Phòng (2 gateway, dùng làm tập kiểm chứng).
-- **Không thuộc phạm vi:** Multi-region, băng tần khác.
+- **Không thuộc phạm vi:** Multi-region, băng tần khác (US915/EU868), mobile native app.
 
 ## 3. Kiến trúc tổng quan
 
@@ -98,7 +97,7 @@ Code chia 5 tầng (`edge → application → domain ← infrastructure`), tách
 
 - **DEM nền (terrain):** Copernicus Global DEM 30m.
 - **DSM bề mặt:** Copernicus + gap-fill ESA WorldCover (land cover) + Google Buildings + Microsoft Buildings.
-- **Khảo sát thực địa:** ~10.000 điểm walk-measure Đà Nẵng + 2.000 điểm Hải Phòng, lưu trong hypertable `ts.survey_training` (Timescale).
+- **Khảo sát thực địa:** ~10.000 điểm walk-measure Đà Nẵng, lưu trong hypertable `ts.survey_training` (Timescale).
 - **Tách tập:** train+val = Nov–Dec 2025 (random); test = Jan–Feb 2026 (temporal hold-out).
 - **Luồng kiểm duyệt:** dữ liệu mới → `ts.survey_quarantine` → admin duyệt → `ts.survey_training`.
 
@@ -107,7 +106,7 @@ Code chia 5 tầng (`edge → application → domain ← infrastructure`), tách
 1. **Đăng nhập** (JWT + refresh cookie HttpOnly, rate-limit, lockout).
 2. **Khảo sát:** chọn nguồn (LPWANMapper hoặc ChirpStack) → web nhận packet real-time qua SSE.
 3. **Đóng góp dữ liệu:** sync từ nguồn linked hoặc upload CSV/JSON → vào hàng chờ admin duyệt.
-4. **Admin duyệt:** approve/reject/delete batch; approve → ghi vào training table + trigger retrain ML (Celery) + reset cờ rebuild heatmap.
+4. **Admin duyệt:** 4 chế độ approve batch (`all` / `points_only` / `gateways_only` / `reject`); approve điểm → ghi vào training table + trigger retrain ML (Celery) + reset cờ rebuild heatmap cho gateway bị ảnh hưởng; approve gateway → promote `geo.gateway_quarantine` → `geo.gateways` + backfill FK qua `serving_gateway_eui`.
 5. **Dự đoán/hiển thị:** web gọi API → Stage 1 + Stage 2 → hiển thị bản đồ.
 
 ## 9. Hạ tầng triển khai
@@ -127,13 +126,13 @@ Code chia 5 tầng (`edge → application → domain ← infrastructure`), tách
 **Hạn chế cần nêu rõ trong báo cáo:**
 - Benchmark thuật toán còn hẹp (chỉ ET vs XGBoost cùng pipeline 21-feat).
 - Bias +2.61 dB trên temporal hold-out cho thấy mô hình over-predict RSSI ~2.6 dB ở khoảng cách gần (<2km), nhiều khả năng do urban clutter biến thiên.
-- Tập kiểm chứng temporal chỉ bao 4/13 gateway Đà Nẵng outdoor; chưa đánh giá cross-region với Hải Phòng.
+- Tập kiểm chứng temporal chỉ bao 4/11 gateway Đà Nẵng outdoor; chưa cover indoor gateway và 7 gateway còn lại.
 - Dữ liệu khảo sát thưa ở vùng xa walk-survey → ngoại suy ML kém tin cậy.
 - Stage 2 áp cho heatmap đã bị drop vì không ổn định trên vùng thưa dữ liệu → heatmap hiện thuần vật lý + overlay khảo sát.
 
 ## 11. Hướng phát triển
 
-- Đánh giá cross-region Hải Phòng (kiểm tra generalization).
+- Mở rộng tập kiểm chứng sang gateway indoor và 7 gateway Đà Nẵng còn lại chưa có trong hold-out.
 - Hiệu chỉnh bias +2.61 dB ở serving layer hoặc qua retrain với feature mới (urban density biến thiên).
 - Mở rộng benchmark sang RandomForest / LightGBM / Ridge baseline.
 - Mobile app (React Native) cho khảo sát thực địa.

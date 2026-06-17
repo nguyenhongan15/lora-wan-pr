@@ -506,12 +506,12 @@ const REALTIME_BADGE_TICK_MS = 5000;
 // (countdown từ sessionStartedAt / lastSeenAt), các lần sau cách nhau REPEAT
 // (countdown từ thời điểm popup hiện gần nhất hoặc lastSeenAt — cái nào mới
 // hơn). Auto-close sau AUTO_CLOSE_MS.
-const REALTIME_NO_PACKET_ALERT_MS_FIRST = 60 * 1000;
+const REALTIME_NO_PACKET_ALERT_MS_FIRST = 3 * 60 * 1000;
 const REALTIME_NO_PACKET_ALERT_MS_REPEAT = 3 * 60 * 1000;
 const REALTIME_NO_PACKET_ALERT_AUTO_CLOSE_MS = 10 * 1000;
 // Khi auto-pan tới điểm mới, zoom tối thiểu để user thấy chi tiết đường đi.
 // Giữ zoom cao hơn nếu user đang zoom xa hơn (max → preserve user intent).
-const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 15;
+const REALTIME_AUTO_FOLLOW_MIN_ZOOM = 17;
 // Reference ổn định cho displayedItems khi chưa có data — tránh `?? []` tạo
 // array mới mỗi render gây useEffect deps re-fire.
 const EMPTY_TRAINING_ITEMS = Object.freeze(/** @type {never[]} */ ([]));
@@ -1950,12 +1950,16 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
       coverageViewMode === "estimate" &&
       estimateGatewayCode != null;
 
+    // Tab "Bản đồ phủ sóng" (heatmap) hiện TẤT CẢ gateway bất kể state —
+    // composite/per-gw GeoJSON build từ mọi gateway is_public, marker phải
+    // khớp để user thấy nguồn phủ sóng đầy đủ.
+    const heatmapShowAllStates = mode === "heatmap";
     for (const g of gatewaysQ.data.items) {
       if (filterEstimateGw && g.code !== estimateGatewayCode) continue;
       // Mặc định chỉ hiện marker khi gateway đang online (ChirpStack hoặc
       // fallback MAX(timestamp) trong 5 phút, hoặc manual_state_override=
       // 'online'). User tick "Hiện toàn bộ gateway" → bỏ qua filter này.
-      if (!showAllGateways && g.state !== "online") continue;
+      if (!heatmapShowAllStates && !showAllGateways && g.state !== "online") continue;
       const el = document.createElement("div");
       el.className = "cm-gw-marker";
       el.setAttribute("aria-label", `Gateway ${g.code}`);
@@ -2052,10 +2056,13 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
     // filterEstimateGw) để ring không vẽ vào điểm bị ẩn.
     const pulseSrc = map.getSource("cm-gw-pulse-src");
     if (pulseSrc && "setData" in pulseSrc) {
+      // Pulse ring chỉ feed gateway ONLINE — pulse là tín hiệu "đang hoạt
+      // động", hiện cho offline sẽ gây hiểu nhầm. Marker (dot) hiện đủ ở
+      // heatmap để khớp coverage; pulse phân biệt online vs offline.
       const pulseFeatures = gatewaysQ.data.items
         .filter((g) => {
           if (filterEstimateGw && g.code !== estimateGatewayCode) return false;
-          if (!showAllGateways && g.state !== "online") return false;
+          if (g.state !== "online") return false;
           return g.latitude != null && g.longitude != null;
         })
         .map((g) => ({

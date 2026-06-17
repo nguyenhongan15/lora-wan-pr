@@ -27,12 +27,13 @@ from ..base import (
 from ..errors import SourceAuthError
 from . import _client, _mapping
 
-# Bao nhiêu measurement pull mỗi lần. API /data có param `limit` (max chưa
-# doc, không có pagination/offset). 100k = ceiling đủ cho dataset hiện tại
-# (~12k điểm) + headroom; nếu server cap thực ở 10k thì kết quả vẫn 10k —
-# ta không biết tới khi probe thử. Tăng kèm timeout ở _client.py để tránh
-# payload lớn time out.
-_FETCH_LIMIT = 100_000
+# Bao nhiêu uplink pull mỗi lần khi caller KHÔNG truyền `limit` (= SyncService
+# "Tải dữ liệu mới nhất"). API /data có param `limit` (max chưa doc, không có
+# pagination/offset / since). 100k = ceiling đủ cho dataset hiện tại (~12k
+# điểm) + headroom; nếu server cap thực ở 10k thì kết quả vẫn 10k — ta không
+# biết tới khi probe thử. Tăng kèm timeout ở _client.py để tránh payload lớn
+# time out.
+_FETCH_LIMIT_SYNC = 100_000
 
 
 class LpwanmapperSource(DataSource):
@@ -70,10 +71,14 @@ class LpwanmapperSource(DataSource):
         self,
         handle: ConnectionHandle,
         since: datetime | None,
+        *,
+        limit: int | None = None,
     ) -> Iterator[MeasurementRecord]:
         # 1 lpwanmapper /data record = 1 ChirpStack uplink → N MeasurementRecord
-        # (1 / rxInfo gateway). Filter `since` áp dụng theo time của từng record.
-        for uplink in self._fetch_data_with_reauth(handle):
+        # (1 / rxInfo gateway). Filter `since` áp dụng theo time của từng record
+        # (API /data không hỗ trợ `since` native, phải client-side).
+        effective_limit = limit if limit is not None else _FETCH_LIMIT_SYNC
+        for uplink in self._fetch_data_with_reauth(handle, effective_limit):
             for rec in _mapping.measurement_records(uplink):
                 if since is None or rec.time > since:
                     yield rec
@@ -86,12 +91,12 @@ class LpwanmapperSource(DataSource):
         del handle
         return iter(())
 
-    def _fetch_data_with_reauth(self, handle: dict[str, Any]) -> list[dict[str, Any]]:
+    def _fetch_data_with_reauth(self, handle: dict[str, Any], limit: int) -> list[dict[str, Any]]:
         client: _client.Client = handle["client"]
         try:
-            return client.get_recent_data(handle["token"], limit=_FETCH_LIMIT)
+            return client.get_recent_data(handle["token"], limit=limit)
         except _client._AuthExpiredError:
             creds = handle["credentials"]
             login = client.login(creds["email"], creds["password"])
             handle["token"] = login["token"]
-            return client.get_recent_data(handle["token"], limit=_FETCH_LIMIT)
+            return client.get_recent_data(handle["token"], limit=limit)

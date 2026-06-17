@@ -4,11 +4,17 @@ flowchart TB
   SYNC["Sync packet"]
   UPL["Upload CSV/JSON"]
   QS[("ts.survey_quarantine")]
-  QG[("geo.gateway_quarantine")]
-  ADMIN{"Admin duyệt"}
-  GWT[("geo.gateways<br/>+ backfill FK survey")]
+  QG[("geo.gateway_quarantine<br/>batch_id FK upload_batches")]
+  BATCH{"Admin duyệt batch<br/>(4 chế độ)"}
+  ALL["all<br/>duyệt cả điểm + gateway"]
+  PO["points_only<br/>duyệt điểm, giữ gateway pending"]
+  GO["gateways_only<br/>chỉ duyệt gateway"]
+  REJB["reject<br/>từ chối toàn batch"]
+  GWT[("geo.gateways<br/>+ backfill FK survey<br/>qua serving_gateway_eui")]
   TRAIN[("ts.survey_training")]
-  TRIG["Reset last_rebuild_at = NULL<br/>+ (tuỳ chọn) retrain ML"]
+  PEND[("Trạng thái pending_gateway<br/>(điểm chờ gateway duyệt)")]
+  AUTO["Auto-promote<br/>khi gateway phục vụ được duyệt"]
+  TRIG["Reset last_rebuild_at = NULL<br/>cho gateway bị ảnh hưởng<br/>+ (tuỳ chọn) retrain ML"]
   REJ["Reject row<br/>(gateway lạ → admin tạo trước)"]
 
   SRC --> SYNC
@@ -16,9 +22,18 @@ flowchart TB
   SYNC --> QG
   UPL --> QS
   UPL -. gặp gateway lạ .-> REJ
-  QG --> ADMIN
-  QS --> ADMIN
-  ADMIN -->|duyệt gateway| GWT
-  ADMIN -->|duyệt batch| TRAIN
+  QS --> BATCH
+  QG --> BATCH
+  BATCH --> ALL
+  BATCH --> PO
+  BATCH --> GO
+  BATCH --> REJB
+  ALL --> GWT
+  ALL --> TRAIN
+  PO --> TRAIN
+  PO --> PEND
+  GO --> GWT
+  PEND -. khi gateway duyệt .-> AUTO --> TRAIN
+  GO --> AUTO
   GWT --> TRIG
   TRAIN --> TRIG

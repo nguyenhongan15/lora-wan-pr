@@ -68,8 +68,11 @@ Grep no-leaky-strings: tên storage tier (`postgres`, `redis`, `s3`, `GiST`...) 
 
 ### 3.2. Migration
 
-- Tool: Alembic, file `migrations/versions/0001..0031_*.py` (31 revisions hiện tại).
-- Latest: `0031_upload_batches_live_session_kind` (theo dõi trực tiếp).
+- Tool: Alembic, file `migrations/versions/0001..0033_*.py` (33 revisions hiện tại).
+- Latest: `0033_gateway_manual_state_override` (admin có thể ép trạng thái gateway thủ công bất chấp tín hiệu sống).
+- Mốc gần đây quan trọng:
+  - `0031_upload_batches_live_session_kind` — phân biệt batch khảo sát thường vs phiên "theo dõi trực tiếp".
+  - `0032_batch_id_on_gateway_quarantine` — gắn FK `batch_id` từ quarantine gateway sang `upload_batches`, hợp nhất luồng duyệt batch + gateway (xem §14).
 - Một-chiều: KHÔNG downgrade trong môi trường có data thật.
 - Container `migrate` chạy `alembic upgrade head` 1 lần khi `docker compose up`.
 
@@ -233,6 +236,8 @@ Gateway → ChirpStack server → POST /chirpstack/webhook (api-service)
 - **Webhook auth:** per-tenant token, lưu `mig 0014_chirpstack_webhook_tokens`.
 - **SSE:** `GET /api/v1/me/live-sessions/sse?source_id=...` — server-sent events stream, idle timeout 15 phút.
 - **Sync cadence:** 20 giây (`project_realtime_troubleshoot_checklist.md`).
+- **Trạng thái panel "Theo dõi trực tiếp" (2026-06-16):** view-only — chỉ hiển thị gói tin live cho người dùng quan sát, **không tạo batch khảo sát**. Việc đóng góp dữ liệu vẫn chỉ qua đồng bộ linked source hoặc upload CSV/JSON (xem §14).
+- **Pipeline backend đã wire xong** (tunnel ChirpStack + proxy + .env) nhưng đang **tạm dừng** ở giai đoạn này; khôi phục bằng cách bật lại tunnel + fanout + đổi URL HTTP Integration của ChirpStack.
 
 ## 10. Triển khai
 
@@ -289,18 +294,30 @@ Trigger: push & PR vào `main`. Image tag theo git SHA cho rollback.
 
 ## 14. Quản lý gateway và dữ liệu khảo sát
 
+Từ 2026-06-17 (mig `0032`), quy trình batch và gateway được **hợp nhất** — admin chỉ duyệt 1 batch nhưng có thể chọn cách xử lý đối tượng bên trong.
+
 ```
-Người dùng kết nối linked source (LPWANMapper/ChirpStack)
+Người dùng kết nối linked source (LPWANMapper / ChirpStack)
      ↓
-Sync packet → ts.survey_quarantine + geo.gateway_quarantine (gateway lạ)
+Sync packet → ts.survey_quarantine + geo.gateway_quarantine
+              (gateway_quarantine.batch_id FK upload_batches.id)
      ↓
-Admin duyệt:
-  ├─ Gateway → geo.gateways + backfill FK survey
-  └─ Survey batch → ts.survey_training
+Admin xem 1 batch (kèm gateway pending) → chọn 4 chế độ:
+  ├─ all            → duyệt cả điểm khảo sát và gateway mới
+  ├─ points_only    → duyệt điểm, GIỮ gateway ở pending_gateway
+  ├─ gateways_only  → chỉ duyệt gateway, GIỮ điểm chờ
+  └─ reject         → từ chối toàn batch
+     ↓
+Khi gateway duyệt → geo.gateways + backfill FK survey qua serving_gateway_eui
+Khi điểm duyệt   → ts.survey_training (kèm auto-promote pending_gateway còn lại)
      ↓
 Trigger:
-  ├─ Reset last_rebuild_at = NULL cho gateway bị ảnh hưởng → next rebuild full
-  └─ Optional: trigger retrain ML
+  ├─ Reset last_rebuild_at = NULL cho gateway bị ảnh hưởng → rebuild luôn chạy lần sau
+  └─ (Tuỳ chọn) trigger retrain ML
 ```
+
+Trạng thái mới `pending_gateway` (mig `0032`) cho phép điểm khảo sát được duyệt trước rồi tự động "thoát treo" khi gateway phục vụ của nó được duyệt sau (cùng `serving_gateway_eui`).
+
+**Manual override (mig `0033`):** admin có thể đánh dấu gateway `up` / `down` / `unknown` bất chấp ping tự động — giải pháp cho trường hợp gateway tạm ngắt mạng nhưng vẫn cần ẩn khỏi map.
 
 CSV/JSON upload: alias header linh hoạt, default SNR/freq; gặp gateway lạ → reject row (admin tạo gateway trước qua tab "Tạo mới gateway"). Chi tiết: memory `project_csv_upload_new_gateway_deferred_2026_06_14.md`.

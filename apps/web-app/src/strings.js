@@ -1011,7 +1011,7 @@ export const strings = {
     rebuild: {
       title: "Rebuild bản đồ ước lượng",
       subtitle:
-        "Chạy lại composite + per-gateway map. Config: P.1812 (lý thuyết) + DTM (địa hình) + per-gateway noise floor + survey overlay per-gw (gateway có điểm đo nhận overlay riêng, gateway không có điểm đo giữ pure physics). KHÔNG dùng Stage 2 ML. Grid 50m × 50m. Chỉ rebuild khi có gói tin mới.",
+        "Chỉ rebuild khi có gói tin mới.",
       btn: "Rebuild ngay",
       btnPending: "Đang chạy…",
       statusQueued: "Đang chờ worker",
@@ -1101,7 +1101,7 @@ export const strings = {
     retrain: {
       title: "Retrain mô hình ML",
       subtitle:
-        "Train lại Extra Trees Regressor cho /coverage/predict. Sau khi xong, ml-service hot-reload joblib (không cần restart container). Mỗi lần train ~vài phút, tuỳ kích thước dataset.",
+        "Train lại Extra Trees Regressor cho dự đoán RSSI theo vị trí.",
       btn: "Retrain ngay",
       btnPending: "Đang chạy…",
       statusQueued: "Đang chờ worker",
