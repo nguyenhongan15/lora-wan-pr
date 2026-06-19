@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-16T23:32:46Z",
+  "generated_at": "2026-06-18T09:47:01Z",
   "grid_m": 50.0,
   "bbox": {
     "lat_min": 15.8,
@@ -27,9 +27,9 @@
     "enabled": true,
     "scope": "per_gw",
     "max_link_km": 50.0,
-    "n_points": 12411,
-    "n_points_in_grid": 12411,
-    "n_cells_overlaid": 2861,
+    "n_points": 14017,
+    "n_points_in_grid": 14017,
+    "n_cells_overlaid": 2909,
     "n_gw_with_data": 13,
     "n_gw_overlaid": 13
   },
@@ -92,18 +92,18 @@
     {
       "code": "7276ff000b031aec",
       "name": "Kerlink iStation AEC",
-      "lat": 16.0732364654541,
-      "lon": 108.1514663696289,
+      "lat": 16.07484,
+      "lon": 108.15411,
       "noise_floor_dbm": null,
       "sub_grid": {
-        "iy_start": 8,
+        "iy_start": 11,
         "ix_start": 0,
-        "sub_ny": 1107,
-        "sub_nx": 1140
+        "sub_ny": 1104,
+        "sub_nx": 1145
       },
-      "elapsed_s": 316.9,
-      "n_finite": 1261980,
-      "n_total": 1261980,
+      "elapsed_s": 300.2,
+      "n_finite": 1264080,
+      "n_total": 1264080,
       "per_gw_geojson": "per_gw/7276ff000b031aec.geojson"
     },
     {
@@ -118,7 +118,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 316.9,
+      "elapsed_s": 299.6,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/7276ff002e0507da.geojson"
@@ -135,7 +135,7 @@
         "sub_ny": 1115,
         "sub_nx": 1143
       },
-      "elapsed_s": 320.6,
+      "elapsed_s": 305.0,
       "n_finite": 1274445,
       "n_total": 1274445,
       "per_gw_geojson": "per_gw/7276ff002e06029f.geojson"
@@ -143,8 +143,8 @@
     {
       "code": "7276ff002e061f5b",
       "name": "7276ff002e061f5b",
-      "lat": 16.075590133666992,
-      "lon": 108.22207641601562,
+      "lat": 16.075641632080078,
+      "lon": 108.2220687866211,
       "noise_floor_dbm": null,
       "sub_grid": {
         "iy_start": 13,
@@ -152,7 +152,7 @@
         "sub_ny": 1102,
         "sub_nx": 1196
       },
-      "elapsed_s": 338.0,
+      "elapsed_s": 319.6,
       "n_finite": 1317992,
       "n_total": 1317992,
       "per_gw_geojson": "per_gw/7276ff002e061f5b.geojson"
@@ -160,8 +160,8 @@
     {
       "code": "7276ff002e062cf2",
       "name": "7276ff002e062cf2",
-      "lat": 16.11829376220703,
-      "lon": 108.27363586425781,
+      "lat": 16.118310928344727,
+      "lon": 108.27360534667969,
       "noise_floor_dbm": null,
       "sub_grid": {
         "iy_start": 108,
@@ -169,7 +169,7 @@
         "sub_ny": 1007,
         "sub_nx": 1086
       },
-      "elapsed_s": 260.0,
+      "elapsed_s": 268.2,
       "n_finite": 1093602,
       "n_total": 1093602,
       "per_gw_geojson": "per_gw/7276ff002e062cf2.geojson"
@@ -186,7 +186,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 312.7,
+      "elapsed_s": 317.5,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a840411eebb44150.geojson"
@@ -203,7 +203,7 @@
         "sub_ny": 1105,
         "sub_nx": 1142
       },
-      "elapsed_s": 313.3,
+      "elapsed_s": 318.9,
       "n_finite": 1261910,
       "n_total": 1261910,
       "per_gw_geojson": "per_gw/a84041ffff1ec39f.geojson"
@@ -220,7 +220,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 339.5,
+      "elapsed_s": 345.1,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab20.geojson"
@@ -237,7 +237,7 @@
         "sub_ny": 1024,
         "sub_nx": 1091
       },
-      "elapsed_s": 268.5,
+      "elapsed_s": 268.8,
       "n_finite": 1117184,
       "n_total": 1117184,
       "per_gw_geojson": "per_gw/ac1f09fffe00ab25.geojson"
@@ -254,7 +254,7 @@
         "sub_ny": 1115,
         "sub_nx": 1201
       },
-      "elapsed_s": 338.0,
+      "elapsed_s": 341.2,
       "n_finite": 1339115,
       "n_total": 1339115,
       "per_gw_geojson": "per_gw/ac1f09fffe06fcf2.geojson"
@@ -262,8 +262,8 @@
     {
       "code": "ac1f09fffe0fd629",
       "name": "ac1f09fffe0fd629",
-      "lat": 16.06815,
-      "lon": 108.15448,
+      "lat": 16.06822,
+      "lon": 108.15446,
       "noise_floor_dbm": null,
       "sub_grid": {
         "iy_start": 0,
@@ -271,7 +271,7 @@
         "sub_ny": 1115,
         "sub_nx": 1146
       },
-      "elapsed_s": 317.4,
+      "elapsed_s": 322.7,
       "n_finite": 1277790,
       "n_total": 1277790,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd629.geojson"
@@ -288,7 +288,7 @@
         "sub_ny": 1015,
         "sub_nx": 1158
       },
-      "elapsed_s": 286.4,
+      "elapsed_s": 290.9,
       "n_finite": 1175370,
       "n_total": 1175370,
       "per_gw_geojson": "per_gw/ac1f09fffe0fd63b.geojson"
@@ -305,7 +305,7 @@
         "sub_ny": 1102,
         "sub_nx": 1143
       },
-      "elapsed_s": 264.0,
+      "elapsed_s": 269.8,
       "n_finite": 1259586,
       "n_total": 1259586,
       "per_gw_geojson": "per_gw/ac1f09fffe168f85.geojson"

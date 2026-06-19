@@ -2162,12 +2162,19 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
     const grid = document.createElement("div");
     grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px 12px";
 
-    grid.appendChild(
-      buildFieldCell(t.popup.fields.rssi, `${prediction.rssi_dbm.toFixed(1)} dBm`),
+    // 1σ safe range = ±√(epi+ale). σ=0 (BE cũ) → fallback hiển thị 1 số.
+    const sigma = Math.sqrt(
+      (prediction.confidence.epistemic_variance_db2 ?? 0)
+        + (prediction.confidence.aleatoric_variance_db2 ?? 0),
     );
-    grid.appendChild(
-      buildFieldCell(t.popup.fields.snr, `${prediction.snr_db.toFixed(1)} dB`),
-    );
+    const rssiText = sigma > 0
+      ? `${(prediction.rssi_dbm - sigma).toFixed(1)} → ${(prediction.rssi_dbm + sigma).toFixed(1)} dBm`
+      : `${prediction.rssi_dbm.toFixed(1)} dBm`;
+    const snrText = sigma > 0
+      ? `${(prediction.snr_db - sigma).toFixed(1)} → ${(prediction.snr_db + sigma).toFixed(1)} dB`
+      : `${prediction.snr_db.toFixed(1)} dB`;
+    grid.appendChild(buildFieldCell(t.popup.fields.rssi, rssiText));
+    grid.appendChild(buildFieldCell(t.popup.fields.snr, snrText));
     grid.appendChild(
       buildFieldCell(
         t.popup.fields.pdr,

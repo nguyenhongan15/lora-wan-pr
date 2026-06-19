@@ -1,24 +1,20 @@
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#D9E2F3','primaryBorderColor':'#2E5496','primaryTextColor':'#000000','lineColor':'#2E5496','fontFamily':'Arial','fontSize':'14px'}}}%%
 flowchart TB
   subgraph NET["bridge network: lora-wan-net"]
-    NGINX["Nginx"]
-    API["lora-wan-api<br/>(FastAPI)"]
-    ML["lora-wan-ml<br/>(sklearn)"]
-    CELERY["lora-wan-celery"]
-    CACHE[("lora-wan-cache<br/>valkey:8-alpine")]
-    DB[("lora-wan-db<br/>timescaledb-ha pg17<br/>DB chỉ bind 127.0.0.1:5432")]
-    MIG["lora-wan-migrate<br/>(alembic upgrade head, chạy 1 lần)"]
+    NGINX["Nginx<br/>(Web service + phục vụ Web UI)"]
+    API["lora-wan-api<br/>(API Service – FastAPI)"]
+    ML["lora-wan-ml<br/>(Machine learning Service – sklearn)"]
+    DB["lora-wan-db<br/>(Database – timescaledb-ha pg17)<br/>chỉ bind 127.0.0.1:5432"]
   end
-  VOL[["volume: lora-wan-db-data"]]
-  MNT[["bind mount: DEM / OSM / report"]]
+  LPWAN["Server lpwanmapper<br/>(api.lpwanmapper.com, ngoài hệ thống)"]
+  VOL["volume: lora-wan-db-data"]
+  MNT["bind mount: DEM / OSM / report"]
 
   NGINX --> API
-  NGINX --> ML
+  NGINX --> LPWAN
   API <--> ML
   API --> DB
-  API <--> CACHE
-  CELERY <--> CACHE
-  CELERY --> DB
-  MIG --> DB
-  DB --- VOL
   API --- MNT
+  DB --- VOL
+
+  linkStyle default stroke:#2E5496,stroke-width:2.6px,fill:none

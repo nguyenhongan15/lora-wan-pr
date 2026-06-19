@@ -27,6 +27,7 @@ Est. time: 5-30 phút cho 10000 rows (terrain sampling dọc path 30m/step).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -35,6 +36,7 @@ from collections import Counter
 from pathlib import Path
 
 import geopandas as gpd
+import h3
 import numpy as np
 import pandas as pd
 import rasterio
@@ -74,6 +76,19 @@ GATEWAY_ANTENNA_H_M = 15.0
 
 # Path sampling step.
 PATH_STEP_M = 30.0
+
+# --- Split rule (H3 + temporal hold-out) ---
+# Plan: chia 70/15/15 train/val/test, phan tang theo o luoi H3 res 8
+# (~0.74 km^2/cell, scale "khu pho"). Test = sessions moi nhat, cap 30%/cell.
+# Val = sessions tiep theo. Train = phan con lai, loai bo cell nam trong
+# buffer 1-ring quanh test/val (cho cell khoi rò ri canh nhau).
+H3_RES = 8
+SESSION_WINDOW_S = 3600  # 1 gio — khop toc do bo + cadence packet
+TEST_QUOTA = 1500
+VAL_QUOTA = 1500
+BUFFER_RING = 0  # cell-disjoint H3 res 8 ~860m centroid da du tach roi; ring 1
+# voi dataset 14k rows phu khu do thi DN se "an" 73% data vao vung dem.
+TEST_CELL_CAP_RATIO = 0.30  # 1 cell khong chiem qua 30% test rows
 
 
 # --- DEM cache ---
@@ -454,6 +469,155 @@ def add_terrain_features(
     return df
 
 
+def assign_h3_session_split(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Gan cot data_split (train/val/test) theo H3 res 8 + session 1h.
+
+    Quy tac:
+    - Session = (device, h3_cell, floor(ts / 3600s)). Moi packet trong cung
+      session => cung split, tranh ro ri packet anh em.
+    - test: sessions moi nhat, cap TEST_CELL_CAP_RATIO/cell, lay den TEST_QUOTA rows.
+    - val:  sessions tiep theo, lay den VAL_QUOTA rows.
+    - excluded_buffer: train candidate nam trong grid_disk(test+val cells, 1) — DROP.
+    - train: con lai.
+
+    Tra (df_kept, stats). df_kept da drop excluded_buffer + helper col.
+    """
+    log.info(
+        "assigning H3+temporal split (res=%d, session=%ds, buffer_ring=%d)...",
+        H3_RES,
+        SESSION_WINDOW_S,
+        BUFFER_RING,
+    )
+
+    df["h3_cell"] = [
+        h3.latlng_to_cell(float(la), float(lo), H3_RES)
+        for la, lo in zip(df["lat"], df["lon"], strict=False)
+    ]
+
+    ts_epoch = pd.to_datetime(df["time"], utc=True).astype("int64") // 1_000_000_000
+    bucket = (ts_epoch // SESSION_WINDOW_S).astype("int64")
+    device_str = df["device"].fillna("anon").astype(str)
+    df["session_id"] = device_str + "|" + df["h3_cell"] + "|" + bucket.astype(str)
+    df["_ts_epoch"] = ts_epoch
+
+    # Aggregate theo CELL — quota cap cell de tranh blow-up khi cell co nhieu
+    # session. Truoc day loop session-level + cap test_count theo s.n_rows nhung
+    # labeling cuoi sweep toan cell → test bi vuot quota nhieu lan (vd. 5.8x).
+    # Cell-level quota: pick cell newest-first, accumulate cell's total rows.
+    cell_agg = (
+        df.groupby("h3_cell", as_index=False)
+        .agg(
+            last_ts=("_ts_epoch", "max"),
+            n_rows=("rssi", "size"),
+        )
+        .sort_values(["last_ts", "h3_cell"], ascending=[False, True])
+    )
+    n_sessions = df["session_id"].nunique()
+    log.info(
+        "total cells: %d, total sessions: %d (avg %.1f rows/cell)",
+        len(cell_agg),
+        n_sessions,
+        len(df) / max(len(cell_agg), 1),
+    )
+
+    cap_per_cell = max(int(TEST_QUOTA * TEST_CELL_CAP_RATIO), 60)
+    test_cells: set[str] = set()
+    test_count = 0
+    for c in cell_agg.itertuples(index=False):
+        if test_count >= TEST_QUOTA:
+            break
+        if c.n_rows > cap_per_cell:
+            # Cell hotspot (vd. truong dai hoc ~1000 rows) — skip de tranh
+            # 1 cell chiem >30% test set, ep test phai phan tan dia ly.
+            continue
+        test_cells.add(c.h3_cell)
+        test_count += c.n_rows
+
+    val_cells: set[str] = set()
+    val_count = 0
+    for c in cell_agg.itertuples(index=False):
+        if c.h3_cell in test_cells:
+            continue
+        if val_count >= VAL_QUOTA:
+            break
+        if c.n_rows > cap_per_cell:
+            continue
+        val_cells.add(c.h3_cell)
+        val_count += c.n_rows
+
+    test_buffer: set[str] = set()
+    for c in test_cells:
+        test_buffer.update(h3.grid_disk(c, BUFFER_RING))
+    val_buffer: set[str] = set()
+    for c in val_cells:
+        val_buffer.update(h3.grid_disk(c, BUFFER_RING))
+    exclude_zone = (test_buffer | val_buffer) - test_cells - val_cells
+
+    def _label_row(cell: str) -> str:
+        # Label HOAN TOAN theo cell — dam bao cell-disjoint train/val/test.
+        # 1 cell co the chua nhieu session, neu chi label theo session_id thi
+        # cac session khac cung cell se ket o train → leak cell (assert fail).
+        if cell in test_cells:
+            return "test"
+        if cell in val_cells:
+            return "val"
+        if cell in exclude_zone:
+            return "excluded_buffer"
+        return "train"
+
+    df["data_split"] = [_label_row(cell) for cell in df["h3_cell"]]
+
+    counts = df["data_split"].value_counts().to_dict()
+    log.info("split counts: %s", counts)
+    n_excl = int(counts.get("excluded_buffer", 0))
+
+    df = df[df["data_split"] != "excluded_buffer"].reset_index(drop=True)
+    df = df.drop(columns=["_ts_epoch"])
+
+    train_cells = set(df.loc[df["data_split"] == "train", "h3_cell"])
+    test_cells_kept = set(df.loc[df["data_split"] == "test", "h3_cell"])
+    assert train_cells.isdisjoint(test_cells_kept), (
+        f"LEAK: {len(train_cells & test_cells_kept)} H3 cells appear in both train and test"
+    )
+    train_sess_kept = set(df.loc[df["data_split"] == "train", "session_id"])
+    test_sess_kept = set(df.loc[df["data_split"] == "test", "session_id"])
+    assert train_sess_kept.isdisjoint(test_sess_kept), "LEAK: session_id in both train and test"
+    log.info("disjoint assertions OK (train/test cells + sessions)")
+
+    def _ts_range(mask: pd.Series) -> dict:
+        if mask.sum() == 0:
+            return {"min": None, "max": None, "n": 0}
+        sub = pd.to_datetime(df.loc[mask, "time"], utc=True)
+        return {
+            "min": sub.min().isoformat(),
+            "max": sub.max().isoformat(),
+            "n": int(mask.sum()),
+        }
+
+    stats = {
+        "h3_res": H3_RES,
+        "session_window_s": SESSION_WINDOW_S,
+        "test_quota": TEST_QUOTA,
+        "val_quota": VAL_QUOTA,
+        "buffer_ring": BUFFER_RING,
+        "test_cell_cap_ratio": TEST_CELL_CAP_RATIO,
+        "n_train": int((df["data_split"] == "train").sum()),
+        "n_val": int((df["data_split"] == "val").sum()),
+        "n_test": int((df["data_split"] == "test").sum()),
+        "n_excluded_buffer": n_excl,
+        "n_cells_train": int(df.loc[df["data_split"] == "train", "h3_cell"].nunique()),
+        "n_cells_val": int(df.loc[df["data_split"] == "val", "h3_cell"].nunique()),
+        "n_cells_test": int(df.loc[df["data_split"] == "test", "h3_cell"].nunique()),
+        "n_sessions_train": int(df.loc[df["data_split"] == "train", "session_id"].nunique()),
+        "n_sessions_val": int(df.loc[df["data_split"] == "val", "session_id"].nunique()),
+        "n_sessions_test": int(df.loc[df["data_split"] == "test", "session_id"].nunique()),
+        "train_ts_range": _ts_range(df["data_split"] == "train"),
+        "val_ts_range": _ts_range(df["data_split"] == "val"),
+        "test_ts_range": _ts_range(df["data_split"] == "test"),
+    }
+    return df, stats
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -477,10 +641,16 @@ def main() -> int:
 
     df = add_basic_features(df)
     df = add_terrain_features(df, dem_c, dem_n, lu_c, lu_n)
+    df, split_stats = assign_h3_session_split(df)
 
     CSV_OUT.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(CSV_OUT, index=False)
     log.info("wrote %s (%d rows, %.1f MB)", CSV_OUT, len(df), CSV_OUT.stat().st_size / 1e6)
+
+    stats_path = CSV_OUT.parent / "train_split_stats.json"
+    with stats_path.open("w") as f:
+        json.dump(split_stats, f, indent=2)
+    log.info("wrote split stats to %s", stats_path)
     return 0
 
 

@@ -53,7 +53,20 @@ export function PredictionView({ prediction }) {
     serving_gateway_id,
     signal_quality,
     environment_params,
+    confidence,
   } = prediction;
+
+  // 1σ safe range = ±√(epi+ale). σ=0 (BE cũ) → fallback hiển thị 1 số.
+  const sigma = Math.sqrt(
+    (confidence.epistemic_variance_db2 ?? 0)
+      + (confidence.aleatoric_variance_db2 ?? 0),
+  );
+  const rssiValue = sigma > 0
+    ? `${(rssi_dbm - sigma).toFixed(1)} → ${(rssi_dbm + sigma).toFixed(1)} dBm`
+    : `${rssi_dbm.toFixed(1)} dBm`;
+  const snrValue = sigma > 0
+    ? `${(snr_db - sigma).toFixed(1)} → ${(snr_db + sigma).toFixed(1)} dB`
+    : `${snr_db.toFixed(1)} dB`;
 
   // BE chưa rebuild → signal_quality/environment_params undefined. Hiển thị
   // dải tối thiểu (RSSI/SNR/SF/GW) + báo "BE chưa hỗ trợ".
@@ -83,11 +96,11 @@ export function PredictionView({ prediction }) {
       <dl className="mt-5 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <ResultItem
           label={t.fields.rssi}
-          value={`${rssi_dbm.toFixed(1)} dBm`}
+          value={rssiValue}
         />
         <ResultItem
           label={t.fields.snr}
-          value={`${snr_db.toFixed(1)} dB`}
+          value={snrValue}
         />
         <ResultItem
           label={t.fields.pdr}

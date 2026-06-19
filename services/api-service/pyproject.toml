@@ -77,6 +77,11 @@ dependencies = [
     "jinja2>=3.1",
     "weasyprint>=63.0",
     "osmium>=4.3.1",
+    # scripts/build_training_csv.py dùng H3 (Uber) để phân tầng dữ liệu retrain
+    # theo ô lưới lục giác res 8 + buffer 1-ring → chống rò rỉ không gian giữa
+    # tập huấn luyện / xác thực / kiểm thử. Celery worker chạy subprocess bằng
+    # venv api-service nên dependency phải khai báo ở đây.
+    "h3>=4.0",
 ]
 
 [tool.uv.sources]

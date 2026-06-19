@@ -1,10 +1,9 @@
-"""Hình 4.4 — Pipeline Tầng 1 ITU-R P.1812 (layout snake/U-shape).
+"""Hình 4.4 — Pipeline Tầng 1 (lan truyền sóng theo Khuyến nghị ITU-R).
 
-Hàng trên trái → phải: IN → P.1812 → P.2108 → P.2109
-Quay đầu xuống: P.2109 → NF
-Hàng dưới phải → trái: NF → LB → OUT
-
-(Mermaid không honor `direction` trong subgraph, nên vẽ trực tiếp matplotlib.)
+Bố cục dạng "rắn" (snake/U-shape) — sau khi bỏ ô P.2109:
+  * Hàng trên (trái→phải):  Đầu vào → P.1812 → P.2108
+  * Khúc quay (xuống):       P.2108 → Hiệu chỉnh nhiễu nền theo trạm
+  * Hàng dưới (phải→trái):   Nhiễu nền → Cân đối đường truyền → Đầu ra
 
 Output: docs/anh/hinh_4_4.png
 """
@@ -21,7 +20,7 @@ FILL = "#D9E2F3"
 BORDER = "#2E5496"
 
 
-def box(ax, x, y, w, h, text, fontsize=13):
+def box(ax, x, y, w, h, text, fontsize=12):
     patch = FancyBboxPatch(
         (x, y),
         w,
@@ -58,30 +57,52 @@ def arrow(ax, p1, p2, lw=1.8):
     ax.add_patch(arr)
 
 
-fig, ax = plt.subplots(figsize=(17, 7))
-ax.set_xlim(1.2, 16.8)
-ax.set_ylim(0, 7)
+fig, ax = plt.subplots(figsize=(15, 7.5))
+ax.set_xlim(0, 14.5)
+ax.set_ylim(0, 7.2)
 ax.set_axis_off()
 
-# --- Hàng trên (LTR): IN → P1812 → P2108 → P2109 ---
-TOP_Y, H_TOP = 4.6, 1.5
+# --- Hàng trên (trái → phải): Đầu vào → P.1812 → P.2108 ---
+TOP_Y, H_TOP = 4.6, 1.7
 
-IN_X, IN_W = 1.5, 4.0
-P1_X, P1_W = 5.9, 3.0
-P2_X, P2_W = 9.3, 3.0
-P3_X, P3_W = 12.7, 3.8
+IN_X, IN_W = 0.5, 4.0
+P1_X, P1_W = 5.0, 4.0
+P2_X, P2_W = 9.5, 4.0
 
-box(ax, IN_X, TOP_Y, IN_W, H_TOP, "Đầu vào: (lat, lon, SF, gateway[])\n+ DEM + DSM + vùng khí hậu")
-box(ax, P1_X, TOP_Y, P1_W, H_TOP, "ITU-R P.1812\npath loss (terrain)")
-box(ax, P2_X, TOP_Y, P2_W, H_TOP, "P.2108 clutter\n(bỏ qua nếu có DSM)")
-box(ax, P3_X, TOP_Y, P3_W, H_TOP, "P.2109 building entry loss\n(nếu environment = indoor)")
+box(
+    ax,
+    IN_X,
+    TOP_Y,
+    IN_W,
+    H_TOP,
+    "Đầu vào",
+    fontsize=22,
+)
+box(
+    ax,
+    P1_X,
+    TOP_Y,
+    P1_W,
+    H_TOP,
+    "ITU-R P.1812\nTính suy hao đường truyền\ntheo địa hình",
+    fontsize=18,
+)
+box(
+    ax,
+    P2_X,
+    TOP_Y,
+    P2_W,
+    H_TOP,
+    "ITU-R P.2108\nTính suy hao vật cản",
+    fontsize=18,
+)
 
-# --- Hàng dưới: OUT (trái), LB (giữa), NF (phải) — căn NF dưới P2109 ---
-BOT_Y, H_BOT = 1.0, 1.8
+# --- Hàng dưới (phải → trái): Nhiễu nền → Cân đối → Đầu ra ---
+BOT_Y, H_BOT = 1.5, 1.7
 
-OUT_X, OUT_W = 1.5, 4.0
-LB_X, LB_W = 6.2, 5.5
-NF_X, NF_W = 12.7, 3.8
+OUT_X, OUT_W = 0.5, 4.0
+LB_X, LB_W = 5.0, 4.0
+NF_X, NF_W = 9.5, 4.0
 
 box(
     ax,
@@ -89,7 +110,8 @@ box(
     BOT_Y,
     OUT_W,
     H_BOT,
-    "Đầu ra: gateway phục vụ tốt nhất\nRSSI/SNR/margin UL+DL\n+ nguyên nhân nghẽn",
+    "Đầu ra",
+    fontsize=22,
 )
 box(
     ax,
@@ -97,7 +119,8 @@ box(
     BOT_Y,
     LB_W,
     H_BOT,
-    "Link budget UL/DL\nRSSI = Tx + Gains − PL − BEL\nSNR = RSSI − NF · Margin = SNR − SF_limit",
+    "Cân đối đường truyền",
+    fontsize=22,
 )
 box(
     ax,
@@ -105,7 +128,8 @@ box(
     BOT_Y,
     NF_W,
     H_BOT,
-    "Hiệu chỉnh noise floor per-gateway\n(geo.gateways.noise_floor_dbm)",
+    "Hiệu chỉnh mức nhiễu nền\ntheo từng trạm thu",
+    fontsize=18,
 )
 
 # --- Mũi tên ---
@@ -115,13 +139,12 @@ y_bot = BOT_Y + H_BOT / 2
 # Hàng trên: trái → phải
 arrow(ax, (IN_X + IN_W, y_top), (P1_X, y_top))
 arrow(ax, (P1_X + P1_W, y_top), (P2_X, y_top))
-arrow(ax, (P2_X + P2_W, y_top), (P3_X, y_top))
 
-# U-turn dọc: P2109 xuống NF (cùng tâm x)
-turn_x = P3_X + P3_W / 2
+# Khúc U-turn dọc: P.2108 (trên) → Nhiễu nền (dưới), cùng tâm x
+turn_x = P2_X + P2_W / 2
 arrow(ax, (turn_x, TOP_Y), (turn_x, BOT_Y + H_BOT))
 
-# Hàng dưới: phải → trái (NF → LB → OUT)
+# Hàng dưới: phải → trái (Nhiễu nền → Cân đối → Đầu ra)
 arrow(ax, (NF_X, y_bot), (LB_X + LB_W, y_bot))
 arrow(ax, (LB_X, y_bot), (OUT_X + OUT_W, y_bot))
 

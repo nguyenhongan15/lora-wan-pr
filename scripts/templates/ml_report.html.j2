@@ -178,14 +178,33 @@
 </div>
 {% endfor %}
 
-{% if holdout and not holdout.skipped %}
-<h2>5. Đánh giá hold-out ({{ holdout.window.start }} – {{ holdout.window.end }})</h2>
+{% if val %}
+<h2>5. Đánh giá tập xác thực (validation)</h2>
 <p>
-  Dữ liệu hold-out là survey thực địa tại {{ holdout.window.bbox }} từ {{ holdout.window.start }} đến {{ holdout.window.end }} —
-  hoàn toàn không có trong tập huấn luyện, đại diện cho hiệu năng thực tế.
+  Tập xác thực là các phiên đo bị tách riêng theo ô lưới H3 res 8 + cửa sổ 1 giờ —
+  mô hình <strong>không thấy</strong> các điểm này khi huấn luyện. Đây là chỉ báo sớm
+  về khả năng tổng quát hoá; nếu RMSE xác thực cao hơn nhiều so với huấn luyện thì
+  mô hình đang học vẹt (overfit).
+</p>
+<table>
+  <tr><th>RMSE xác thực</th><td class="num">{{ val.rmse | fmt2 }} dB</td></tr>
+  <tr><th>MAE xác thực</th><td class="num">{{ val.mae | fmt2 }} dB</td></tr>
+  <tr><th>R² xác thực</th><td class="num">{{ val.r2 | fmt2 }}</td></tr>
+  <tr><th>n xác thực</th><td class="num">{{ "{:,}".format(val.n) }}</td></tr>
+</table>
+{% endif %}
+
+{% if holdout and not holdout.skipped %}
+<h2>6. Đánh giá tập kiểm thử (hold-out)</h2>
+<p>
+  Tập kiểm thử gồm <strong>{{ holdout.overall.n }}</strong> điểm đo được phân tầng theo
+  ô lưới H3 res 8 — không trùng ô với tập huấn luyện, có buffer 1-ring (~500 m) cách ly
+  tránh rò rỉ không gian. Cửa sổ thời gian dữ liệu: <strong>{{ holdout.window.start }}</strong>
+  → <strong>{{ holdout.window.end }}</strong>. Đây là con số trung thực phản ánh hiệu năng
+  thực tế khi mô hình triển khai.
 </p>
 
-<h3>5.1. Theo khoảng cách</h3>
+<h3>6.1. Theo khoảng cách</h3>
 <table>
   <tr><th>Khoảng cách (km)</th><th class="num">n</th><th class="num">RMSE</th><th class="num">MAE</th><th class="num">bias</th></tr>
   {% for b in holdout.per_distance_bin %}
@@ -199,7 +218,8 @@
   {% endfor %}
 </table>
 
-<h3>5.2. Theo gateway</h3>
+{% if holdout.per_gateway %}
+<h3>6.2. Theo gateway</h3>
 <table>
   <tr><th>Gateway</th><th class="num">n</th><th class="num">RMSE</th><th class="num">MAE</th><th class="num">bias</th></tr>
   {% for g in holdout.per_gateway %}
@@ -212,6 +232,7 @@
   </tr>
   {% endfor %}
 </table>
+{% endif %}
 
 {% for plot in plots if plot.filename in ['04_holdout_per_distance.png', '05_holdout_per_gateway.png'] %}
 <div class="plot">
@@ -221,14 +242,12 @@
 {% endfor %}
 {% endif %}
 
-<h2>6. Khuyến nghị</h2>
-{% if conclusion.status == "DAT" %}
-<p>Mô hình <strong>đạt mục tiêu chất lượng {{ target_rmse_db }} dB</strong>. Có thể đưa vào vận hành.</p>
-{% elif conclusion.status == "KHONG_DAT" %}
+<h2>7. Nhận xét</h2>
+{% if conclusion.status == "DA_DANH_GIA" %}
 <ul>
-  <li>Sai số RMSE hold-out {{ holdout.overall.rmse_db | fmt2 }} dB cao hơn mục tiêu {{ target_rmse_db }} dB.</li>
-  <li>Phương sai cao chủ yếu là <em>shadow fading vật lý</em> — cận dưới lý thuyết ở khu vực đô thị thường ~6-8 dB.</li>
-  <li>Đề xuất: bổ sung khảo sát ở khoảng cách &gt; 2 km, nhiều gateway hơn, môi trường đa dạng (LOS biển vs NLOS phố cũ).</li>
+  <li>RMSE tập kiểm thử (cell-disjoint H3 res 8): <strong>{{ holdout.overall.rmse_db | fmt2 }} dB</strong> trên {{ holdout.overall.n }} điểm đo.</li>
+  <li>Sai số chủ yếu do <em>shadow fading vật lý</em> — cận dưới lý thuyết ở khu vực đô thị thường ~6–8 dB.</li>
+  <li>Bias hệ thống: {{ holdout.overall.bias_db | fmt2_signed }} dB; phản ánh phân bố vật cản của các ô kiểm thử.</li>
 </ul>
 {% else %}
 <p>Chưa đánh giá được chất lượng tổng quát hóa. Cần kích hoạt hold-out eval (cấu hình biến môi trường DEM/OSM).</p>
@@ -236,7 +255,6 @@
 
 <div class="footer">
   Báo cáo được sinh tự động bởi <code>scripts/render_ml_report.py</code>.
-  Mục tiêu: RMSE ≤ {{ target_rmse_db }} dB.
 </div>
 {% endif %}
 

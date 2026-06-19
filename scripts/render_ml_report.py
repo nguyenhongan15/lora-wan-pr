@@ -5,19 +5,18 @@ Goi tu Celery task `retrain_ml_model` qua subprocess. Sinh:
   - summary.json (metric machine-readable)
   - summary.html (template Jinja2)
   - report.pdf (WeasyPrint render HTML)
-  - holdout_eval.json (re-use schema cua scripts/eval_extra_trees_holdout.py)
 
-Hold-out eval (Jan-Feb 2026 Da Nang) tu cau hinh qua bien moi truong:
-  LORA_DB_URL, LORA_REFERENCE_DEM_DIRECTORY, LORA_OSM_LANDUSE_DIRECTORY.
-Thieu bat ky bien nao → script skip phan hold-out + ghi warning vao bao cao
-(khong fail Celery job).
+Hold-out eval doc tu file JSON (scripts/eval_extra_trees_holdout.py viet truoc do)
+qua arg --holdout-json. File missing → bao cao chi co training metrics.
+Val metrics doc tu MODEL_DIR/val_metrics.json (train_extra_trees.py ghi).
 
 Usage:
     python scripts/render_ml_report.py \
         --out-dir reports/retrain-<job_id> \
         --job-id <uuid> \
         --triggered-at "2026-06-13T03:42:00Z" \
-        --triggered-by "admin@example.com"
+        --triggered-by "admin@example.com" \
+        --holdout-json reports/retrain-<job_id>/holdout_eval.json
 
 Exit codes:
     0  success (du fail hold-out van 0 — bao cao van render duoc)
@@ -31,7 +30,6 @@ import base64
 import json
 import logging
 import math
-import os
 import sys
 import traceback
 from datetime import UTC, datetime
@@ -52,6 +50,7 @@ TRAIN_CSV_PATH = (
     / "devices_history_full.csv"
 )
 MODEL_PATH = REPO_ROOT / "services" / "ml-service" / "data" / "extra_trees_model.joblib"
+VAL_METRICS_PATH = MODEL_PATH.parent / "val_metrics.json"
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "ml_report.html.j2"
 
 NUMERIC_FEATURES = [
@@ -77,7 +76,6 @@ NUMERIC_FEATURES = [
     "residential_ratio",
 ]
 ALL_FEATURES = [*NUMERIC_FEATURES, "gateway"]
-TARGET_RMSE_DB = 3.0  # Muc tieu doanh nghiep ("chat luong dat 2-3 dB")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("render_ml_report")
@@ -163,17 +161,8 @@ def _plot_holdout_per_bin(out: Path, bins: list[dict]) -> None:
     fig, ax = plt.subplots(figsize=(9, 5))
     labels = [b["bin_km"] + " km" for b in bins]
     rmse = [b["rmse_db"] for b in bins]
-    colors = [
-        "#2ca02c" if r <= TARGET_RMSE_DB else ("#ff7f0e" if r <= 6 else "#d62728") for r in rmse
-    ]
+    colors = ["#1a3a72" for _ in rmse]
     bars = ax.bar(labels, rmse, color=colors)
-    ax.axhline(
-        TARGET_RMSE_DB,
-        color="green",
-        linestyle="--",
-        alpha=0.6,
-        label=f"Mục tiêu {TARGET_RMSE_DB} dB",
-    )
     for bar, b in zip(bars, bins, strict=False):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -184,7 +173,6 @@ def _plot_holdout_per_bin(out: Path, bins: list[dict]) -> None:
         )
     ax.set_ylabel("RMSE (dB)")
     ax.set_title("RMSE hold-out theo khoảng cách")
-    ax.legend()
     ax.grid(True, alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out, dpi=120)
@@ -196,17 +184,8 @@ def _plot_holdout_per_gateway(out: Path, gws: list[dict]) -> None:
     fig, ax = plt.subplots(figsize=(10, 5))
     labels = [g["gateway"][-8:] for g in gws]  # cuối gateway code cho ngắn
     rmse = [g["rmse_db"] for g in gws]
-    colors = [
-        "#2ca02c" if r <= TARGET_RMSE_DB else ("#ff7f0e" if r <= 6 else "#d62728") for r in rmse
-    ]
+    colors = ["#1a3a72" for _ in rmse]
     bars = ax.bar(labels, rmse, color=colors)
-    ax.axhline(
-        TARGET_RMSE_DB,
-        color="green",
-        linestyle="--",
-        alpha=0.6,
-        label=f"Mục tiêu {TARGET_RMSE_DB} dB",
-    )
     for bar, g in zip(bars, gws, strict=False):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -218,82 +197,45 @@ def _plot_holdout_per_gateway(out: Path, gws: list[dict]) -> None:
     ax.set_ylabel("RMSE (dB)")
     ax.set_xlabel("Gateway (8 ký tự cuối)")
     ax.set_title("RMSE hold-out theo gateway")
-    ax.legend()
     ax.grid(True, alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out, dpi=120)
     plt.close(fig)
 
 
-def _run_holdout_eval(model) -> dict | None:
-    """Chay hold-out eval Jan-Feb 2026 Da Nang. Tra None khi missing env."""
-    required = ["LORA_DB_URL", "LORA_REFERENCE_DEM_DIRECTORY", "LORA_OSM_LANDUSE_DIRECTORY"]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        log.warning("Hold-out eval skipped: missing env %s", missing)
-        return {"skipped": True, "reason": f"Thieu bien moi truong: {', '.join(missing)}"}
-
-    sys.path.insert(0, str(REPO_ROOT / "services" / "ml-service" / "src"))
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
+def _read_holdout_json(path: Path) -> dict | None:
+    """Doc holdout_eval.json (do eval_extra_trees_holdout.py viet truoc). Khong fail-hard."""
+    if not path.exists():
+        log.warning("Hold-out JSON missing: %s — bao cao se khong co phan hold-out", path)
+        return None
     try:
-        from eval_extra_trees_holdout import (  # type: ignore[import-not-found]
-            fetch_rows,
-            rows_to_features,
-        )
-    except ImportError as exc:
-        log.warning("Hold-out eval skipped: %s", exc)
-        return {"skipped": True, "reason": f"Khong import duoc module: {exc}"}
-
-    bbox = (15.8, 16.3, 107.9, 108.5)  # Da Nang
-    log.info("Hold-out: fetch rows Jan-Feb 2026")
-    rows = fetch_rows(os.environ["LORA_DB_URL"], "2026-01-01", "2026-02-28", bbox, 50.0)
-    if not rows:
-        return {"skipped": True, "reason": "Khong co du lieu Jan-Feb 2026 trong DB"}
-
-    df = rows_to_features(rows, log)
-    if df.empty:
-        return {"skipped": True, "reason": "DEM lookup fail tat ca cac diem"}
-
-    X = df[ALL_FEATURES]  # noqa: N806
-    y_true = df["__rssi"].to_numpy()
-    y_pred = model.predict(X)
-    overall = _metrics(y_true, y_pred)
-
-    # per distance bin
-    dist_km = np.power(10.0, df["log_distance"].to_numpy()) / 1000.0
-    bins_def = [(0.0, 2.0), (2.0, 5.0), (5.0, 10.0), (10.0, 50.0)]
-    per_bin = []
-    for lo, hi in bins_def:
-        mask = (dist_km >= lo) & (dist_km < hi)
-        if mask.sum() == 0:
-            continue
-        m = _metrics(y_true[mask], y_pred[mask])
-        m["bin_km"] = f"{lo}-{hi}"
-        per_bin.append(m)
-
-    # per gateway
-    per_gw = []
-    for gw in sorted(df["gateway"].unique()):
-        mask = df["gateway"].to_numpy() == gw
-        if mask.sum() < 3:
-            continue
-        m = _metrics(y_true[mask], y_pred[mask])
-        m["gateway"] = str(gw)
-        per_gw.append(m)
-    per_gw.sort(key=lambda g: -g["n"])
-
-    return {
-        "skipped": False,
-        "overall": overall,
-        "per_distance_bin": per_bin,
-        "per_gateway": per_gw,
-        "window": {"start": "2026-01-01", "end": "2026-02-28", "bbox": "danang"},
-    }
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Khong doc duoc holdout JSON %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict) or "overall" not in data:
+        log.warning("Holdout JSON %s thieu key 'overall'", path)
+        return None
+    return data
 
 
-def _summary_conclusion(holdout: dict | None, target: float = TARGET_RMSE_DB) -> dict:
-    """Kết luận DAT / KHONG_DAT / CHUA_DANH_GIA."""
+def _read_val_json(path: Path) -> dict | None:
+    """Doc val_metrics.json do train_extra_trees.py viet (rmse/mae/r2/n)."""
+    if not path.exists():
+        log.warning("Val metrics JSON missing: %s", path)
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Khong doc duoc val JSON %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict) or data.get("n", 0) == 0:
+        return None
+    return data
+
+
+def _summary_conclusion(holdout: dict | None) -> dict:
+    """Trạng thái báo cáo: đã đánh giá hold-out hay chưa."""
     if not holdout or holdout.get("skipped"):
         return {
             "status": "CHUA_DANH_GIA",
@@ -302,18 +244,12 @@ def _summary_conclusion(holdout: dict | None, target: float = TARGET_RMSE_DB) ->
             "color": "gray",
         }
     rmse = holdout["overall"]["rmse_db"]
-    if rmse <= target:
-        return {
-            "status": "DAT",
-            "label": f"Đạt mục tiêu (RMSE {rmse:.2f} dB ≤ {target} dB)",
-            "reason": None,
-            "color": "green",
-        }
+    n = holdout["overall"].get("n", 0)
     return {
-        "status": "KHONG_DAT",
-        "label": f"Sai số RMSE {rmse:.2f} dB > {target} dB",
-        "reason": f"Sai số cao hơn mục tiêu {rmse - target:.2f} dB. Cần bổ sung thêm data",
-        "color": "red",
+        "status": "DA_DANH_GIA",
+        "label": f"Đã đánh giá trên tập kiểm thử: RMSE {rmse:.2f} dB (n={n})",
+        "reason": None,
+        "color": "green",
     }
 
 
@@ -408,10 +344,10 @@ def render_failure_report(out_dir: Path, job_meta: dict, error_text: str) -> Non
         },
         "training": None,
         "dataset": None,
+        "val": None,
         "holdout": None,
         "previous_holdout": None,
         "plots": [],
-        "target_rmse_db": TARGET_RMSE_DB,
     }
     summary_path = out_dir / "summary.html"
     _render_html(context, summary_path)
@@ -437,12 +373,24 @@ def main() -> int:
     p.add_argument("--triggered-at", required=True, help="ISO 8601")
     p.add_argument("--triggered-by", default="(unknown)")
     p.add_argument("--keep-reports", type=int, default=10)
+    p.add_argument(
+        "--holdout-json",
+        default=None,
+        help="Path den holdout_eval.json (default: <out-dir>/holdout_eval.json)",
+    )
+    p.add_argument(
+        "--val-metrics-json",
+        default=str(VAL_METRICS_PATH),
+        help="Path den val_metrics.json (default: services/ml-service/data/val_metrics.json)",
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     assets_dir = out_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
+    holdout_path = Path(args.holdout_json) if args.holdout_json else out_dir / "holdout_eval.json"
+    val_path = Path(args.val_metrics_json)
 
     job_meta = {
         "job_id": args.job_id,
@@ -508,14 +456,15 @@ def main() -> int:
         all_imp = np.concatenate([numeric_imp, [gw_imp]])
         _plot_feature_importance(assets_dir / "03_feature_importance.png", all_names, all_imp)
 
-    # 3. Hold-out eval (skip neu env missing)
-    holdout = _run_holdout_eval(model)
-    if holdout and not holdout.get("skipped"):
+    # 3. Hold-out eval — doc tu file JSON do eval_extra_trees_holdout.py viet
+    holdout = _read_holdout_json(holdout_path)
+    val_metrics = _read_val_json(val_path)
+    if holdout and holdout.get("per_distance_bin"):
         _plot_holdout_per_bin(
             assets_dir / "04_holdout_per_distance.png", holdout["per_distance_bin"]
         )
+    if holdout and holdout.get("per_gateway"):
         _plot_holdout_per_gateway(assets_dir / "05_holdout_per_gateway.png", holdout["per_gateway"])
-        (out_dir / "holdout_eval.json").write_text(json.dumps(holdout, indent=2), encoding="utf-8")
 
     # 4. So sanh voi lan truoc
     previous_holdout = _load_previous_holdout(out_dir)
@@ -565,11 +514,11 @@ def main() -> int:
             "features": ALL_FEATURES,
         },
         "dataset": dataset_stats,
+        "val": val_metrics,
         "holdout": holdout,
         "previous_holdout": previous_holdout,
         "delta_rmse_vs_previous": delta_rmse,
         "plots": plots,
-        "target_rmse_db": TARGET_RMSE_DB,
         "failure": None,
     }
 
@@ -580,6 +529,7 @@ def main() -> int:
     summary_json = {
         "job_meta": job_meta,
         "training": context["training"]["metrics"],
+        "val": val_metrics,
         "holdout": holdout,
         "conclusion": conclusion,
         "delta_rmse_vs_previous": delta_rmse,

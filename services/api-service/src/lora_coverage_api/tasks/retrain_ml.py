@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from sqlalchemy import Engine, create_engine, text
@@ -33,13 +33,18 @@ log = logging.getLogger(__name__)
 
 SCRIPT_PATH = Path("/app/scripts/train_extra_trees.py")
 BUILD_CSV_SCRIPT_PATH = Path("/app/scripts/build_training_csv.py")
+EVAL_SCRIPT_PATH = Path("/app/scripts/eval_extra_trees_holdout.py")
 REPORT_SCRIPT_PATH = Path("/app/scripts/render_ml_report.py")
 METRICS_PATH = Path("/app/services/ml-service/data/train_metrics.json")
+VAL_METRICS_PATH = Path("/app/services/ml-service/data/val_metrics.json")
+SPLIT_STATS_PATH = Path("/app/services/ml-service/data/train_split_stats.json")
 ARTIFACT_PATH = Path("/app/services/ml-service/data/extra_trees_model.joblib")
 REPORTS_ROOT = Path("/app/reports")
 SUBPROCESS_TIMEOUT_S = 3600  # 1h — bao gom build CSV (5-30 phut) + train (~1 phut)
 BUILD_CSV_TIMEOUT_S = 2400  # 40 phut — terrain sampling cho ~10k+ rows
+EVAL_TIMEOUT_S = 300  # 5 phut — predict 1500 row test split, khong DEM lookup
 REPORT_TIMEOUT_S = 600  # 10 phut — du cho hold-out eval + plot + PDF
+TEST_RMSE_HIGH_DB = 15.0  # nguong canh bao soft (khong rollback) cho test RMSE
 
 
 def _engine() -> Engine:
@@ -160,14 +165,40 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         log.warning("retrain job %s succeeded but metrics read failed: %s", job_id, exc)
 
+    # Step 3: eval tren tap test (data_split='test' trong CSV) — viet
+    # holdout_eval.json vao report_dir cho step 4 doc lai. Fail-soft.
+    eval_status = _run_holdout_eval(report_dir, job_id)
+    metrics["eval"] = eval_status
+
+    # Doc val_metrics.json (train da viet) + holdout_eval.json (eval vua viet)
+    # + train_split_stats.json (build_csv viet) → gop vao metrics audit.
+    val_metrics_summary = _read_json_optional(VAL_METRICS_PATH)
+    if val_metrics_summary:
+        metrics["val"] = val_metrics_summary
+    holdout_summary = _read_json_optional(report_dir / "holdout_eval.json")
+    if holdout_summary and isinstance(holdout_summary.get("overall"), dict):
+        metrics["test"] = holdout_summary["overall"]
+        test_rmse = holdout_summary["overall"].get("rmse_db")
+        if isinstance(test_rmse, (int, float)) and test_rmse > TEST_RMSE_HIGH_DB:
+            metrics["warning"] = "test_rmse_high"
+            log.warning(
+                "retrain job %s test RMSE %.2f dB > %.1f dB nguong",
+                job_id,
+                test_rmse,
+                TEST_RMSE_HIGH_DB,
+            )
+    split_stats = _read_json_optional(SPLIT_STATS_PATH)
+    if split_stats:
+        metrics["split_stats"] = split_stats
+
     # Hot-reload ml-service. Fail-soft: log warning + ghi vao metrics nhung
     # KHONG fail job (model file da swap xong, ml-service tu reload khi restart).
     reload_status = _call_ml_service_reload()
     if reload_status:
         metrics["ml_service_reload"] = reload_status
 
-    # Render bao cao (plots + HTML + PDF + hold-out eval). Fail-soft — neu fail,
-    # ghi log + bao cao loi vao metrics nhung KHONG fail job (model da swap xong).
+    # Render bao cao (plots + HTML + PDF). Fail-soft — neu fail, ghi log + bao
+    # cao loi vao metrics nhung KHONG fail job (model da swap xong).
     report_status = _render_report(report_dir, job_id, triggered_at_iso, triggered_by_id)
     metrics["report"] = report_status
 
@@ -197,6 +228,44 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     }
 
 
+def _run_holdout_eval(report_dir: Path, job_id: str) -> dict[str, Any]:
+    """Chay eval_extra_trees_holdout.py qua subprocess. Fail-soft: tra dict status.
+
+    Eval doc CSV training (data_split='test'), khong cham DB, khong recompute DEM.
+    Viet ket qua vao <report_dir>/holdout_eval.json.
+    """
+    report_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        str(EVAL_SCRIPT_PATH),
+        "--out-dir",
+        str(report_dir),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=EVAL_TIMEOUT_S, check=False
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("Hold-out eval timeout for job %s", job_id)
+        return {"status": "timeout"}
+    if proc.returncode != 0:
+        tail = (proc.stderr or "")[-1500:]
+        log.warning("Hold-out eval failed for job %s: %s", job_id, tail)
+        return {"status": "failed", "stderr_tail": tail}
+    return {"status": "ok"}
+
+
+def _read_json_optional(path: Path) -> dict[str, Any] | None:
+    """Doc JSON neu file ton tai. Fail-soft: tra None khi loi."""
+    if not path.exists():
+        return None
+    try:
+        return cast("dict[str, Any]", json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Khong doc duoc %s: %s", path, exc)
+        return None
+
+
 def _render_report(
     report_dir: Path, job_id: str, triggered_at: str, triggered_by: str
 ) -> dict[str, Any]:
@@ -213,6 +282,8 @@ def _render_report(
         triggered_at,
         "--triggered-by",
         triggered_by,
+        "--holdout-json",
+        str(report_dir / "holdout_eval.json"),
     ]
     try:
         proc = subprocess.run(

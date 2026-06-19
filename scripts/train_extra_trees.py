@@ -22,6 +22,7 @@ DATA_PATH = (
 )
 MODEL_DIR = REPO_ROOT / "services/ml-service/data"
 MODEL_PATH = MODEL_DIR / "extra_trees_model.joblib"
+VAL_METRICS_PATH = MODEL_DIR / "val_metrics.json"
 
 # Feature definitions (matching reference_wireless/src/ml/pipeline.py)
 NUMERIC_FEATURES = [
@@ -85,35 +86,67 @@ def build_pipeline():
     return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
 
+def _metrics(y_true, y_pred) -> dict:
+    residuals = y_true - y_pred
+    return {
+        "rmse": float(np.sqrt(np.mean(residuals**2))),
+        "mae": float(np.mean(np.abs(residuals))),
+        "r2": float(1 - np.sum(residuals**2) / np.sum((y_true - y_true.mean()) ** 2)),
+        "n": len(y_true),
+    }
+
+
 def main():
     print(f"Loading data from {DATA_PATH}")
     df = pd.read_csv(DATA_PATH)
     print(f"Dataset shape: {df.shape}")
 
-    feature_cols = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-    X = df[feature_cols]
-    y = df[TARGET]
-
-    print(f"Features shape: {X.shape}")
-    print(
-        f"Target stats: mean={y.mean():.2f}, std={y.std():.2f}, min={y.min():.2f}, max={y.max():.2f}"
+    assert "data_split" in df.columns, (
+        "CSV missing 'data_split' column — rebuild via scripts/build_training_csv.py first"
     )
 
-    terrain_fallback = {col: float(df[col].mean()) for col in NUMERIC_FEATURES}
+    df_train = df[df["data_split"] == "train"].reset_index(drop=True)
+    df_val = df[df["data_split"] == "val"].reset_index(drop=True)
+    n_test = int((df["data_split"] == "test").sum())
+    print(f"Split sizes: train={len(df_train)}, val={len(df_val)}, test={n_test}")
+    assert len(df_train) > 0, "Empty train split — check build_training_csv split rule"
+
+    feature_cols = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+    X_train = df_train[feature_cols]
+    y_train = df_train[TARGET]
+
+    print(f"Train features shape: {X_train.shape}")
+    print(
+        f"Train target stats: mean={y_train.mean():.2f}, std={y_train.std():.2f}, "
+        f"min={y_train.min():.2f}, max={y_train.max():.2f}"
+    )
+
+    terrain_fallback = {col: float(df_train[col].mean()) for col in NUMERIC_FEATURES}
 
     pipeline = build_pipeline()
-    print("Training ExtraTreesRegressor...")
-    pipeline.fit(X, y)
+    print("Training ExtraTreesRegressor on train split...")
+    pipeline.fit(X_train, y_train)
 
-    y_pred = pipeline.predict(X)
-    residuals = y - y_pred
-    rmse = float(np.sqrt(np.mean(residuals**2)))
-    mae = float(np.mean(np.abs(residuals)))
-    r2 = float(1 - np.sum(residuals**2) / np.sum((y - y.mean()) ** 2))
-    print("\nTraining metrics:")
+    y_pred_train = pipeline.predict(X_train)
+    train_metrics = _metrics(y_train.to_numpy(), y_pred_train)
+    rmse, mae, r2 = train_metrics["rmse"], train_metrics["mae"], train_metrics["r2"]
+    print("\nTraining metrics (in-sample, train split):")
     print(f"  RMSE: {rmse:.2f} dBm")
     print(f"  MAE:  {mae:.2f} dBm")
     print(f"  R²:   {r2:.4f}")
+
+    if len(df_val) > 0:
+        X_val = df_val[feature_cols]
+        y_val = df_val[TARGET]
+        y_pred_val = pipeline.predict(X_val)
+        val_metrics = _metrics(y_val.to_numpy(), y_pred_val)
+        print("\nValidation metrics (val split, unseen sessions):")
+        print(f"  RMSE: {val_metrics['rmse']:.2f} dBm  (n={val_metrics['n']})")
+        print(f"  MAE:  {val_metrics['mae']:.2f} dBm")
+        print(f"  R²:   {val_metrics['r2']:.4f}")
+    else:
+        val_metrics = {"rmse": None, "mae": None, "r2": None, "n": 0}
+        print("\n(val split empty — skipping val metrics)")
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     # Atomic swap: ghi xuong .new roi rename de ml-service khong serve file ban
@@ -134,12 +167,16 @@ def main():
         "rmse": rmse,
         "mae": mae,
         "r2": r2,
-        "rows_trained": len(df),
+        "rows_trained": len(df_train),
         "feature_count": len(feature_cols),
     }
     with metrics_path.open("w") as f:
         json.dump(metrics_payload, f, indent=2)
     print(f"Metrics saved to {metrics_path}")
+
+    with VAL_METRICS_PATH.open("w") as f:
+        json.dump(val_metrics, f, indent=2)
+    print(f"Val metrics saved to {VAL_METRICS_PATH}")
 
     gw_cols = ["gateway", "gw_lat", "gw_lon", "gw_elevation", "frequency"]
     gw_table = df[gw_cols].drop_duplicates(subset="gateway").reset_index(drop=True)

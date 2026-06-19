@@ -201,10 +201,13 @@ function JobStatusView({ job }) {
           <summary className="cursor-pointer font-medium text-slate-700">
             {t.metricsHeading}
           </summary>
+          <TestMetricsBlock test={job.metrics?.test} />
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-            {Object.entries(job.metrics).map(([k, v]) => (
-              <MetricRow key={k} k={k} v={v} />
-            ))}
+            {Object.entries(job.metrics)
+              .filter(([, v]) => typeof v !== "object" || v === null)
+              .map(([k, v]) => (
+                <MetricRow key={k} k={k} v={v} />
+              ))}
             {job.artifact_path && (
               <>
                 <span className="text-slate-500">{t.artifactLabel}</span>
@@ -216,6 +219,36 @@ function JobStatusView({ job }) {
           </div>
         </details>
       )}
+    </div>
+  );
+}
+
+/** @param {{ test: any }} props */
+function TestMetricsBlock({ test }) {
+  if (!test || typeof test !== "object") return null;
+  const fmt = (v, digits = 2) =>
+    typeof v === "number" ? v.toFixed(digits) : "—";
+  const sign = (v) =>
+    typeof v === "number" ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—";
+  return (
+    <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-3 py-2">
+      <div className="mb-1 text-[11px] font-semibold text-emerald-900">
+        {t.testMetricsHeading}
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+        <span className="text-emerald-800">{t.testRmse}</span>
+        <span className="font-mono text-emerald-900">{fmt(test.rmse_db)}</span>
+        <span className="text-emerald-800">{t.testMae}</span>
+        <span className="font-mono text-emerald-900">{fmt(test.mae_db)}</span>
+        <span className="text-emerald-800">{t.testR2}</span>
+        <span className="font-mono text-emerald-900">{fmt(test.r2, 4)}</span>
+        <span className="text-emerald-800">{t.testBias}</span>
+        <span className="font-mono text-emerald-900">{sign(test.bias_db)}</span>
+        <span className="text-emerald-800">{t.testN}</span>
+        <span className="font-mono text-emerald-900">
+          {typeof test.n === "number" ? test.n.toLocaleString("vi-VN") : "—"}
+        </span>
+      </div>
     </div>
   );
 }
@@ -266,10 +299,11 @@ function HistoryView({ query }) {
           </thead>
           <tbody>
             {query.data.items.map((j) => {
-              const rmse =
-                typeof j.metrics?.rmse === "number"
-                  ? j.metrics.rmse.toFixed(2)
-                  : "";
+              const test = j.metrics?.test;
+              const num2 = (x) => (typeof x === "number" ? x.toFixed(2) : "");
+              const num4 = (x) => (typeof x === "number" ? x.toFixed(4) : "");
+              const bias = (x) =>
+                typeof x === "number" ? `${x >= 0 ? "+" : ""}${x.toFixed(2)}` : "";
               return (
                 <tr key={j.id} className="border-t border-slate-200">
                   <td className="py-1 pr-2 text-slate-600">
@@ -286,7 +320,18 @@ function HistoryView({ query }) {
                   <td className="py-1 pr-2 text-slate-700">
                     {j.rows_trained ?? ""}
                   </td>
-                  <td className="py-1 pr-2 font-mono text-slate-700">{rmse}</td>
+                  <td className="py-1 pr-2 font-mono text-slate-700">
+                    {num2(test?.rmse_db)}
+                  </td>
+                  <td className="py-1 pr-2 font-mono text-slate-700">
+                    {num2(test?.mae_db)}
+                  </td>
+                  <td className="py-1 pr-2 font-mono text-slate-700">
+                    {num4(test?.r2)}
+                  </td>
+                  <td className="py-1 pr-2 font-mono text-slate-700">
+                    {bias(test?.bias_db)}
+                  </td>
                   <td className="py-1 pr-2">
                     {j.report_dir ? (
                       <ReportActions jobId={j.id} />
