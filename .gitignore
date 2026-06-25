@@ -89,3 +89,6 @@ r-dt/
 # ── ML model artifacts (build từ training scripts, không version) ──
 *.joblib
 *.pkl
+
+# ── Docs (local-only, không version) ────────
+docs/

@@ -35,16 +35,35 @@ SCRIPT_PATH = Path("/app/scripts/train_extra_trees.py")
 BUILD_CSV_SCRIPT_PATH = Path("/app/scripts/build_training_csv.py")
 EVAL_SCRIPT_PATH = Path("/app/scripts/eval_extra_trees_holdout.py")
 REPORT_SCRIPT_PATH = Path("/app/scripts/render_ml_report.py")
-METRICS_PATH = Path("/app/services/ml-service/data/train_metrics.json")
-VAL_METRICS_PATH = Path("/app/services/ml-service/data/val_metrics.json")
-SPLIT_STATS_PATH = Path("/app/services/ml-service/data/train_split_stats.json")
-ARTIFACT_PATH = Path("/app/services/ml-service/data/extra_trees_model.joblib")
+ML_DATA_DIR = Path("/app/services/ml-service/data")
+METRICS_PATH = ML_DATA_DIR / "train_metrics.json"
+VAL_METRICS_PATH = ML_DATA_DIR / "val_metrics.json"
+SPLIT_STATS_PATH = ML_DATA_DIR / "train_split_stats.json"
+ARTIFACT_PATH = ML_DATA_DIR / "extra_trees_model.joblib"
+
+# Candidate artifacts — train --candidate ghi ra day, promotion gate moi swap
+# sang active (ARTIFACT_PATH) neu dat nguong.
+CANDIDATE_ARTIFACT_PATH = ML_DATA_DIR / "extra_trees_model.candidate.joblib"
+CANDIDATE_METRICS_PATH = ML_DATA_DIR / "train_metrics.candidate.json"
+CANDIDATE_VAL_METRICS_PATH = ML_DATA_DIR / "val_metrics.candidate.json"
+CANDIDATE_FALLBACK_PATH = ML_DATA_DIR / "terrain_fallback.candidate.json"
+CANDIDATE_GATEWAY_TABLE_PATH = ML_DATA_DIR / "gateway_table.candidate.csv"
+ACTIVE_FALLBACK_PATH = ML_DATA_DIR / "terrain_fallback.json"
+ACTIVE_GATEWAY_TABLE_PATH = ML_DATA_DIR / "gateway_table.csv"
+# Snapshot val/test metrics cua model dang active (ghi luc promote) — promotion
+# gate doc lai de so sanh "candidate co tệ hơn active không".
+ACTIVE_MODEL_METRICS_PATH = ML_DATA_DIR / "active_model_metrics.json"
+
 REPORTS_ROOT = Path("/app/reports")
 SUBPROCESS_TIMEOUT_S = 3600  # 1h — bao gom build CSV (5-30 phut) + train (~1 phut)
 BUILD_CSV_TIMEOUT_S = 2400  # 40 phut — terrain sampling cho ~10k+ rows
 EVAL_TIMEOUT_S = 300  # 5 phut — predict 1500 row test split, khong DEM lookup
 REPORT_TIMEOUT_S = 600  # 10 phut — du cho hold-out eval + plot + PDF
-TEST_RMSE_HIGH_DB = 15.0  # nguong canh bao soft (khong rollback) cho test RMSE
+TEST_RMSE_HIGH_DB = 15.0  # nguong tuyet doi: candidate test RMSE > nguong -> KHONG promote
+# Candidate val RMSE duoc phep tệ hơn active toi da bao nhieu dB thi van promote.
+# Luu y: val split duoc tinh lai moi lan build_csv (data thay doi) nen so sanh
+# nay la xap xi, khong phai cung 1 tap val — dung lam regression-guard mem.
+VAL_RMSE_REGRESSION_TOLERANCE_DB = 1.0
 
 
 def _engine() -> Engine:
@@ -114,8 +133,9 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
 
     log.info("retrain job %s build_csv ok (%.0fs)", job_id, time.time() - t_start)
 
-    # Step 2: train Extra Trees tren CSV moi.
-    cmd = [sys.executable, str(SCRIPT_PATH)]
+    # Step 2: train Extra Trees tren CSV moi -> ghi ra artifact .candidate
+    # (KHONG dung model active; promotion gate o Step 4 moi swap neu dat).
+    cmd = [sys.executable, str(SCRIPT_PATH), "--candidate"]
     try:
         proc = subprocess.run(
             cmd,
@@ -159,43 +179,55 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     rows_trained: int | None = None
     try:
-        metrics_raw = json.loads(METRICS_PATH.read_text())
+        metrics_raw = json.loads(CANDIDATE_METRICS_PATH.read_text())
         rows_trained = int(metrics_raw.pop("rows_trained", 0)) or None
         metrics = metrics_raw
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         log.warning("retrain job %s succeeded but metrics read failed: %s", job_id, exc)
 
-    # Step 3: eval tren tap test (data_split='test' trong CSV) — viet
-    # holdout_eval.json vao report_dir cho step 4 doc lai. Fail-soft.
-    eval_status = _run_holdout_eval(report_dir, job_id)
+    # Step 3: eval candidate tren tap test (data_split='test' trong CSV) — viet
+    # holdout_eval.json vao report_dir cho step 4/report doc lai. Fail-soft.
+    eval_status = _run_holdout_eval(report_dir, job_id, model_path=CANDIDATE_ARTIFACT_PATH)
     metrics["eval"] = eval_status
 
-    # Doc val_metrics.json (train da viet) + holdout_eval.json (eval vua viet)
-    # + train_split_stats.json (build_csv viet) → gop vao metrics audit.
-    val_metrics_summary = _read_json_optional(VAL_METRICS_PATH)
-    if val_metrics_summary:
-        metrics["val"] = val_metrics_summary
+    # Doc candidate val + holdout test + split stats → gop vao metrics audit.
+    candidate_val = _read_json_optional(CANDIDATE_VAL_METRICS_PATH)
+    if candidate_val:
+        metrics["val"] = candidate_val
     holdout_summary = _read_json_optional(report_dir / "holdout_eval.json")
+    candidate_test: dict[str, Any] | None = None
     if holdout_summary and isinstance(holdout_summary.get("overall"), dict):
-        metrics["test"] = holdout_summary["overall"]
-        test_rmse = holdout_summary["overall"].get("rmse_db")
-        if isinstance(test_rmse, (int, float)) and test_rmse > TEST_RMSE_HIGH_DB:
-            metrics["warning"] = "test_rmse_high"
-            log.warning(
-                "retrain job %s test RMSE %.2f dB > %.1f dB nguong",
-                job_id,
-                test_rmse,
-                TEST_RMSE_HIGH_DB,
-            )
+        candidate_test = holdout_summary["overall"]
+        metrics["test"] = candidate_test
     split_stats = _read_json_optional(SPLIT_STATS_PATH)
     if split_stats:
         metrics["split_stats"] = split_stats
 
-    # Hot-reload ml-service. Fail-soft: log warning + ghi vao metrics nhung
-    # KHONG fail job (model file da swap xong, ml-service tu reload khi restart).
-    reload_status = _call_ml_service_reload()
-    if reload_status:
-        metrics["ml_service_reload"] = reload_status
+    # Step 4: PROMOTION GATE — chi swap candidate -> active khi dat nguong.
+    # Chong day model kem len production (truoc day model luon bi ghi de).
+    active_metrics = _read_json_optional(ACTIVE_MODEL_METRICS_PATH)
+    promote, reason = _promotion_decision(candidate_val, candidate_test, active_metrics)
+    metrics["promoted"] = promote
+    metrics["promotion_reason"] = reason
+
+    if promote:
+        try:
+            _promote_candidate(candidate_val, candidate_test)
+            log.info("retrain job %s PROMOTED candidate -> active (%s)", job_id, reason)
+        except OSError as exc:
+            # Swap loi (vd. disk) — giu model cu, danh dau khong promote.
+            metrics["promoted"] = False
+            metrics["promotion_reason"] = f"promote IO error: {exc!s}"
+            log.error("retrain job %s promote failed: %s", job_id, exc)
+            promote = False
+        else:
+            # Hot-reload ml-service chi khi da swap artifact moi. Fail-soft.
+            reload_status = _call_ml_service_reload()
+            if reload_status:
+                metrics["ml_service_reload"] = reload_status
+    else:
+        _discard_candidate()
+        log.warning("retrain job %s NOT promoted: %s", job_id, reason)
 
     # Render bao cao (plots + HTML + PDF). Fail-soft — neu fail, ghi log + bao
     # cao loi vao metrics nhung KHONG fail job (model da swap xong).
@@ -228,11 +260,14 @@ def retrain_ml_model(self: Any, job_id: str) -> dict[str, Any]:
     }
 
 
-def _run_holdout_eval(report_dir: Path, job_id: str) -> dict[str, Any]:
+def _run_holdout_eval(
+    report_dir: Path, job_id: str, model_path: Path = ARTIFACT_PATH
+) -> dict[str, Any]:
     """Chay eval_extra_trees_holdout.py qua subprocess. Fail-soft: tra dict status.
 
     Eval doc CSV training (data_split='test'), khong cham DB, khong recompute DEM.
-    Viet ket qua vao <report_dir>/holdout_eval.json.
+    Viet ket qua vao <report_dir>/holdout_eval.json. `model_path` mac dinh model
+    active; retrain truyen .candidate de eval truoc khi promote.
     """
     report_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -240,6 +275,8 @@ def _run_holdout_eval(report_dir: Path, job_id: str) -> dict[str, Any]:
         str(EVAL_SCRIPT_PATH),
         "--out-dir",
         str(report_dir),
+        "--model",
+        str(model_path),
     ]
     try:
         proc = subprocess.run(
@@ -264,6 +301,83 @@ def _read_json_optional(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("Khong doc duoc %s: %s", path, exc)
         return None
+
+
+def _promotion_decision(
+    candidate_val: dict[str, Any] | None,
+    candidate_test: dict[str, Any] | None,
+    active_metrics: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    """Quyet dinh co swap candidate -> active khong.
+
+    Quy tac:
+      1. Sanity tuyet doi: candidate test RMSE phai <= TEST_RMSE_HIGH_DB.
+      2. Bootstrap: chua co model active (hoac chua co metrics snapshot) -> promote
+         neu qua (1).
+      3. Regression-guard: candidate val RMSE khong duoc tệ hơn active qua
+         VAL_RMSE_REGRESSION_TOLERANCE_DB.
+    Thieu metric (None) -> bo qua check tuong ung (fail-open ve phia promote, tru
+    khi test RMSE vuot nguong tuyet doi).
+    """
+    test_rmse = candidate_test.get("rmse_db") if candidate_test else None
+    if isinstance(test_rmse, (int, float)) and test_rmse > TEST_RMSE_HIGH_DB:
+        return False, f"test RMSE {test_rmse:.2f} dB > nguong {TEST_RMSE_HIGH_DB:.1f} dB"
+
+    if not ARTIFACT_PATH.exists() or not active_metrics:
+        return True, "bootstrap (chua co model active de so sanh)"
+
+    cand_val_rmse = candidate_val.get("rmse") if candidate_val else None
+    active_val = active_metrics.get("val") if isinstance(active_metrics.get("val"), dict) else None
+    active_val_rmse = active_val.get("rmse") if active_val else None
+    if isinstance(cand_val_rmse, (int, float)) and isinstance(active_val_rmse, (int, float)):
+        if cand_val_rmse > active_val_rmse + VAL_RMSE_REGRESSION_TOLERANCE_DB:
+            return False, (
+                f"val RMSE {cand_val_rmse:.2f} dB tệ hơn active {active_val_rmse:.2f} dB "
+                f"quá nguong {VAL_RMSE_REGRESSION_TOLERANCE_DB:.1f} dB"
+            )
+        return True, (
+            f"val RMSE {cand_val_rmse:.2f} dB vs active {active_val_rmse:.2f} dB — dat nguong"
+        )
+    return True, "dat sanity test RMSE (thieu val metric de so sanh active)"
+
+
+def _promote_candidate(
+    candidate_val: dict[str, Any] | None,
+    candidate_test: dict[str, Any] | None,
+) -> None:
+    """Atomic-swap candidate -> active + dong bo metrics/aux files.
+
+    `.replace()` la atomic rename tren cung filesystem (ML_DATA_DIR) — ml-service
+    khong bao gio doc file ban do.
+    """
+    CANDIDATE_ARTIFACT_PATH.replace(ARTIFACT_PATH)
+    # Dong bo metrics + aux artifacts cua candidate sang ten active.
+    for src, dst in (
+        (CANDIDATE_METRICS_PATH, METRICS_PATH),
+        (CANDIDATE_VAL_METRICS_PATH, VAL_METRICS_PATH),
+        (CANDIDATE_FALLBACK_PATH, ACTIVE_FALLBACK_PATH),
+        (CANDIDATE_GATEWAY_TABLE_PATH, ACTIVE_GATEWAY_TABLE_PATH),
+    ):
+        if src.exists():
+            src.replace(dst)
+    # Snapshot metrics cua model vua promote — lan retrain sau doc lai de so sanh.
+    snapshot = {"val": candidate_val or {}, "test": candidate_test or {}}
+    ACTIVE_MODEL_METRICS_PATH.write_text(json.dumps(snapshot, indent=2))
+
+
+def _discard_candidate() -> None:
+    """Xoa cac file candidate khi khong promote (giu model active nguyen ven)."""
+    for path in (
+        CANDIDATE_ARTIFACT_PATH,
+        CANDIDATE_METRICS_PATH,
+        CANDIDATE_VAL_METRICS_PATH,
+        CANDIDATE_FALLBACK_PATH,
+        CANDIDATE_GATEWAY_TABLE_PATH,
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("Khong xoa duoc candidate %s: %s", path, exc)
 
 
 def _render_report(

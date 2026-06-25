@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -69,15 +70,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger(__name__)
 
 
+def _load_holdout_mse_db2() -> float | None:
+    """Đọc val_metrics.json (cạnh model artifact) → MSE holdout = rmse².
+
+    Dùng làm thành phần epistemic uncertainty trả về /residual: api-service cộng
+    vào confidence để dải ±σ trên UI phản ánh đúng sai số model (~7 dB), thay vì
+    chỉ shadow-fading. None nếu thiếu file/giá trị bất thường.
+    """
+    val_path = Path(settings.model_path).parent / "val_metrics.json"
+    if not val_path.exists():
+        return None
+    try:
+        rmse = json.loads(val_path.read_text()).get("rmse")
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read val_metrics.json: {e}")
+        return None
+    if isinstance(rmse, (int, float)) and rmse > 0:
+        return float(rmse) ** 2
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = None
     app.state.is_model_active = False  # État stocké de manière thread-safe dans l'app
+    app.state.holdout_mse_db2 = None
 
     if Path(settings.model_path).exists():
         try:
             app.state.model = joblib.load(settings.model_path)
             app.state.is_model_active = True
+            app.state.holdout_mse_db2 = _load_holdout_mse_db2()
             logger.info(f"Model loaded from {settings.model_path}")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
@@ -133,6 +156,9 @@ class PredictionResponse(BaseModel):
     residual_db: float | None
     model_version: str
     ood: bool = False
+    # MSE holdout (dB²) của model — epistemic uncertainty để api-service dựng dải
+    # ±σ trung thực. None khi không đọc được val_metrics.
+    holdout_mse_db2: float | None = None
 
 
 class BatchPredictionRequest(BaseModel):
@@ -233,6 +259,7 @@ async def admin_reload(
         # — /healthz + /residual vẫn responsive trong khi reload.
         request.app.state.model = await asyncio.to_thread(joblib.load, path)
         request.app.state.is_model_active = True
+        request.app.state.holdout_mse_db2 = _load_holdout_mse_db2()
         logger.info(f"Model hot-reloaded from {settings.model_path}")
         return {"status": "ok", "model_path": str(path), "model_version": settings.model_version}
     except Exception as e:
@@ -270,7 +297,10 @@ async def predict_residual(
         rssi_et = float(request.app.state.model.predict(features)[0])
         residual = rssi_et - t.stage1_rssi_dbm
         return PredictionResponse(
-            residual_db=residual, model_version=settings.model_version, ood=False
+            residual_db=residual,
+            model_version=settings.model_version,
+            ood=False,
+            holdout_mse_db2=getattr(request.app.state, "holdout_mse_db2", None),
         )
     except Exception as e:
         logger.error(f"Inference error: {e}")

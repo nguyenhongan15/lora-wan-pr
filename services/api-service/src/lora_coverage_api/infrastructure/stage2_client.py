@@ -96,7 +96,9 @@ class Stage2Client:
             return None
 
         data = resp.json()
+        mse_raw = data.get("holdout_mse_db2")
         return Stage2Result(
             residual_db=float(data["residual_db"]),
             model_version=str(data["model_version"]),
+            holdout_mse_db2=float(mse_raw) if isinstance(mse_raw, (int, float)) else None,
         )

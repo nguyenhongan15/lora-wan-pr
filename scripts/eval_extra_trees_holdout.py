@@ -107,6 +107,12 @@ def main() -> None:
         default=str(DEFAULT_REPORT_DIR),
         help="Output directory for holdout_eval.json.",
     )
+    p.add_argument(
+        "--model",
+        default=str(MODEL_PATH),
+        help="Model artifact to evaluate (default: active model). Promotion gate "
+        "passes the .candidate path để eval truoc khi swap.",
+    )
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -114,10 +120,11 @@ def main() -> None:
 
     csv_path = Path(args.csv)
     out_dir = Path(args.out_dir)
+    model_path = Path(args.model)
     if not csv_path.exists():
         raise SystemExit(f"CSV not found at {csv_path}. Run build_training_csv.py first.")
-    if not MODEL_PATH.exists():
-        raise SystemExit(f"Model not found at {MODEL_PATH}. Run train_extra_trees.py first.")
+    if not model_path.exists():
+        raise SystemExit(f"Model not found at {model_path}. Run train_extra_trees.py first.")
 
     log.info("Loading CSV from %s", csv_path)
     df = pd.read_csv(csv_path)
@@ -132,8 +139,8 @@ def main() -> None:
         raise SystemExit("No rows with data_split=='test' — check split rule")
     log.info("Test split rows: %d", len(df_test))
 
-    log.info("Loading model from %s", MODEL_PATH)
-    model = joblib.load(MODEL_PATH)
+    log.info("Loading model from %s", model_path)
+    model = joblib.load(model_path)
 
     X = df_test[ALL_FEATURES]
     y_true = df_test[TARGET].to_numpy()

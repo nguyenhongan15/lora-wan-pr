@@ -93,11 +93,27 @@ class PredictionOrchestrator:
             return result
 
         delta = stage2_out.residual_db
-        refined_confidence = (
-            dataclasses.replace(pred.confidence, method=ConfidenceMethod.RESIDUAL)
-            if isinstance(pred.confidence, Confidence)
-            else pred.confidence
-        )
+        if isinstance(pred.confidence, Confidence):
+            # Dải ±σ trên UI = √(epistemic + aleatoric). Trước đây epistemic=0 nên
+            # dải chỉ phản ánh shadow-fading, "tự tin thái quá" so với sai số ML
+            # thực (~7 dB holdout). Đặt epistemic = max(0, MSE_holdout −
+            # aleatoric) → tổng phương sai ≈ MSE holdout, KHÔNG double-count phần
+            # shadow-fading đã nằm trong aleatoric (holdout RMSE đo trên RSSI thực
+            # nên đã bao hàm fading). holdout_mse_db2 None → giữ epistemic cũ.
+            epistemic = pred.confidence.epistemic_variance_db2
+            if stage2_out.holdout_mse_db2 is not None:
+                epistemic = max(
+                    epistemic,
+                    stage2_out.holdout_mse_db2 - pred.confidence.aleatoric_variance_db2,
+                    0.0,
+                )
+            refined_confidence = dataclasses.replace(
+                pred.confidence,
+                method=ConfidenceMethod.RESIDUAL,
+                epistemic_variance_db2=epistemic,
+            )
+        else:
+            refined_confidence = pred.confidence
 
         # delta = (ET end-to-end RSSI) − (Stage1 RSSI) là dB shift đồng đều —
         # noise floor và sensitivity bất biến → SNR và margin shift cùng delta.

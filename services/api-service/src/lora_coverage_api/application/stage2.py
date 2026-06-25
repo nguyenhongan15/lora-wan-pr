@@ -23,6 +23,9 @@ class Stage2Result:
 
     residual_db: float
     model_version: str
+    # MSE holdout (dB²) của ML model — None nếu ml-service không cung cấp. Dùng
+    # để dựng epistemic variance cho confidence (dải ±σ trung thực trên UI).
+    holdout_mse_db2: float | None = None
 
 
 class Stage2Predictor(Protocol):

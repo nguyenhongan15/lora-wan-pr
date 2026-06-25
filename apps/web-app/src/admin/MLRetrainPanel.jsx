@@ -179,8 +179,20 @@ function JobStatusView({ job }) {
         {job.status === "succeeded" && (
           <span className="text-slate-600">{t.summary(job.rows_trained)}</span>
         )}
+        {job.status === "succeeded" &&
+          typeof job.metrics?.promoted === "boolean" && (
+            <PromotionBadge promoted={job.metrics.promoted} />
+          )}
         {isDone && job.report_dir && <ReportActions jobId={job.id} />}
       </div>
+
+      {job.status === "succeeded" &&
+        job.metrics?.promoted === false &&
+        typeof job.metrics?.promotion_reason === "string" && (
+          <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            {t.promotionReasonLabel}: {job.metrics.promotion_reason}
+          </div>
+        )}
 
       {job.error_text && (
         <details className="rounded border border-red-200 bg-red-50 px-3 py-2">
@@ -204,7 +216,11 @@ function JobStatusView({ job }) {
           <TestMetricsBlock test={job.metrics?.test} />
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
             {Object.entries(job.metrics)
-              .filter(([, v]) => typeof v !== "object" || v === null)
+              .filter(([k, v]) => {
+                // promoted/promotion_reason đã hiển thị bằng badge riêng.
+                if (k === "promoted" || k === "promotion_reason") return false;
+                return typeof v !== "object" || v === null;
+              })
               .map(([k, v]) => (
                 <MetricRow key={k} k={k} v={v} />
               ))}
@@ -349,6 +365,18 @@ function HistoryView({ query }) {
         </table>
       </div>
     </div>
+  );
+}
+
+/** @param {{ promoted: boolean }} props */
+function PromotionBadge({ promoted }) {
+  const cls = promoted
+    ? "bg-emerald-100 text-emerald-700"
+    : "bg-amber-100 text-amber-800";
+  return (
+    <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {promoted ? t.promotedYes : t.promotedNo}
+    </span>
   );
 }
 

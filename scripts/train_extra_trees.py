@@ -1,9 +1,16 @@
 """Train Extra Trees model using the reference pipeline and save it.
 
 Usage:
-    uv run python scripts/train_extra_trees.py
+    uv run python scripts/train_extra_trees.py            # ghi đè artifact active
+    uv run python scripts/train_extra_trees.py --candidate # ghi ra artifact .candidate
+
+`--candidate` dùng bởi Celery retrain (tasks/retrain_ml.py): train ra artifact
+tạm + metrics tạm, KHÔNG đụng model đang serve. Promotion gate ở retrain_ml.py
+mới quyết định có swap candidate → active hay không (chống đẩy model kém lên
+production).
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -52,6 +59,16 @@ CATEGORICAL_FEATURES = ["gateway"]
 
 TARGET = "rssi"
 
+# Gap train↔val lớn (train R²~0.94 vs spatial-holdout val R²~0.20) trông giống
+# overfitting, NHƯNG thực nghiệm cho thấy đây là distribution shift không gian
+# (chỉ 13 gateway, 1 vùng) — KHÔNG giảm được bằng regularize. Đã thử trên val:
+#   max_features=0.5 + leaf=5  → val RMSE 7.94 (xấu hơn)
+#   max_features=None + leaf=4 → val RMSE 7.58 (xấu hơn)
+#   max_features=None + leaf=2 → val RMSE 7.38 (TỐT NHẤT — cấu hình dưới)
+# Giảm capacity chỉ làm underfit. Đòn bẩy thật cho generalization là DỮ LIỆU
+# rộng hơn (thêm gateway/vùng), không phải siêu tham số. Giữ capacity tối đa;
+# promotion gate (tasks/retrain_ml.py) + dải ±σ trung thực (prediction_service)
+# là lớp bảo vệ khi val còn yếu.
 ET_PARAMS = {
     "n_estimators": 1500,
     "max_depth": 20,
@@ -96,7 +113,36 @@ def _metrics(y_true, y_pred) -> dict:
     }
 
 
+def _resolve_output_paths(candidate: bool) -> dict[str, Path]:
+    """Trả các đường dẫn output. `--candidate` → biến thể .candidate để không
+    đụng artifact/metrics đang active (promotion gate xử lý swap sau)."""
+    if candidate:
+        return {
+            "model": MODEL_DIR / "extra_trees_model.candidate.joblib",
+            "train_metrics": MODEL_DIR / "train_metrics.candidate.json",
+            "val_metrics": MODEL_DIR / "val_metrics.candidate.json",
+            "terrain_fallback": MODEL_DIR / "terrain_fallback.candidate.json",
+            "gateway_table": MODEL_DIR / "gateway_table.candidate.csv",
+        }
+    return {
+        "model": MODEL_PATH,
+        "train_metrics": MODEL_DIR / "train_metrics.json",
+        "val_metrics": VAL_METRICS_PATH,
+        "terrain_fallback": MODEL_DIR / "terrain_fallback.json",
+        "gateway_table": MODEL_DIR / "gateway_table.csv",
+    }
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--candidate",
+        action="store_true",
+        help="Ghi ra artifact .candidate thay vì ghi đè model active (cho promotion gate).",
+    )
+    args = parser.parse_args()
+    out_paths = _resolve_output_paths(args.candidate)
+
     print(f"Loading data from {DATA_PATH}")
     df = pd.read_csv(DATA_PATH)
     print(f"Dataset shape: {df.shape}")
@@ -150,19 +196,21 @@ def main():
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     # Atomic swap: ghi xuong .new roi rename de ml-service khong serve file ban
-    # do (admin retrain co the ghi de trong khi ml-service dang load).
-    model_tmp = MODEL_PATH.with_suffix(MODEL_PATH.suffix + ".new")
+    # do (admin retrain co the ghi de trong khi ml-service dang load). O che do
+    # --candidate, dich la artifact .candidate (khong phai model active).
+    model_out = out_paths["model"]
+    model_tmp = model_out.with_suffix(model_out.suffix + ".new")
     joblib.dump(pipeline, model_tmp, compress=3)
-    model_tmp.replace(MODEL_PATH)
-    print(f"\nModel saved to {MODEL_PATH} ({MODEL_PATH.stat().st_size / 1024:.1f} KB)")
+    model_tmp.replace(model_out)
+    print(f"\nModel saved to {model_out} ({model_out.stat().st_size / 1024:.1f} KB)")
 
-    fallback_path = MODEL_DIR / "terrain_fallback.json"
+    fallback_path = out_paths["terrain_fallback"]
     with fallback_path.open("w") as f:
         json.dump(terrain_fallback, f, indent=2)
     print(f"Terrain fallback saved to {fallback_path}")
 
     # Metrics JSON cho Celery task doc lai sau khi train xong.
-    metrics_path = MODEL_DIR / "train_metrics.json"
+    metrics_path = out_paths["train_metrics"]
     metrics_payload = {
         "rmse": rmse,
         "mae": mae,
@@ -174,13 +222,14 @@ def main():
         json.dump(metrics_payload, f, indent=2)
     print(f"Metrics saved to {metrics_path}")
 
-    with VAL_METRICS_PATH.open("w") as f:
+    val_metrics_path = out_paths["val_metrics"]
+    with val_metrics_path.open("w") as f:
         json.dump(val_metrics, f, indent=2)
-    print(f"Val metrics saved to {VAL_METRICS_PATH}")
+    print(f"Val metrics saved to {val_metrics_path}")
 
     gw_cols = ["gateway", "gw_lat", "gw_lon", "gw_elevation", "frequency"]
     gw_table = df[gw_cols].drop_duplicates(subset="gateway").reset_index(drop=True)
-    gw_path = MODEL_DIR / "gateway_table.csv"
+    gw_path = out_paths["gateway_table"]
     gw_table.to_csv(gw_path, index=False)
     print(f"Gateway table saved to {gw_path} ({len(gw_table)} gateways)")
     print("Done!")

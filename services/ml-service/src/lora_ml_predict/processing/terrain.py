@@ -29,7 +29,8 @@ def add_3d_distance(df):
 
     df["distance_3d"] = np.sqrt(df["distance"] ** 2 + dz**2)
 
-    df["log_distance_3d"] = np.log10(df["distance_3d"])
+    # clip(lower=1.0) khớp build_training_csv.py:424 — parity train↔serving.
+    df["log_distance_3d"] = np.log10(df["distance_3d"].clip(lower=1.0))
 
     return df
 

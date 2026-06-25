@@ -26,7 +26,9 @@ def haversine(
 def add_basic_features(df):
     df["distance"] = haversine(df["lat"], df["lon"], df["gw_lat"], df["gw_lon"])
 
-    df["log_distance"] = np.log10(df["distance"])
+    # clip(lower=1.0) khớp build_training_csv.py — tránh log10(0)/âm khi device
+    # ~trùng vị trí gateway (distance < 1 m). Parity train↔serving.
+    df["log_distance"] = np.log10(df["distance"].clip(lower=1.0))
 
     df = add_geometry_features(df)
 
