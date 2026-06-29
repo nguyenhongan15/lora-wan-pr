@@ -13,4 +13,4 @@ Quy tắc bất biến:
   (xem CI grep rule trong .github/workflows/ci.yml).
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

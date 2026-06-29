@@ -1,3 +1,4 @@
+# v1.0.0
 # web-app
 
 React 19 + Vite 8 + **JavaScript ES2024** (JSDoc + Zod runtime) + Tailwind 4 + TanStack Query + MapLibre GL.

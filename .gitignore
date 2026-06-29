@@ -81,6 +81,9 @@ logs/
 *.bak
 tmp/
 
+# ── Heatmap snapshot (backup vật lý trước khi rebuild, local-only) ──
+.heatmap-snapshot-before-rebuild/
+
 # ── Personal / local config (không commit) ─────────────────
 .claude/
 u-work/

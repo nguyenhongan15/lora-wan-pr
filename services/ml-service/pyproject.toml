@@ -1,6 +1,6 @@
 [project]
 name = "lora-ml-predict"
-version = "0.1.0"
+version = "1.0.0"
 description = "LoRa coverage ML prediction service (Stage 2)"
 readme = "README.md"
 requires-python = ">=3.12"

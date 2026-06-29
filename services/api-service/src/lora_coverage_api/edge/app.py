@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
     _docs_enabled = settings.app_env != "production"
     app = FastAPI(
         title="LoRa Coverage Platform API",
-        version="0.2.0",
+        version="1.0.0",
         docs_url="/docs" if _docs_enabled else None,
         redoc_url=None,
         openapi_url="/openapi.json" if _docs_enabled else None,

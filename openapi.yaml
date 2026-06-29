@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LoRa Coverage Platform API
-  version: 0.3.0
+  version: 1.0.0
   description: |
     Public REST API cho LoRa network coverage querying, gateway directory &
     survey ingestion.

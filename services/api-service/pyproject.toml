@@ -1,6 +1,6 @@
 [project]
 name = "lora-coverage-api"
-version = "0.1.0"
+version = "1.0.0"
 description = "LoRa Coverage Platform — REST API service (FastAPI)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
