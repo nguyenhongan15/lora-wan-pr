@@ -10,8 +10,8 @@ Flow:
 
 Threshold DB-derived:
   - last_packet_at NULL → never_seen
-  - last_packet_at trong 5 phút gần đây → online
-  - else → offline
+  - last_packet_at trong 45 ngày gần đây → online
+  - else (không có gói đo nào từ device trong 45 ngày) → offline
 
 Failure mode: cả 2 nguồn fail → router fallback state='unknown'. KHÔNG raise.
 """
@@ -47,7 +47,9 @@ _CS_STATE_MAP: dict[int, StateLiteral] = {
 }
 _CACHE_KEY = "gw_state:v1"
 _LIST_PAGE_SIZE = 100
-_DB_ONLINE_WINDOW = timedelta(minutes=5)
+# DB-derived state dựa trên gói ĐO của device (rời rạc), không phải heartbeat
+# gateway → dùng cửa sổ rộng: không có gói nào trong 45 ngày mới coi là offline.
+_DB_ONLINE_WINDOW = timedelta(days=45)
 
 
 @dataclass(frozen=True, slots=True)

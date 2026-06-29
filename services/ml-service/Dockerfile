@@ -31,10 +31,9 @@ ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --package lora-ml-predict --no-dev --frozen --no-editable --no-install-project
 
-# Src + reference_wireless copy XUỐNG ĐÂY — sửa code chỉ invalidate layer này
-# + project-install bên dưới.
+# Src copy XUỐNG ĐÂY — sửa code chỉ invalidate layer này + project-install bên dưới.
+# (training data sống ở data/training, không cần ở runtime image — chỉ wheel src.)
 COPY services/ml-service/src /build/services/ml-service/src
-COPY services/ml-service/reference_wireless /build/services/ml-service/reference_wireless
 
 # Project install — deps đã có trong .venv, uv chỉ build wheel của project.
 RUN --mount=type=cache,target=/root/.cache/uv \

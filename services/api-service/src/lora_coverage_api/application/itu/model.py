@@ -104,6 +104,15 @@ class Stage1ItuModel:
             bel_db = self.backend.building_entry_loss_db(target.frequency_mhz, prob_pct)
             pl_db += bel_db
 
+        # Per-gateway RSSI bias calibration: `rssi_bias_db` = dB cộng vào RSSI dự
+        # đoán (= mean(measured − physics) fit từ survey). RSSI = base − pl_db nên
+        # trừ bias khỏi pl_db. Sửa sai số hệ thống của Stage 1 cho gateway này
+        # (anten/vị trí/môi trường thực ≠ nominal) — đo holdout: test RMSE 13.9→8.3.
+        # Áp cho cả UL/DL (bias chủ yếu là sai số path/môi trường, đối xứng).
+        # None → không hiệu chỉnh.
+        if gateway.rssi_bias_db is not None:
+            pl_db -= gateway.rssi_bias_db
+
         d_km = _haversine_km(target.latitude, target.longitude, gateway.latitude, gateway.longitude)
 
         gw_rx_gain = resolve_gateway_rx_gain(gateway)

@@ -1,0 +1,52 @@
+{
+  "target_kind": "residual",
+  "numeric_features": [
+    "frequency",
+    "spreading_factor",
+    "log_distance",
+    "log_distance_3d",
+    "delta_lat",
+    "delta_lon",
+    "angle",
+    "gw_elevation",
+    "delta_elevation",
+    "elevation_angle",
+    "slope",
+    "roughness",
+    "terrain_mean",
+    "terrain_std",
+    "terrain_min",
+    "terrain_max",
+    "fresnel_obstruction_ratio",
+    "min_fresnel_clearance",
+    "mean_fresnel_clearance",
+    "residential_ratio"
+  ],
+  "categorical_features": [
+    "gateway"
+  ],
+  "all_features": [
+    "frequency",
+    "spreading_factor",
+    "log_distance",
+    "log_distance_3d",
+    "delta_lat",
+    "delta_lon",
+    "angle",
+    "gw_elevation",
+    "delta_elevation",
+    "elevation_angle",
+    "slope",
+    "roughness",
+    "terrain_mean",
+    "terrain_std",
+    "terrain_min",
+    "terrain_max",
+    "fresnel_obstruction_ratio",
+    "min_fresnel_clearance",
+    "mean_fresnel_clearance",
+    "residential_ratio",
+    "gateway"
+  ],
+  "with_stage1_feature": false
+}

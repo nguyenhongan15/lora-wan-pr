@@ -170,7 +170,7 @@ class GatewayResponse(BaseModel):
     rx_sensitivity_dbm: float | None = None
     noise_floor_dbm: float | None = None
     # Live state — ChirpStack ưu tiên (real-time); fallback derive từ
-    # MAX(survey_training.timestamp) per gateway (window 5 phút = online).
+    # MAX(survey_training.timestamp) per gateway (window 45 ngày = online).
     # "unknown" = cả 2 nguồn fail; never_seen = chưa có packet nào.
     state: Literal["online", "offline", "never_seen", "unknown"] = "unknown"
     last_seen_at: datetime | None = None

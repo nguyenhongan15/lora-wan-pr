@@ -1,6 +1,6 @@
 # LoRa Coverage Mapping Platform
 
-LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 + P.2108 (Stage 1 physics) + XGBoost residual (Stage 2 ML) + React/MapLibre web UI.
+LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 + P.2108 (Stage 1 physics) + ExtraTrees end-to-end (Stage 2 ML) + React/MapLibre web UI.
 
 ## Quick start (dev)
 
@@ -37,7 +37,7 @@ apps/
 
 services/
   api-service/      ✅ FastAPI (Python 3.12), 5-layer architecture, Stage 1 ITU-R P.1812 + P.2108
-  ml-service/       ✅ FastAPI Stage 2 XGBoost residual (v0.6.0). Active when STAGE2_PREDICT_BASE_URL set
+  ml-service/       ✅ FastAPI Stage 2 ExtraTrees end-to-end (v0.7.0). Active when STAGE2_PREDICT_BASE_URL set
   worker-service/   ⏳ Celery + Redis/Valkey (planned)
   tile-server/      ⏳ Go PMTiles server (planned)
 
@@ -47,8 +47,9 @@ packages/
   sdk-js/           ⏳ JS client SDK (planned)
   sdk-go/           ⏳ Go client SDK (planned)
 
-archive/
-  stage2-lightgbm/  📦 Stage 2 LightGBM cũ (RMSE 6.41 dB hold-out, frozen reference, không deploy)
+archive/            (gitignore, local-only — frozen references, không deploy)
+  stage2-lightgbm/  📦 Stage 2 LightGBM cũ (RMSE 6.41 dB hold-out)
+  (XGBoost residual cũ: train_residual_model.py, retrain_stage2.sh, stage2_xgb.joblib + thí nghiệm R&D)
 
 migrations/         ✅ Alembic — 20 revisions (PostGIS + TimescaleDB hypertable + auth + ML registry)
                        Latest: 0020_gateway_noise_floor. Seed: 11 gw DNIIT Đà Nẵng + 2 Hải Phòng pilot
@@ -59,14 +60,15 @@ scripts/            Stage 1 fit/validate, precompute RSSI heatmap, DSM build, ML
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
 
-## Stage 2 ML (XGBoost residual)
+## Stage 2 ML (ExtraTrees end-to-end)
 
-- **Active model**: `stage2-xgb-v0.6.0` (joblib in `services/ml-service/data/stage2_xgb.joblib`)
-- **Features (8)**: lat, lon, sf, gw_lat, gw_lon, distance_km, log_distance_km, delta_alt_m
-- **Hold-out RMSE** (Jan–Feb 2026, n=337, 4 gw outdoor): **10.59 dB**, MAE 7.80, bias +0.77 — gần như không bias
-- **Wiring**: set `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` trong `.env` → api-service tự động gọi `/residual` và trả `model_version = "stage1-itu-p1812-v0.1.0+stage2-xgb-v0.6.0"`. Để trống → Stage 1 only fallback.
+- **Active model**: `stage2-et-v0.7.0` (ExtraTreesRegressor, joblib in `services/ml-service/data/extra_trees_model.joblib`)
+- **Features (21)**: geometry (log_distance, delta_lat/lon, angle, elevation_angle) + terrain DEM (slope, roughness, terrain_*) + Fresnel clearance + residential_ratio + frequency + spreading_factor + gateway (one-hot)
+- **Spatial hold-out** (H3 res-8 + session split, không rò rỉ): **test RMSE 6.32 dB**, MAE 4.75, R² ≈ −0.08 — khái quát hoá không gian còn YẾU (dữ liệu hẹp 13 gw); chạy như lớp tinh chỉnh trên Stage 1, fail thì fallback Stage 1. Chi tiết: `services/ml-service/README.md` §2.
+- **Wiring**: set `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` trong `.env` → api-service tự động gọi `/residual` và trả `model_version = "stage1-itu-p1812-v0.1.0+stage2-et-v0.7.0"`. Để trống → Stage 1 only fallback.
 - **Auth**: shared bearer token qua `LORA_STAGE2_AUTH_TOKEN`.
-- Chi tiết train + reproduce: `services/ml-service/README.md`, `scripts/train_residual_model.py`.
+- Chi tiết train + reproduce: `services/ml-service/README.md`, `scripts/build_training_csv.py` + `services/ml-service/scripts/train_extra_trees.py`.
+- **Legacy XGBoost residual** (`stage2-xgb-v0.6.0`, hold-out 10.59 dB) đã retire vào `archive/` (rollback, không deploy).
 
 ## Coverage map modes (web-app)
 
@@ -116,14 +118,17 @@ Lỗi theo RFC 7807 (`application/problem+json`). Versioning URI-path (`/api/v1`
 ## Scripts (chính)
 
 ```
-scripts/
+scripts/                          # chỉ mục đầy đủ theo nhóm: scripts/README.md
   precompute_rssi_heatmap.py      # Composite RSSI heatmap (Stage 1 + Stage 2)
-  train_residual_model.py         # Train Stage 2 XGBoost từ ts.survey_training
+  build_training_csv.py           # Build CSV train từ ts.survey_training (+ data_split H3)
+  eval_extra_trees_holdout.py     # Eval H3 spatial hold-out (Celery retrain)
   build_dsm.py                    # Build DSM raster (Copernicus + Google buildings + landcover)
   validate_stage1_itu.py          # Stage 1 hold-out validation
   seed_gateways.py                # Seed gw từ CSV vào geo.gateways
   backfill_gateway_noise_floor.py # Per-gw noise floor migration helper
-  experiments/                    # Ad-hoc evals (eval_stage1_vs_stage2, test_fix_options, ...)
+
+services/ml-service/scripts/
+  train_extra_trees.py            # Train Stage 2 ExtraTrees (đã chuyển vào ml-service)
 ```
 
 ## Test

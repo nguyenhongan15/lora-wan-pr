@@ -2,7 +2,7 @@
 
 Replace bước manual của reference_wireless/main.py (fetch_data + parse + clean).
 Đầu vào: rows community-flagged trong ts.survey_training + geo.gateways.
-Đầu ra: services/ml-service/reference_wireless/data/processed/devices_history_full.csv
+Đầu ra: services/ml-service/data/training/processed/devices_history_full.csv
         (cùng schema cũ để train_extra_trees.py đọc không đổi).
 
 Pipeline (port từ reference_wireless/processing/{features,terrain}.py — KHÔNG
@@ -27,6 +27,7 @@ Est. time: 5-30 phút cho 10000 rows (terrain sampling dọc path 30m/step).
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -51,19 +52,19 @@ DEM_NORTH = Path(os.environ.get("LORA_DEM_NORTH", "/data/dem/copernicus_glo30_no
 LANDUSE_CENTRAL = Path(
     os.environ.get(
         "LORA_LANDUSE_CENTRAL",
-        "/app/services/ml-service/reference_wireless/data/terrain/landuse_central.geojson",
+        "/app/services/ml-service/data/training/terrain/landuse_central.geojson",
     )
 )
 LANDUSE_NORTH = Path(
     os.environ.get(
         "LORA_LANDUSE_NORTH",
-        "/app/services/ml-service/reference_wireless/data/terrain/landuse2.geojson",
+        "/app/services/ml-service/data/training/terrain/landuse2.geojson",
     )
 )
 CSV_OUT = Path(
     os.environ.get(
         "LORA_TRAINING_CSV_OUT",
-        "/app/services/ml-service/reference_wireless/data/processed/devices_history_full.csv",
+        "/app/services/ml-service/data/training/processed/devices_history_full.csv",
     )
 )
 
@@ -237,7 +238,20 @@ SELECT
   s.timestamp                                    AS time,
   (s.frequency_mhz * 1e6)::double precision      AS frequency,
   NULL::int                                      AS bandwidth,
-  s.spreading_factor                             AS spreading_factor
+  s.spreading_factor                             AS spreading_factor,
+  -- Tham số gateway đầy đủ cho Stage 1 P.1812 (target=residual). Chỉ dùng khi
+  -- --with-stage1-rssi; cột thừa vô hại với training tuyệt đối hiện tại.
+  g.id::text                                     AS gw_id,
+  g.name                                         AS gw_name,
+  g.altitude_m                                   AS gw_altitude_m,
+  g.antenna_height_m                             AS gw_antenna_height_m,
+  g.antenna_gain_dbi                             AS gw_antenna_gain_dbi,
+  g.tx_power_dbm                                 AS gw_tx_power_dbm,
+  (g.frequency_mhz)::double precision            AS gw_frequency_mhz,
+  g.rx_antenna_gain_dbi                          AS gw_rx_antenna_gain_dbi,
+  g.rx_sensitivity_dbm                           AS gw_rx_sensitivity_dbm,
+  g.noise_floor_dbm                              AS gw_noise_floor_dbm,
+  g.rssi_bias_db                                 AS gw_rssi_bias_db
 FROM ts.survey_training s
 JOIN geo.gateways g ON s.serving_gateway_id = g.id
 WHERE s.submitted_for_community = TRUE
@@ -618,12 +632,101 @@ def assign_h3_session_split(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, stats
 
 
+def add_stage1_rssi_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Tính P.1812 uplink RSSI per row → cột `stage1_rssi_dbm` (cho target residual).
+
+    Dùng `Stage1ItuModel` + `CrcCovlibBackend`, CÙNG config serving (loc% từ
+    `LORA_ITU_PERCENT_LOCATION`, DSM từ `LORA_SURFACE_DEM_DIRECTORY`) để residual
+    học ĐÚNG sai số vật lý mà mô hình thấy lúc serving. Đắt (P.1812 mỗi row) — chỉ
+    gọi khi `--with-stage1-rssi`. Import lười để build_csv vẫn chạy được ở chế độ
+    tuyệt đối khi không có crc-covlib.
+    """
+    api_src = Path(__file__).resolve().parents[1] / "services/api-service/src"
+    if api_src.is_dir() and str(api_src) not in sys.path:
+        sys.path.insert(0, str(api_src))
+    from lora_coverage_api.application.itu.model import Stage1ItuModel
+    from lora_coverage_api.application.path_loss import resolve_environment_profile
+    from lora_coverage_api.domain.coverage import Gateway, GatewayId, Target
+    from lora_coverage_api.infrastructure.itu.crc_covlib_backend import CrcCovlibBackend
+
+    surf_raw = os.environ.get("LORA_SURFACE_DEM_DIRECTORY", "")
+    backend = CrcCovlibBackend(
+        dem_directory=Path(os.environ["LORA_DEM_DIRECTORY"]),
+        surface_dem_directory=Path(surf_raw) if surf_raw else None,
+        model_version="build-csv-stage1",
+        percent_time=float(os.environ.get("LORA_ITU_PERCENT_TIME", "50")),
+        percent_location=float(os.environ.get("LORA_ITU_PERCENT_LOCATION", "50")),
+    )
+    stage1 = Stage1ItuModel(
+        model_version="build-csv-stage1",
+        backend=backend,
+        env_profile=resolve_environment_profile(os.environ.get("LORA_ENV_PROFILE", "suburban")),
+    )
+
+    def _opt(v: object) -> float | None:
+        if v is None:
+            return None
+        fv = float(v)  # type: ignore[arg-type]
+        return None if np.isnan(fv) else fv
+
+    vals: list[float] = []
+    t0 = time.time()
+    log_every = max(1, len(df) // 20)
+    for i, r in enumerate(df.itertuples(index=False)):
+        try:
+            target = Target(
+                latitude=float(r.lat),
+                longitude=float(r.lon),
+                spreading_factor=int(r.spreading_factor),
+                frequency_mhz=float(r.frequency) / 1e6,
+            )
+            gw = Gateway(
+                id=GatewayId(r.gw_id),
+                code=str(r.gateway),
+                name=str(r.gw_name),
+                latitude=float(r.gw_lat),
+                longitude=float(r.gw_lon),
+                altitude_m=float(r.gw_altitude_m),
+                antenna_height_m=float(r.gw_antenna_height_m),
+                antenna_gain_dbi=float(r.gw_antenna_gain_dbi),
+                tx_power_dbm=float(r.gw_tx_power_dbm),
+                frequency_mhz=float(r.gw_frequency_mhz),
+                rx_antenna_gain_dbi=_opt(r.gw_rx_antenna_gain_dbi),
+                rx_sensitivity_dbm=_opt(r.gw_rx_sensitivity_dbm),
+                noise_floor_dbm=_opt(r.gw_noise_floor_dbm),
+            )
+            pred = stage1.predict(target, gw)
+            # Per-gw RSSI bias cộng thủ công (= Stage1 nội bộ làm `pl -= bias` ⇒ `rssi += bias`).
+            # KHÔNG truyền vào Gateway() vì bản lora_coverage_api cài trong image cũ có thể
+            # chưa có field rssi_bias_db. noise_floor KHÔNG ảnh hưởng uplink_rssi nên bỏ qua được.
+            bias = _opt(r.gw_rssi_bias_db) or 0.0
+            vals.append(float(pred.uplink_rssi_dbm) + bias)
+        except Exception as exc:
+            log.warning("stage1 predict failed row %d: %s", i, exc)
+            vals.append(float("nan"))
+        if (i + 1) % log_every == 0:
+            log.info("  stage1 rssi %d/%d (%.0fs)", i + 1, len(df), time.time() - t0)
+
+    df["stage1_rssi_dbm"] = vals
+    n_nan = int(np.isnan(np.asarray(vals, dtype=float)).sum())
+    log.info("stage1_rssi_dbm done (%.0fs), %d NaN / %d rows", time.time() - t0, n_nan, len(df))
+    return df
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--with-stage1-rssi",
+        action="store_true",
+        help="Tính cột stage1_rssi_dbm (P.1812) cho target residual. Đắt; cần crc-covlib + DEM.",
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    log.info("build_training_csv starting")
+    log.info("build_training_csv starting (with_stage1_rssi=%s)", args.with_stage1_rssi)
 
     df = query_db()
     if len(df) == 0:
@@ -642,6 +745,8 @@ def main() -> int:
     df = add_basic_features(df)
     df = add_terrain_features(df, dem_c, dem_n, lu_c, lu_n)
     df, split_stats = assign_h3_session_split(df)
+    if args.with_stage1_rssi:
+        df = add_stage1_rssi_column(df)
 
     CSV_OUT.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(CSV_OUT, index=False)

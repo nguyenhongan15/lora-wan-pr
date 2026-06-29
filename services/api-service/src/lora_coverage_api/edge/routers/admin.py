@@ -1129,8 +1129,8 @@ def delete_training_batch(
 
 # ── ML retrain (admin "Retrain mô hình học máy") ────────────────────────
 # Mirror pattern coverage rebuild — producer enqueue Celery, worker chạy
-# scripts/train_extra_trees.py atomic-swap + ghi metrics.json. Frontend poll
-# `GET /admin/ml/retrain/{job_id}` mỗi 5s.
+# services/ml-service/scripts/train_extra_trees.py atomic-swap + ghi metrics.json.
+# Frontend poll `GET /admin/ml/retrain/{job_id}` mỗi 5s.
 
 _INSERT_RETRAIN_JOB = text("""
     INSERT INTO audit.ml_retrain_jobs (status, triggered_by)

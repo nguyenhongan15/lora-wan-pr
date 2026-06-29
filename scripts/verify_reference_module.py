@@ -31,8 +31,8 @@ CSV_PATH = (
     REPO_ROOT
     / "services"
     / "ml-service"
-    / "reference_wireless"
     / "data"
+    / "training"
     / "processed"
     / "devices_history_full.csv"
 )

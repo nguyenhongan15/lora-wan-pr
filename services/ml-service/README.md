@@ -4,7 +4,7 @@ FastAPI Stage 2 — Extra Trees end-to-end RSSI prediction on top of Stage 1 ITU
 
 **Status:** 🟡 Active nhưng generalization YẾU. Model `stage2-et-v0.7.0` deployed (ExtraTreesRegressor, 1500 trees, max_depth=20). Trên **spatial hold-out không rò rỉ** (H3 res-8 + session split): **test RMSE 6.32 dB, R² −0.08** — tức trên các ô lưới CHƯA thấy lúc train, model gần như **không tốt hơn việc đoán RSSI trung bình**. Số RMSE 3.50 dB / R² 0.90 trong các phiên bản README cũ là **random split bị leakage** (điểm cùng walk-session rơi cả vào train+test) → lạc quan, KHÔNG dùng làm số đại diện.
 
-Nguyên nhân: dữ liệu hẹp (13 gateway, chủ yếu Đà Nẵng, ~10.9k điểm train phần lớn link 0–2 km). Đây là **distribution shift không gian**, không phải overfitting cổ điển — đã thử regularize đều làm val xấu hơn (xem [`scripts/train_extra_trees.py`](../../scripts/train_extra_trees.py) `ET_PARAMS`). Đòn bẩy thật là **thu thập thêm gateway/vùng**, không phải đổi siêu tham số.
+Nguyên nhân: dữ liệu hẹp (13 gateway, chủ yếu Đà Nẵng, ~10.9k điểm train phần lớn link 0–2 km). Đây là **distribution shift không gian**, không phải overfitting cổ điển — đã thử regularize đều làm val xấu hơn (xem [`scripts/train_extra_trees.py`](scripts/train_extra_trees.py) `ET_PARAMS`). Đòn bẩy thật là **thu thập thêm gateway/vùng**, không phải đổi siêu tham số.
 
 Model vẫn được giữ active vì: (1) tốt hơn baseline XGBoost v0.6 (RMSE 10.58 → 6.32 dB), (2) chạy như **lớp tinh chỉnh** trên Stage 1 vật lý — Stage 2 fail thì fallback Stage 1, (3) độ bất định ML giờ được phản ánh trung thực trên UI qua `holdout_mse_db2` (dải ±σ ≈ ±7 dB thay vì chỉ shadow-fading), (4) **promotion gate** chặn retrain kém lên production. Chưa nên dùng làm số "chốt" cho thesis defense nếu chưa mở rộng dữ liệu.
 
@@ -65,7 +65,7 @@ OOD (lat/lon ngoài bbox VN, SF ngoài [7,12], freq ngoài AS923-2) → `ood: tr
   - Land cover: `residential_ratio`
   - Radio: `frequency`, `spreading_factor`
   - Categorical: `gateway` (OneHotEncoded)
-- **Training data**: `services/ml-service/reference_wireless/data/processed/devices_history_full.csv` (chuẩn bị từ `ts.survey_training` qua `scripts/build_training_csv.py`).
+- **Training data**: `services/ml-service/data/training/processed/devices_history_full.csv` (chuẩn bị từ `ts.survey_training` qua `scripts/build_training_csv.py`).
 - **Pipeline**: `ColumnTransformer` (median imputer + StandardScaler cho numeric; most-frequent imputer + OneHotEncoder cho categorical) → `ExtraTreesRegressor`.
 - **Artifact**: `data/extra_trees_model.joblib` (~113 MB).
 
@@ -141,10 +141,11 @@ curl -s -X POST http://localhost:8001/residual \
 uv run python scripts/build_training_csv.py
 
 # Train Extra Trees, GHI ĐÈ model active (dùng khi train thủ công)
-uv run python scripts/train_extra_trees.py
+# Train script nằm trong ml-service: services/ml-service/scripts/train_extra_trees.py
+uv run python services/ml-service/scripts/train_extra_trees.py
 
 # …hoặc train ra artifact .candidate, KHÔNG đụng model active
-uv run python scripts/train_extra_trees.py --candidate
+uv run python services/ml-service/scripts/train_extra_trees.py --candidate
 
 # Eval trên H3 spatial hold-out (mặc định model active; --model để eval candidate)
 uv run python scripts/eval_extra_trees_holdout.py
@@ -200,22 +201,39 @@ Heatmap "Bản đồ ước lượng" KHÔNG dùng ml-service (drop từ 2026-06
 services/ml-service/
   Dockerfile                         # Python 3.12 + sklearn + crc-covlib runtime
   pyproject.toml                     # Package name: lora-ml-predict
-  src/lora_ml_predict/
+  README.md
+  src/lora_ml_predict/               # CODE — package build vào wheel (chỉ thứ này vào image)
+    __init__.py
     app.py                           # FastAPI app + model loading + endpoints
     processing/                      # Feature extraction (DEM + OSM + Fresnel)
-      features.py terrain.py dem_lookup.py __init__.py
-  data/
-    extra_trees_model.joblib         # Active model artifact (đang serve)
-    extra_trees_model.candidate.*    # Candidate (chỉ tồn tại trong lúc retrain; xoá nếu trượt gate)
+      __init__.py  features.py  terrain.py  dem_lookup.py
+  data/                              # DATA — bind-mount lúc chạy (ml-service :ro, worker :rw)
+    extra_trees_model.joblib         # Active model artifact (đang serve) — untracked, ~113 MB
+    extra_trees_model.candidate.*    # Candidate (chỉ tồn tại lúc retrain; xoá nếu trượt gate)
     val_metrics.json                 # RMSE/MAE/R² trên VAL split → nguồn holdout_mse_db2
     train_metrics.json               # RMSE/MAE/R² in-sample của artifact hiện tại
-    active_model_metrics.json        # Snapshot val/test của model active (promotion gate đọc để so sánh)
-    terrain_fallback.json            # Fallback values cho terrain features
+    active_model_metrics.json        # Snapshot val/test model active (promotion gate so sánh) — ghi runtime
     gateway_table.csv                # Gateway lookup (lat/lon/freq) từ train set
-  reference_wireless/                # Upstream reference pipeline, không wire trực tiếp
+    terrain_fallback.json            # Fallback values cho terrain features
+    dummy_model.txt                  # Placeholder label cho dev/bootstrap
+    training/                        # Dữ liệu train: CSV preprocessed + DEM + OSM landuse
+      processed/
+        devices_history_full.csv     # CSV train ACTIVE — build_training_csv.py ghi (có cột data_split)
+        devices_history_1.csv        # Snapshot research-era (không dùng runtime)
+        devices_history_2.csv        #   ″
+        train_split_stats.json
+      raw/devices_latest.csv         # Dump API thô research-era
+      terrain/
+        dem.tif  dem2.tif            # DEM tiles (Đà Nẵng, Hải Phòng)
+        landuse_central.geojson      # OSM landuse ACTIVE (build_training_csv + extract_landuse)
+        landuse2.geojson             # OSM landuse Bắc VN ACTIVE
+        landuse.geojson              # research-era
+      REFERENCE_README.md            # Ghi chú nghiên cứu pipeline gốc (RF/ET/XGBoost)
 ```
 
-Legacy `data/stage2_xgb.joblib` còn trong repo cho rollback option, không được load runtime.
+Feature extraction (`processing/`) là code chạy runtime; `data/training/` giữ dữ
+liệu để (re)train. Runtime image **chỉ** chứa `src/` (wheel) — toàn bộ `data/`
+(kể cả `training/`) đến từ bind-mount lúc chạy, nên train data không phình image.
 
 ---
 

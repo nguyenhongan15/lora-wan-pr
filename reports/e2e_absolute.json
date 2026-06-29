@@ -1,0 +1,92 @@
+{
+  "window": {
+    "start": "2026-01-01",
+    "end": "2026-02-28"
+  },
+  "bbox_name": "danang",
+  "bbox": [
+    15.8,
+    16.3,
+    107.9,
+    108.5
+  ],
+  "max_link_km": 50.0,
+  "api_base": "http://api-service:8000",
+  "limit": 80,
+  "model_versions_seen": [
+    "stage1-itu-p1812-v0.1.0+stage2-et-v0.7.0"
+  ],
+  "counts": {
+    "rows_fetched": 80,
+    "evaluated": 80,
+    "api_failed": 0,
+    "gw_pick_mismatch": 55,
+    "recommended_sf_match": 30
+  },
+  "overall_rssi": {
+    "n": 80,
+    "rmse_db": 13.190104008308653,
+    "mae_db": 9.924125,
+    "bias_db": -0.641875,
+    "p50_abs_db": 6.945,
+    "p90_abs_db": 24.554000000000002
+  },
+  "overall_snr": {
+    "n": 80,
+    "rmse_db": 12.924283103909477,
+    "mae_db": 10.444374999999999,
+    "bias_db": -1.4493749999999999,
+    "p50_abs_db": 8.135000000000002,
+    "p90_abs_db": 19.744000000000003
+  },
+  "per_distance_bin": [
+    {
+      "n": 80,
+      "rmse_db": 13.190104008308653,
+      "mae_db": 9.924125,
+      "bias_db": -0.641875,
+      "p50_abs_db": 6.945,
+      "p90_abs_db": 24.554000000000002,
+      "bin": "0-2",
+      "snr": {
+        "n": 80,
+        "rmse_db": 12.924283103909477,
+        "mae_db": 10.444374999999999,
+        "bias_db": -1.4493749999999999,
+        "p50_abs_db": 8.135000000000002,
+        "p90_abs_db": 19.744000000000003
+      }
+    }
+  ],
+  "per_sf": [
+    {
+      "n": 80,
+      "rmse_db": 13.190104008308653,
+      "mae_db": 9.924125,
+      "bias_db": -0.641875,
+      "p50_abs_db": 6.945,
+      "p90_abs_db": 24.554000000000002,
+      "sf": 12,
+      "snr": {
+        "n": 80,
+        "rmse_db": 12.924283103909477,
+        "mae_db": 10.444374999999999,
+        "bias_db": -1.4493749999999999,
+        "p50_abs_db": 8.135000000000002,
+        "p90_abs_db": 19.744000000000003
+      }
+    }
+  ],
+  "gw_pick": {
+    "top3_match_rate": 0.7875,
+    "dist_ratio_median": 1.0028133636638807,
+    "dist_ratio_p90": 7.990423040939654,
+    "api_pick_unknown": 0
+  },
+  "reference_baselines": {
+    "offline_rmse_db": 10.58,
+    "offline_bias_db": -0.25,
+    "api_rmse_db_last": 13.47,
+    "api_bias_db_last": 4.55
+  }
+}

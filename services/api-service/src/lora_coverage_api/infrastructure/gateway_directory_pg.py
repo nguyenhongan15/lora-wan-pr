@@ -6,6 +6,7 @@ List/CRUD: thêm cho v2 để admin endpoint hoạt động.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -13,6 +14,8 @@ from sqlalchemy import Engine, text
 
 from ..application.repositories import ContributorSpec
 from ..domain.coverage import Gateway, GatewayId, Target
+
+logger = logging.getLogger(__name__)
 
 # Subset cột được phép update (whitelist — KHÔNG cho update id/code).
 _UPDATABLE_COLUMNS = frozenset(
@@ -28,6 +31,7 @@ _UPDATABLE_COLUMNS = frozenset(
         "rx_antenna_gain_dbi",
         "rx_sensitivity_dbm",
         "noise_floor_dbm",
+        "rssi_bias_db",
         "manual_state_override",
     }
 )
@@ -52,6 +56,7 @@ def _row_to_gateway(r: dict[str, Any]) -> Gateway:
         rx_antenna_gain_dbi=_opt_float(r.get("rx_antenna_gain_dbi")),
         rx_sensitivity_dbm=_opt_float(r.get("rx_sensitivity_dbm")),
         noise_floor_dbm=_opt_float(r.get("noise_floor_dbm")),
+        rssi_bias_db=_opt_float(r.get("rssi_bias_db")),
         is_public=bool(r.get("is_public", True)),
         manual_state_override=r.get("manual_state_override"),
     )
@@ -64,22 +69,70 @@ _SELECT_COLS = """
     altitude_m, antenna_height_m, antenna_gain_dbi,
     tx_power_dbm, frequency_mhz,
     rx_antenna_gain_dbi, rx_sensitivity_dbm,
-    noise_floor_dbm, is_public, manual_state_override
+    noise_floor_dbm, rssi_bias_db, is_public, manual_state_override
 """
 
 
 class PgGatewayDirectory:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, active_within_days: int = 0) -> None:
         self._engine = engine
+        # >0 → chỉ chọn serving gateway còn hoạt động trong N ngày (tránh chọn
+        # gateway đã chết mà thiết bị thật không kết nối được). 0 = tắt filter.
+        self._active_within_days = active_within_days
 
     # ── Read paths ────────────────────────────────────────────────────────
     def find_serving_candidates(
-        self, target: Target, max_distance_km: float = 30.0, limit: int = 5
+        self, target: Target, max_distance_km: float = 30.0, limit: int = 10
     ) -> Sequence[Gateway]:
+        """Top-`limit` gateway public gần nhất trong bán kính, ƯU TIÊN gw còn sống.
+
+        Khi `active_within_days > 0`: chỉ xét gw có hoạt động (uplink/survey) trong
+        cửa sổ đó → /predict không chọn gateway đã tắt từ lâu. Nếu filter loại sạch
+        (vùng không có gw sống) → fallback xét mọi public gw để không trả "no
+        coverage" oan; log lại để theo dõi.
+        """
+        win = self._active_within_days
+        if win > 0:
+            rows = self._query_candidates(target, max_distance_km, limit, active_within_days=win)
+            if rows:
+                return rows
+            logger.warning(
+                "find_serving_candidates: không gw nào hoạt động trong %dd quanh "
+                "(%.5f,%.5f) — fallback xét tất cả public gw",
+                win,
+                target.latitude,
+                target.longitude,
+            )
+        return self._query_candidates(target, max_distance_km, limit, active_within_days=0)
+
+    def _query_candidates(
+        self, target: Target, max_distance_km: float, limit: int, active_within_days: int
+    ) -> list[Gateway]:
         # Không filter theo frequency_mhz: LoRa gateway listen full AS923-2 band
         # (8 channel 923-925 MHz), `gateways.frequency_mhz` chỉ là nominal center,
         # không phải channel filter. Target.frequency_mhz vẫn dùng cho path-loss
         # tính toán xuôi sau khi đã chọn được gateway.
+        params: dict[str, Any] = {
+            "lat": target.latitude,
+            "lon": target.longitude,
+            "radius_m": max_distance_km * 1000.0,
+            "lim": limit,
+        }
+        active_clause = ""
+        if active_within_days > 0:
+            # Gateway "còn sống" = có ít nhất 1 uplink (survey_training) trong cửa
+            # sổ. Cùng tín hiệu MAX(timestamp) mà GatewayStateService dùng làm DB
+            # fallback. Chỉ ~15 gw nên subquery group-by rất nhẹ.
+            active_clause = """
+              AND id IN (
+                    SELECT serving_gateway_id
+                    FROM ts.survey_training
+                    WHERE serving_gateway_id IS NOT NULL
+                    GROUP BY serving_gateway_id
+                    HAVING MAX("timestamp") >= now() - make_interval(days => :win)
+                  )
+            """
+            params["win"] = active_within_days
         sql = text(
             f"""
             SELECT {_SELECT_COLS}
@@ -90,24 +143,13 @@ class PgGatewayDirectory:
                     ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                     :radius_m
                   )
+              {active_clause}
             ORDER BY location <-> ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
             LIMIT :lim
             """
         )
         with self._engine.connect() as conn:
-            rows = (
-                conn.execute(
-                    sql,
-                    {
-                        "lat": target.latitude,
-                        "lon": target.longitude,
-                        "radius_m": max_distance_km * 1000.0,
-                        "lim": limit,
-                    },
-                )
-                .mappings()
-                .all()
-            )
+            rows = conn.execute(sql, params).mappings().all()
         return [_row_to_gateway(dict(r)) for r in rows]
 
     def list_gateways(

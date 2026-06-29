@@ -27,6 +27,7 @@ Schema r-dt:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -60,6 +61,16 @@ def _normalize(row: dict[str, Any], freq_mhz: float) -> dict[str, Any]:
     if lat is None or lon is None:
         raise ValueError(f"thiếu latitude/longitude: {row!r}")
 
+    # Guard: chống lỗi seed-data từng gặp — `altitude` bị gán nhầm giá trị
+    # longitude (~108) → altitude_m corrupt. altitude ≈ lon là dấu hiệu rõ.
+    # altitude_m KHÔNG dùng trong P.1812 (vô hại) nhưng vẫn loại để data sạch.
+    altitude = row.get("altitude")
+    if altitude is not None and abs(float(altitude) - float(lon)) < 1.0:
+        logging.getLogger("seed_gateways").warning(
+            "gw %s: altitude=%.3f ≈ longitude → nghi lỗi data, đặt 0.0", gw_id, float(altitude)
+        )
+        altitude = 0.0
+
     # Antenna metadata: outdoor LoRa thực tế phổ biến (khớp seed_gateways.sql).
     # Operator phải verify khi có spec thật.
     return {
@@ -67,7 +78,7 @@ def _normalize(row: dict[str, Any], freq_mhz: float) -> dict[str, Any]:
         "name": f"Gateway {gw_id[-6:]}",  # last 6 hex để đọc cho người
         "lat": float(lat),
         "lon": float(lon),
-        "altitude_m": float(row.get("altitude") or 0.0),
+        "altitude_m": float(altitude or 0.0),
         "antenna_height_m": 15.0,
         "antenna_gain_dbi": 5.0,
         "tx_power_dbm": 14.0,

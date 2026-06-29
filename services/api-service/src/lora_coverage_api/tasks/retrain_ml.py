@@ -5,8 +5,9 @@ Mirror pattern cua tasks/rebuild_coverage.py:
   - Run subprocess `python /app/scripts/build_training_csv.py` de rebuild CSV
     tu ts.survey_training (community rows) — bao gom DEM + landuse feature
     engineering cho toan bo central VN (Hue/DN/QN).
-  - Run subprocess `python /app/scripts/train_extra_trees.py` de train tren
-    CSV moi. Script tu lo atomic swap (.new -> rename) + ghi train_metrics.json.
+  - Run subprocess `python /app/services/ml-service/scripts/train_extra_trees.py`
+    de train tren CSV moi (train script da chuyen vao ml-service). Script tu lo
+    atomic swap (.new -> rename) + ghi train_metrics.json.
   - Sau khi success: doc train_metrics.json, ghi metrics + rows_trained vao
     audit row.
 
@@ -31,7 +32,7 @@ from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-SCRIPT_PATH = Path("/app/scripts/train_extra_trees.py")
+SCRIPT_PATH = Path("/app/services/ml-service/scripts/train_extra_trees.py")
 BUILD_CSV_SCRIPT_PATH = Path("/app/scripts/build_training_csv.py")
 EVAL_SCRIPT_PATH = Path("/app/scripts/eval_extra_trees_holdout.py")
 REPORT_SCRIPT_PATH = Path("/app/scripts/render_ml_report.py")

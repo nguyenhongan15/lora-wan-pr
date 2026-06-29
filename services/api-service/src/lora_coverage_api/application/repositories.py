@@ -29,9 +29,14 @@ class GatewayDirectory(Protocol):
     """Read-side cho prediction (find candidates) + CRUD admin."""
 
     def find_serving_candidates(
-        self, target: Target, max_distance_km: float = 30.0, limit: int = 5
+        self, target: Target, max_distance_km: float = 30.0, limit: int = 10
     ) -> Sequence[Gateway]:
-        """Trả các gateway gần nhất, đã sort theo khoảng cách tăng dần."""
+        """Trả các gateway gần nhất, đã sort theo khoảng cách tăng dần.
+
+        limit=10 (không phải 5): CoverageQueryService gộp gateway đồng vị trí
+        thành site trước khi chọn; 5 gw gần nhất có thể toàn "twin" cùng tọa độ
+        → cần dư candidate để sau dedup vẫn còn đủ site phân biệt.
+        """
         ...
 
     def list_gateways(

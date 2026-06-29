@@ -279,6 +279,13 @@ services:
       # Precompute script đọc DEM + Surface DEM, output về repo path.
       LORA_DEM_DIRECTORY: /data/dem
       LORA_SURFACE_DEM_DIRECTORY: /data/dem-surface
+      # Heatmap "bản đồ ước lượng" dùng DSM (chốt 2026-06-26). refresh_geo_data
+      # regenerate DSM về /geo/dem-surface (ghi-được); rebuild_coverage_map đọc
+      # đây qua LORA_HEATMAP_SURFACE_DEM_DIRECTORY. /data/dem-surface là ro nên
+      # không dùng làm đích regenerate được — /geo mới là volume ghi-được.
+      LORA_HEATMAP_SURFACE_DEM_DIRECTORY: /geo/dem-surface
+      # Volume ghi-được cho dữ liệu địa lý làm tươi (OSM PBF + DSM regenerate).
+      LORA_GEO_CACHE_DIR: /geo
       LORA_ITU_PERCENT_TIME: ${LORA_ITU_PERCENT_TIME:-50.0}
       LORA_ITU_PERCENT_LOCATION: ${LORA_ITU_PERCENT_LOCATION:-50.0}
       # JWT_SECRET + LINKING_FERNET_KEYS required bởi Settings validators dù
@@ -300,12 +307,13 @@ services:
       # Bind-mount script + output dir (precompute_rssi_heatmap.py qua subprocess).
       - ./scripts:/app/scripts:ro
       - ./apps/web-app/public/coverage:/app/apps/web-app/public/coverage:rw
-      # Stage 2 XGBoost model artifact (joblib) — script load qua --stage2-model.
-      # RW vì admin retrain_ml task ghi extra_trees_model.joblib.new + rename.
+      # Volume ghi-được cho refresh_geo_data hàng tháng: OSM PBF tải về +
+      # DSM regenerate + celerybeat schedule file. /data ro nên không ghi được.
+      - ./data/geo:/geo:rw
+      # Stage 2 model artifact (joblib) + training data (data/training/ chứa CSV
+      # preprocessed + terrain). RW vì: admin retrain_ml ghi extra_trees_model.joblib.new
+      # + rename; build_training_csv.py rebuild data/training CSV từ ts.survey_training.
       - ./services/ml-service/data:/app/services/ml-service/data:rw
-      # CSV preprocessed dùng để train_extra_trees.py (retrain_ml Celery task).
-      # RW vì build_training_csv.py rebuild CSV từ ts.survey_training trước khi train.
-      - ./services/ml-service/reference_wireless:/app/services/ml-service/reference_wireless:rw
       # OSM landuse polygons cho hold-out eval (compute_link_features).
       - ./data/osm:/app/osm:ro
       # Báo cáo huấn luyện ML — Celery worker ghi vào reports/retrain-{job_id}/.
@@ -313,6 +321,9 @@ services:
       # ml-service src để worker subprocess import lora_ml_predict.processing
       # (compute_link_features) cho hold-out eval.
       - ./services/ml-service/src:/app/services/ml-service/src:ro
+      # train_extra_trees.py đã chuyển vào ml-service; retrain task chạy nó qua
+      # /app/services/ml-service/scripts/. Mount ro để subprocess thấy.
+      - ./services/ml-service/scripts:/app/services/ml-service/scripts:ro
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
     command:
@@ -324,6 +335,11 @@ services:
       - "worker"
       - "--loglevel=info"
       - "--concurrency=1"
+      # Embedded beat (-B): scheduler chạy chung worker (đủ cho single-worker).
+      # refresh_geo_data hàng tháng (celery_app.beat_schedule). Schedule file ghi
+      # vào /geo (volume rw) vì /app có thể read-only.
+      - "-B"
+      - "--schedule=/geo/celerybeat-schedule"
 
   # ── Web frontend (chạy local bằng `npm run dev`, không build trong stack v0) ──
   # Production: build static rồi serve qua Nginx.

@@ -27,9 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
-DATA_PATH = (
-    REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
-)
+DATA_PATH = REPO_ROOT / "services/ml-service/data/training/processed/devices_history_full.csv"
 REPORT_DIR = REPO_ROOT / "reports" / "seven-train"
 
 

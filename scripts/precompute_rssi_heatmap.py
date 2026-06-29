@@ -4,10 +4,22 @@ Công thức "Bản đồ ước lượng" (RSSI heatmap):
   * Gateway có điểm đo: P.1812 + DTM + per-gw NF + điểm đo (survey overlay).
   * Gateway chưa có điểm đo: P.1812 + DTM + per-gw NF.
 
-Grid chốt 50m × 50m. KHÔNG dùng Stage 2 ML, KHÔNG dùng DSM. Survey overlay
+Grid chốt 50m × 50m. KHÔNG dùng Stage 2 ML. DTM-only mặc định; DSM là opt-in
+qua --surface-dem-dir (set → P.1812 diffraction qua rooftop + P.2108 TỰ TẮT,
+không double-count). Survey overlay
 luôn bật: per-gw, override cell có điểm đo bằng max RSSI thực đo (filter
 ST_DistanceSphere < 50 km để né ETL corruption Hải Phòng↔Đà Nẵng). Gw không có
 điểm đo → no-op tự nhiên (pure physics).
+
+P.1812 location% đọc từ LORA_ITU_PERCENT_LOCATION (mặc định 50, median) — ĐỒNG
+NHẤT với /predict (CrcCovlibBackend dùng cùng env). Lõi P.1812 + P.2108 dùng
+chung module `infrastructure/itu/p1812_config` → 2 path không drift tham số.
+
+KHÁC /predict (CÓ CHỦ ĐÍCH): heatmap = physics (P.1812+DSM) + per-gw bias
+(rssi_bias_db) — THUẦN VẬT LÝ, drop ML Stage2 từ 2026-06-09 (xem memory
+project_ml_deferred). /predict = physics + bias + ML Stage2 (ExtraTrees). Vì vậy
+CÙNG một điểm, giá trị RSSI hai nơi có thể KHÁC nhau — đúng thiết kế: map cần
+ngoại suy toàn lưới (ML không làm được), /predict tinh chỉnh điểm gần dữ liệu.
 
 Output:
   - composite.geojson   : 6 dải RSSI (> -100, -105..-100, ..., < -120 dBm)
@@ -34,7 +46,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -45,9 +57,8 @@ if str(API_SRC) not in sys.path:
 
 log = logging.getLogger("precompute_rssi")
 
-# ITU-R P.2108-1 §3.2 — Terrestrial path clutter loss model chỉ valid cho
-# distance ≥ 0.25 km. Cell gần hơn skip clutter (pure P.1812 path loss).
-_P2108_MIN_DISTANCE_KM = 0.25
+# (Ngưỡng P.2108 + logic clutter → infrastructure/itu/p1812_config.p2108_clutter_db,
+#  dùng chung với /predict backend.)
 
 
 def meters_to_degrees(lat: float, dx_m: float, dy_m: float) -> tuple[float, float]:
@@ -112,7 +123,10 @@ def _compute_pl_grid(
         trong surface elevation; cộng P.2108 nữa = double-count.
     """
     from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
-    from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
+    from lora_coverage_api.infrastructure.itu.p1812_config import (
+        configure_p1812_propagation,
+        p2108_clutter_db,
+    )
 
     pl_grid = np.full((ny, nx), np.nan, dtype=np.float32)
 
@@ -125,37 +139,25 @@ def _compute_pl_grid(
     sim.SetTransmitterFrequency(job.frequency_mhz)
     sim.SetTransmitterPower(eirp_w, covlib.PowerType.EIRP)
     sim.SetReceiverHeightAboveGround(1.5)
-    sim.SetPropagationModel(covlib.PropagationModel.ITU_R_P_1812)
-    sim.SetITURP1812TimePercentage(50.0)
-    sim.SetITURP1812LocationPercentage(job.location_percent)
-    sim.SetITURP1812SurfaceProfileMethod(
-        covlib.P1812SurfaceProfileMethod.P1812_USE_SURFACE_ELEV_DATA
+    # Cấu hình P.1812 + DEM/Surface + landcover DÙNG CHUNG với /predict backend
+    # (infrastructure/itu/p1812_config) → không drift tham số giữa 2 path.
+    configure_p1812_propagation(
+        sim,
+        time_pct=50.0,
+        loc_pct=job.location_percent,
+        dem_dir=job.dem_dir,
+        surface_dir=job.surface_dem_dir or None,
+        landcover_dir=job.landcover_dir or None,
     )
-    sim.SetPrimaryTerrainElevDataSource(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF)
-    sim.SetTerrainElevDataSourceDirectory(
-        covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, job.dem_dir
-    )
-    sim.SetPrimarySurfaceElevDataSource(covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF)
-    sim.SetSurfaceElevDataSourceDirectory(
-        covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF,
-        job.surface_dem_dir or job.dem_dir,
-    )
-    if job.landcover_dir:
-        from lora_coverage_api.infrastructure.itu.landcover_mapping import (
-            apply_esa_worldcover_mapping,
-        )
-
-        apply_esa_worldcover_mapping(sim, job.landcover_dir)
-    sim.SetResultType(covlib.ResultType.PATH_LOSS_DB)
-    sim.SetTerrainElevDataSamplingResolution(30)
 
     t0 = time.time()
     n_done = 0
     n_finite = 0
     n_errors = 0
     n_total = nx * ny
-    freq_ghz = job.frequency_mhz / 1000.0
-    apply_p2108 = not job.surface_dem_dir
+    # DSM mode → P.2108 tự tắt (has_surface). Tính clutter chỉ khi DTM-only để
+    # khỏi haversine thừa mỗi cell.
+    has_surface = bool(job.surface_dem_dir)
 
     for iy in range(ny):
         lat = lat_min + iy * step_dlat
@@ -167,13 +169,11 @@ def _compute_pl_grid(
             try:
                 pl = sim.GenerateReceptionPointResult(lat, lon)
                 if math.isfinite(pl):
-                    if apply_p2108:
+                    if not has_surface:
                         d_km = _haversine_km(job.lat, job.lon, lat, lon)
-                        if d_km >= _P2108_MIN_DISTANCE_KM:
-                            clutter = itur_p2108.TerrestrialPathClutterLoss(
-                                freq_ghz, d_km, job.location_percent
-                            )
-                            pl = pl + clutter
+                        pl = pl + p2108_clutter_db(
+                            job.frequency_mhz, d_km, job.location_percent, has_surface=False
+                        )
                     pl_grid[iy, ix] = pl
                     n_finite += 1
             except (RuntimeError, ValueError) as exc:
@@ -263,7 +263,7 @@ def _load_gateways(db_url: str, only_codes: list[str] | None) -> list[dict[str, 
                ST_Y(location::geometry) AS lat,
                ST_X(location::geometry) AS lon,
                altitude_m, antenna_height_m, antenna_gain_dbi,
-               tx_power_dbm, frequency_mhz, noise_floor_dbm
+               tx_power_dbm, frequency_mhz, noise_floor_dbm, rssi_bias_db
         FROM geo.gateways
         WHERE is_public = true
     """
@@ -310,6 +310,24 @@ def _load_dotenv_if_present() -> None:
         log.warning("python-dotenv không khả dụng — skip auto-load .env")
         return
     load_dotenv(env_path, override=False)
+
+
+def _default_location_percent() -> float:
+    """P.1812 location% mặc định = `LORA_ITU_PERCENT_LOCATION` — ĐỒNG NHẤT lõi
+    vật lý với /predict (`CrcCovlibBackend`, đọc cùng env qua `config.py`).
+
+    Một nguồn sự thật duy nhất cho cả "bản đồ ước lượng" và "dự đoán chất lượng
+    tín hiệu": tránh hai magic number lệch nhau (trước đây heatmap hardcode 10,
+    predict dùng 50). Gọi SAU `_load_dotenv_if_present()` nên env đã load. Fallback
+    50.0 (median, khớp `Settings.lora_itu_percent_location` default) khi thiếu/lỗi.
+    """
+    raw = os.environ.get("LORA_ITU_PERCENT_LOCATION")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            log.warning("LORA_ITU_PERCENT_LOCATION không phải số: %r — dùng 50.0", raw)
+    return 50.0
 
 
 OUTPUT_DIR = REPO_ROOT / "apps" / "web-app" / "public" / "coverage" / "rssi"
@@ -359,6 +377,7 @@ class RssiJob:
     tx_power_dbm: float
     frequency_mhz: float
     noise_floor_dbm: float | None
+    rssi_bias_db: float | None
     iy_start: int
     ix_start: int
     sub_ny: int
@@ -371,6 +390,10 @@ class RssiJob:
     dem_dir: str
     location_percent: float
     smooth_px: int
+    # DSM (DTM + building heights) cho P.1812 diffraction qua rooftop. Rỗng =
+    # DTM-only (mặc định). Khi set → _compute_pl_grid tự TẮT P.2108 (apply_p2108
+    # = not surface_dem_dir) để tránh double-count clutter (~25 dB).
+    surface_dem_dir: str = ""
     skip_mask: Any = None
 
 
@@ -395,7 +418,7 @@ def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
         radius_km=0.0,
         grid_m=job.grid_m,
         dem_dir=job.dem_dir,
-        surface_dem_dir="",
+        surface_dem_dir=job.surface_dem_dir,
         output_path="",
         location_percent=job.location_percent,
         environment_prob_pct=0.0,
@@ -428,6 +451,13 @@ def _compute_one_rssi(job: RssiJob) -> dict[str, Any]:
 
     device_eirp = AS923_DEVICE_TX_POWER_CAP_DBM + DEVICE_DEFAULT_TX_GAIN_DBI
     rssi_grid = (device_eirp + job.antenna_gain_dbi - pl_grid).astype(np.float32)
+
+    # Per-gateway physics bias calibration (geo.gateways.rssi_bias_db) — cộng vào
+    # RSSI để khớp đo thực, GIỐNG Stage1ItuModel ở /predict (đồng nhất 2 path).
+    # Áp TRƯỚC survey overlay + smoothing (chỉ sửa lớp physics; ô có điểm đo vẫn
+    # được override bằng giá trị đo). None → bỏ qua.
+    if job.rssi_bias_db is not None:
+        rssi_grid = rssi_grid + np.float32(job.rssi_bias_db)
 
     elapsed = time.time() - t0
     n_finite = int(np.isfinite(rssi_grid).sum())
@@ -692,6 +722,7 @@ def _build_jobs(
     dem_dir: str,
     location_percent: float,
     smooth_px: int,
+    surface_dem_dir: str = "",
     skip_masks: dict[str, np.ndarray] | None = None,
 ) -> list[RssiJob]:
     """Build RssiJob list. If `skip_masks` given (Phase B), skip mỗi gw không có
@@ -747,6 +778,9 @@ def _build_jobs(
                 noise_floor_dbm=(
                     float(r["noise_floor_dbm"]) if r.get("noise_floor_dbm") is not None else None
                 ),
+                rssi_bias_db=(
+                    float(r["rssi_bias_db"]) if r.get("rssi_bias_db") is not None else None
+                ),
                 iy_start=iy_start,
                 ix_start=ix_start,
                 sub_ny=sub_ny,
@@ -759,6 +793,7 @@ def _build_jobs(
                 dem_dir=dem_dir,
                 location_percent=location_percent,
                 smooth_px=smooth_px,
+                surface_dem_dir=surface_dem_dir,
                 skip_mask=gw_skip_mask,
             )
         )
@@ -806,6 +841,274 @@ def _composite_results(
         heard = (np.nan_to_num(sub, nan=-9999.0) >= REDUNDANCY_THRESHOLD_DBM).astype(np.uint8)
         gw_count[iy0:iy1, ix0:ix1] = gw_count[iy0:iy1, ix0:ix1] + heard
     return composite, gw_count, dominant
+
+
+# --- Fusion vật lý + ML (Phase 2) ---
+# Feature mặc định khi model_meta.json thiếu all_features (khớp train_extra_trees).
+_DEFAULT_ML_FEATURES = [
+    "frequency",
+    "spreading_factor",
+    "log_distance",
+    "log_distance_3d",
+    "delta_lat",
+    "delta_lon",
+    "angle",
+    "gw_elevation",
+    "delta_elevation",
+    "elevation_angle",
+    "slope",
+    "roughness",
+    "terrain_mean",
+    "terrain_std",
+    "terrain_min",
+    "terrain_max",
+    "fresnel_obstruction_ratio",
+    "min_fresnel_clearance",
+    "mean_fresnel_clearance",
+    "residential_ratio",
+    "gateway",
+]
+
+
+def _load_ml_meta(model_path: str) -> dict[str, Any]:
+    """Đọc model_meta.json cạnh artifact (KHÔNG load model — main chỉ cần meta).
+
+    Thiếu meta → giả định absolute (backward-compat).
+    """
+    meta_path = Path(model_path).parent / "model_meta.json"
+    if meta_path.is_file():
+        return cast("dict[str, Any]", json.loads(meta_path.read_text()))
+    return {"target_kind": "absolute", "all_features": None, "with_stage1_feature": False}
+
+
+def _import_compute_link_features() -> Any:
+    """Import compute_link_features (port serving) từ ml-service src."""
+    for s in (Path("/app/services/ml-service/src"), REPO_ROOT / "services/ml-service/src"):
+        if s.is_dir() and str(s) not in sys.path:
+            sys.path.insert(0, str(s))
+    from lora_ml_predict.processing import compute_link_features
+
+    return compute_link_features
+
+
+def _hav_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _upsample_block(coarse: np.ndarray, ny: int, nx: int, coarsen: int) -> np.ndarray:
+    """Phóng lưới thô → (ny,nx). Bilinear (scipy) nếu có, else block nearest."""
+    try:
+        from scipy.ndimage import zoom
+
+        full = zoom(coarse, (ny / coarse.shape[0], nx / coarse.shape[1]), order=1)
+    except Exception:
+        full = np.repeat(np.repeat(coarse, coarsen, axis=0), coarsen, axis=1)
+    full = full[:ny, :nx]
+    if full.shape != (ny, nx):
+        pad = np.zeros((ny, nx), dtype=np.float32)
+        pad[: full.shape[0], : full.shape[1]] = full
+        full = pad
+    return full.astype(np.float32)
+
+
+def _compute_ml_residual_grid(
+    grid: np.ndarray,
+    iy0: int,
+    ix0: int,
+    gw: dict[str, Any],
+    model: Any,
+    meta: dict[str, Any],
+    clf: Any,
+    lat_min: float,
+    lon_min: float,
+    step_dlat: float,
+    step_dlon: float,
+    coarsen: int,
+    clip_db: float,
+    sf: int,
+    max_km: float,
+) -> np.ndarray:
+    """Lưới hiệu chỉnh ML (cùng shape `grid`) — PURE, không sửa grid.
+
+    Tính trên LƯỚI THÔ (mỗi `coarsen` cell), bỏ ô NaN + ô xa gateway > `max_km`
+    (giảm số lần gọi compute_link_features — khâu đắt nhất), rồi nội suy lên full.
+    Residual model: trả thẳng output. Absolute: output - physics. Clip ±clip_db.
+    """
+    import pandas as pd
+
+    sub_ny, sub_nx = grid.shape
+    feature_cols = meta.get("all_features") or _DEFAULT_ML_FEATURES
+    residual_model = meta.get("target_kind") == "residual"
+    with_s1 = bool(meta.get("with_stage1_feature"))
+    gw_lat, gw_lon = float(gw["lat"]), float(gw["lon"])
+    gw_ant_h = float(gw["antenna_height_m"])
+    gw_freq_hz = float(gw["frequency_mhz"]) * 1e6
+    code = str(gw["code"])
+
+    cy_idx = list(range(0, sub_ny, coarsen))
+    cx_idx = list(range(0, sub_nx, coarsen))
+    feats_rows: list[dict] = []
+    coords: list[tuple[int, int]] = []
+    for cy in cy_idx:
+        lat = lat_min + (iy0 + cy) * step_dlat
+        for cx in cx_idx:
+            v = grid[cy, cx]
+            if not np.isfinite(v):
+                continue
+            lon = lon_min + (ix0 + cx) * step_dlon
+            if max_km > 0 and _hav_km(lat, lon, gw_lat, gw_lon) > max_km:
+                continue
+            f = clf(
+                lat=lat,
+                lon=lon,
+                gw_lat=gw_lat,
+                gw_lon=gw_lon,
+                gw_ant_h_m=gw_ant_h,
+                freq_hz=gw_freq_hz,
+                sf=sf,
+                gateway_code=code,
+            )
+            if f is None:
+                continue
+            if with_s1:
+                f = {**f, "stage1_rssi_dbm": float(v)}
+            feats_rows.append(f)
+            coords.append((cy, cx))
+
+    res_full = np.zeros((sub_ny, sub_nx), dtype=np.float32)
+    if not feats_rows:
+        return res_full
+    out = model.predict(pd.DataFrame(feats_rows)[feature_cols])
+    res_coarse = np.zeros((len(cy_idx), len(cx_idx)), dtype=np.float32)
+    cyi = {v: i for i, v in enumerate(cy_idx)}
+    cxi = {v: i for i, v in enumerate(cx_idx)}
+    for (cy, cx), o in zip(coords, out, strict=True):
+        res = float(o) if residual_model else float(o) - float(grid[cy, cx])
+        res_coarse[cyi[cy], cxi[cx]] = float(np.clip(res, -clip_db, clip_db))
+    return _upsample_block(res_coarse, sub_ny, sub_nx, coarsen)
+
+
+# Worker state (1 lần/process) — tránh pickle model 150MB mỗi task.
+_ML_WORKER: dict[str, Any] = {}
+
+
+def _ml_worker_init(model_path: str, meta: dict[str, Any]) -> None:
+    import joblib
+
+    _ML_WORKER["model"] = joblib.load(model_path)
+    _ML_WORKER["clf"] = _import_compute_link_features()
+    _ML_WORKER["meta"] = meta
+
+
+def _ml_worker_task(task: dict[str, Any]) -> tuple[int, np.ndarray, int]:
+    res_full = _compute_ml_residual_grid(
+        task["grid"],
+        task["iy0"],
+        task["ix0"],
+        task["gw"],
+        _ML_WORKER["model"],
+        _ML_WORKER["meta"],
+        _ML_WORKER["clf"],
+        task["lat_min"],
+        task["lon_min"],
+        task["step_dlat"],
+        task["step_dlon"],
+        task["coarsen"],
+        task["clip_db"],
+        task["sf"],
+        task["max_km"],
+    )
+    n = int((np.isfinite(task["grid"]) & (res_full != 0.0)).sum())
+    return task["gw_index"], res_full, n
+
+
+def _apply_ml_fusion(
+    results: list[dict[str, Any]],
+    gw_by_code: dict[str, dict[str, Any]],
+    model_path: str,
+    meta: dict[str, Any],
+    lat_min: float,
+    lon_min: float,
+    step_dlat: float,
+    step_dlon: float,
+    coarsen: int,
+    clip_db: float,
+    sf: int,
+    max_km: float,
+    workers: int,
+) -> int:
+    """Cộng hiệu chỉnh ML vào từng grid per-gateway (SONG SONG qua mp.Pool).
+
+    Mỗi gateway = 1 task; worker load model 1 lần (initializer). Main cộng residual
+    vào grid (chỉ ô finite). Trả tổng số ô đã hiệu chỉnh.
+    """
+    tasks: list[dict[str, Any]] = []
+    for i, r in enumerate(results):
+        gw = gw_by_code.get(str(r["code"]))
+        if gw is None:
+            continue
+        tasks.append(
+            {
+                "gw_index": i,
+                "grid": r["rssi_grid"],
+                "iy0": r["iy_start"],
+                "ix0": r["ix_start"],
+                "gw": gw,
+                "lat_min": lat_min,
+                "lon_min": lon_min,
+                "step_dlat": step_dlat,
+                "step_dlon": step_dlon,
+                "coarsen": coarsen,
+                "clip_db": clip_db,
+                "sf": sf,
+                "max_km": max_km,
+            }
+        )
+    if not tasks:
+        return 0
+
+    def _apply(gw_index: int, res_full: np.ndarray, n: int) -> int:
+        grid = results[gw_index]["rssi_grid"]
+        m = np.isfinite(grid)
+        grid[m] = (grid[m] + res_full[m]).astype(grid.dtype)
+        return n
+
+    total = 0
+    if workers <= 1:
+        clf = _import_compute_link_features()
+        import joblib
+
+        model = joblib.load(model_path)
+        for t in tasks:
+            res_full = _compute_ml_residual_grid(
+                t["grid"],
+                t["iy0"],
+                t["ix0"],
+                t["gw"],
+                model,
+                meta,
+                clf,
+                t["lat_min"],
+                t["lon_min"],
+                t["step_dlat"],
+                t["step_dlon"],
+                t["coarsen"],
+                t["clip_db"],
+                t["sf"],
+                t["max_km"],
+            )
+            total += _apply(
+                t["gw_index"], res_full, int((np.isfinite(t["grid"]) & (res_full != 0)).sum())
+            )
+    else:
+        with mp.Pool(workers, initializer=_ml_worker_init, initargs=(model_path, meta)) as pool:
+            for gw_index, res_full, n in pool.imap_unordered(_ml_worker_task, tasks):
+                total += _apply(gw_index, res_full, n)
+    return total
 
 
 def _build_skip_masks_fine(
@@ -1053,6 +1356,15 @@ def main() -> int:
     parser.add_argument("--output-dir", default=str(OUTPUT_DIR))
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
+        "--save-grid",
+        default="",
+        help=(
+            "Lưu composite RSSI grid THÔ (sau survey overlay + sea-mask + clip,"
+            " TRƯỚC smoothing) ra .npz để tinh chỉnh --smooth-sigma/--opening-size"
+            " offline mà không phải recompute P.1812 (~20 phút). Rỗng = tắt."
+        ),
+    )
+    parser.add_argument(
         "--smooth-px",
         type=int,
         default=5,
@@ -1061,18 +1373,31 @@ def main() -> int:
     parser.add_argument(
         "--location-percent",
         type=float,
-        default=10.0,
+        default=_default_location_percent(),
         help=(
-            "P.1812 location %. Default 10 = 'RSSI mà 90% địa điểm vượt' — khớp"
-            " survey thực tế (user ưu tiên vị trí thu được sóng). Loc%=50 (median)"
-            " quá pessimistic, gây bias -6 dB cho heatmap composite. Min-SF map"
-            " vẫn dùng loc%=50 (design margin)."
+            "P.1812 location %. Mặc định đọc LORA_ITU_PERCENT_LOCATION (=50,"
+            " median) để ĐỒNG NHẤT lõi vật lý với /predict — một nguồn sự thật"
+            " duy nhất cho cả 'bản đồ ước lượng' và 'dự đoán chất lượng tín hiệu'."
+            " Override CLI khi cần khảo sát: 10 = quantile lạc quan (90% vị trí"
+            " vượt), 95 = worst-case design margin."
         ),
     )
     parser.add_argument(
         "--gateway-code",
         default=None,
         help="Filter gw codes (comma-separated). Default = all public.",
+    )
+    parser.add_argument(
+        "--surface-dem-dir",
+        default="",
+        help=(
+            "Thư mục DSM (DTM + chiều cao nhà, build bằng scripts/build_dsm.py)"
+            " cho P.1812 diffraction qua rooftop. Rỗng = DTM-only (mặc định,"
+            " production). Khi set → P.2108 TỰ ĐỘNG tắt (apply_p2108 = not"
+            " surface_dem_dir) nên KHÔNG double-count clutter. Opt-in để thử"
+            " nghiệm; không tự đọc LORA_SURFACE_DEM_DIRECTORY để giữ default"
+            " DTM-only cho rebuild_coverage."
+        ),
     )
     parser.add_argument(
         "--per-gw-radius-km",
@@ -1122,6 +1447,46 @@ def main() -> int:
             " Phòng↔Đà Nẵng ~554 km). Default 50."
         ),
     )
+    # --- Fusion vật lý + ML (opt-in) ---
+    parser.add_argument(
+        "--ml-model",
+        default="",
+        help=(
+            "Path tới ExtraTrees joblib + model_meta.json cạnh nó. Set → cộng hiệu chỉnh ML"
+            " vào lớp vật lý (residual: final = P.1812 + residual; bị chặn, an toàn lưới-rộng)."
+            " Rỗng = thuần vật lý (mặc định). NÊN dùng cùng --surface-dem-dir khớp config train."
+        ),
+    )
+    parser.add_argument(
+        "--ml-coarsen",
+        type=int,
+        default=8,
+        help="Lấy mẫu ML mỗi N cell rồi nội suy (8 = ~400m@50m). Lớn=nhanh/mượt, nhỏ=chi tiết.",
+    )
+    parser.add_argument(
+        "--ml-clip-db",
+        type=float,
+        default=25.0,
+        help="Chặn |hiệu chỉnh ML| (dB) để ML hỏng không phá bản đồ. Default 25.",
+    )
+    parser.add_argument(
+        "--ml-sf", type=int, default=12, help="SF dùng cho feature ML (mặc định 12, khớp survey)."
+    )
+    parser.add_argument(
+        "--ml-workers",
+        type=int,
+        default=0,
+        help="Số process song song cho ML loop (0 = dùng --workers). >1 → mp.Pool, ~Nx nhanh.",
+    )
+    parser.add_argument(
+        "--ml-max-km",
+        type=float,
+        default=0.0,
+        help=(
+            "Chỉ hiệu chỉnh ML cho ô cách gateway ≤ max_km (0 = không giới hạn). Cắt số lần"
+            " gọi compute_link_features (khâu đắt) — ngoài bán kính giữ thuần vật lý."
+        ),
+    )
     args = parser.parse_args()
 
     if args.bbox == "danang":
@@ -1141,7 +1506,18 @@ def main() -> int:
     if not dem_dir or not Path(dem_dir).is_dir():
         log.error("LORA_DEM_DIRECTORY env không set hoặc không phải directory: %r", dem_dir)
         return 2
-    # FINAL version: KHÔNG dùng DSM (DTM only) — bỏ qua LORA_SURFACE_DEM_DIRECTORY.
+    # DSM opt-in qua --surface-dem-dir (không tự đọc env → giữ default DTM-only
+    # cho rebuild_coverage). Set → P.1812 dùng surface elev (rooftop) + P.2108
+    # tự tắt trong _compute_pl_grid (apply_p2108 = not surface_dem_dir) → KHÔNG
+    # double-count. Rỗng = DTM-only + P.2108 statistic (hành vi production cũ).
+    surface_dem_dir = args.surface_dem_dir
+    if surface_dem_dir:
+        if not Path(surface_dem_dir).is_dir():
+            log.error("--surface-dem-dir không phải directory: %r", surface_dem_dir)
+            return 2
+        log.info("DSM mode: surface=%s (P.2108 tắt tự động, tránh double-count)", surface_dem_dir)
+    else:
+        log.info("DTM-only mode: dùng P.2108 statistic clutter")
 
     center_lat = (lat_min + lat_max) / 2.0
     step_dlon, step_dlat = meters_to_degrees(center_lat, args.grid_m, args.grid_m)
@@ -1208,6 +1584,7 @@ def main() -> int:
             dem_dir,
             args.location_percent,
             args.smooth_px,
+            surface_dem_dir=surface_dem_dir,
         )
         if not coarse_jobs:
             log.error("Phase A: không có job")
@@ -1267,6 +1644,7 @@ def main() -> int:
             dem_dir,
             args.location_percent,
             args.smooth_px,
+            surface_dem_dir=surface_dem_dir,
             skip_masks=skip_masks,
         )
         if not fine_jobs:
@@ -1317,6 +1695,7 @@ def main() -> int:
             dem_dir,
             args.location_percent,
             args.smooth_px,
+            surface_dem_dir=surface_dem_dir,
         )
         if not jobs:
             log.error("Không có job để chạy")
@@ -1329,6 +1708,52 @@ def main() -> int:
             avg_cells,
         )
         results = _run_jobs(jobs, args.workers)
+
+    # FUSION vật lý + ML: cộng hiệu chỉnh ML vào lớp vật lý per-gateway TRƯỚC survey
+    # overlay (survey = ground truth, vẫn override ML sau). Residual bị chặn ±clip →
+    # an toàn vùng xa dữ liệu (suy biến về vật lý). Off = thuần vật lý (default).
+    ml_meta_out: dict[str, Any] = {"enabled": False}
+    if args.ml_model:
+        ml_meta = _load_ml_meta(args.ml_model)
+        ml_workers = args.ml_workers if args.ml_workers > 0 else args.workers
+        log.info(
+            "ML fusion: target_kind=%s coarsen=%d clip=%.0fdB sf=%d max_km=%.0f workers=%d ...",
+            ml_meta.get("target_kind"),
+            args.ml_coarsen,
+            args.ml_clip_db,
+            args.ml_sf,
+            args.ml_max_km,
+            ml_workers,
+        )
+        gw_by_code = {str(g["code"]): g for g in rows}
+        t_ml = time.time()
+        n_cells_ml = _apply_ml_fusion(
+            results,
+            gw_by_code,
+            args.ml_model,
+            ml_meta,
+            lat_min,
+            lon_min,
+            step_dlat,
+            step_dlon,
+            args.ml_coarsen,
+            args.ml_clip_db,
+            args.ml_sf,
+            args.ml_max_km,
+            ml_workers,
+        )
+        log.info("ML fusion done: %d cell corrected (%.0fs)", n_cells_ml, time.time() - t_ml)
+        ml_meta_out = {
+            "enabled": True,
+            "model": args.ml_model,
+            "target_kind": ml_meta.get("target_kind"),
+            "coarsen": args.ml_coarsen,
+            "clip_db": args.ml_clip_db,
+            "sf": args.ml_sf,
+            "max_km": args.ml_max_km,
+            "workers": ml_workers,
+            "n_cells_corrected": n_cells_ml,
+        }
 
     # FINAL version: survey overlay LUÔN BẬT. Per-gw: gw có điểm đo → override
     # cell bằng max RSSI thực đo (filter serving_gateway_id = gw.id, d<50km
@@ -1469,6 +1894,20 @@ def main() -> int:
             n_before - n_after,
         )
 
+    if args.save_grid:
+        # Grid THÔ (pre-smoothing) + geo-meta → tinh chỉnh smoothing offline.
+        np.savez_compressed(
+            args.save_grid,
+            composite=composite,
+            gw_count=gw_count,
+            lat_min=lat_min,
+            lon_min=lon_min,
+            step_dlat=step_dlat,
+            step_dlon=step_dlon,
+            grid_m=args.grid_m,
+        )
+        log.info("Saved raw composite grid → %s", args.save_grid)
+
     if args.smooth_sigma > 0:
         log.info(
             "Applying NaN-safe Gaussian smoothing σ=%.2f cell (~%.0fm @ grid %.0fm)...",
@@ -1599,10 +2038,12 @@ def main() -> int:
 
     model_parts = [
         "ITU-R P.1812",
-        "DTM",
+        "DSM" if surface_dem_dir else "DTM",
         "per-gw NF",
         "survey overlay (per-gw)",
     ]
+    if ml_meta_out.get("enabled"):
+        model_parts.insert(1, f"ML {ml_meta_out.get('target_kind', '')}".strip())
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "grid_m": args.grid_m,
@@ -1621,6 +2062,7 @@ def main() -> int:
         "max_radius_km": args.max_radius_km if args.max_radius_km > 0 else None,
         "sea_mask": sea_mask_meta,
         "survey_overlay": survey_overlay_meta,
+        "ml_fusion": ml_meta_out,
         "rssi_bins": [
             {
                 "bin": bid,

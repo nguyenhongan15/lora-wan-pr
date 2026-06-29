@@ -1,0 +1,8 @@
+{
+  "rmse": 3.2267190618351345,
+  "mae": 1.98908932880943,
+  "r2": 0.9298469989252925,
+  "rows_trained": 11719,
+  "feature_count": 21,
+  "target_kind": "residual"
+}

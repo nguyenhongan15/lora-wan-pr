@@ -359,6 +359,18 @@ class Settings(BaseSettings):
         default=60,
         description="TTL (giây) cho gateway state cache. Default 60.",
     )
+    # Khi /predict chọn serving gateway: chỉ xét gateway còn HOẠT ĐỘNG gần đây
+    # (có uplink/survey trong N ngày) → tránh chọn gateway đã chết (vd tắt từ
+    # nhiều tháng) mà thiết bị thật không thể kết nối. 0 = tắt filter (xét mọi
+    # public gw). Nếu filter loại sạch → fallback xét tất cả (không để rỗng).
+    # Nguồn hoạt động: MAX(ts.survey_training.timestamp) per gateway (cùng tín
+    # hiệu GatewayStateService dùng). Default 90 ngày (loại gw chết >3 tháng,
+    # chịu được khảo sát thưa).
+    gateway_active_window_days: int = Field(
+        default=90,
+        ge=0,
+        description="Cửa sổ (ngày) coi gateway còn sống cho việc chọn serving gw. 0 = tắt.",
+    )
 
     # ── Celery (admin rebuild coverage map task) ─────────────────────────
     # Broker + result backend đều trỏ vào Valkey (cache service) — DB khác

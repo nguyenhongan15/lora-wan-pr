@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .processing import compute_link_features
 
-# Extra Trees feature set — phải khớp scripts/train_extra_trees.py.
+# Extra Trees feature set — phải khớp services/ml-service/scripts/train_extra_trees.py.
 # Pipeline (ColumnTransformer + ExtraTreesRegressor) đã encode `gateway`
 # bằng OneHotEncoder nên list này feed thẳng vào model.predict.
 _NUMERIC_FEATURES = [
@@ -40,6 +40,17 @@ _NUMERIC_FEATURES = [
     "residential_ratio",
 ]
 _ALL_FEATURES = [*_NUMERIC_FEATURES, "gateway"]
+
+# Cột P.1812 RSSI khi physics-as-feature (build_training_csv --with-stage1-rssi).
+_STAGE1_COL = "stage1_rssi_dbm"
+
+# Meta mặc định khi thiếu model_meta.json (model absolute cũ — backward compat):
+# output = RSSI tuyệt đối → residual = output - stage1_rssi.
+_DEFAULT_MODEL_META: dict = {
+    "target_kind": "absolute",
+    "all_features": _ALL_FEATURES,
+    "with_stage1_feature": False,
+}
 
 # --- Config ---
 
@@ -90,18 +101,57 @@ def _load_holdout_mse_db2() -> float | None:
     return None
 
 
+def _load_model_meta() -> dict:
+    """Đọc model_meta.json (cạnh artifact) → cách diễn giải output model.
+
+    Keys: target_kind ('absolute'|'residual'), all_features (list), with_stage1_feature.
+    Thiếu file → _DEFAULT_MODEL_META (model absolute cũ): output là RSSI tuyệt đối
+    nên residual = output - stage1_rssi (giữ hành vi backward-compat).
+    """
+    meta_path = Path(settings.model_path).parent / "model_meta.json"
+    if not meta_path.exists():
+        return dict(_DEFAULT_MODEL_META)
+    try:
+        raw = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read model_meta.json: {e} — dùng default absolute")
+        return dict(_DEFAULT_MODEL_META)
+    return {
+        "target_kind": raw.get("target_kind", "absolute"),
+        "all_features": raw.get("all_features", _ALL_FEATURES),
+        "with_stage1_feature": bool(raw.get("with_stage1_feature", False)),
+    }
+
+
+def _model_output_to_residual(model_output: float, stage1_rssi_dbm: float, meta: dict) -> float:
+    """Quy đổi output model -> residual_db = (RSSI cuối) - stage1.
+
+    - residual model: output ĐÃ là residual -> trả thẳng.
+    - absolute model: output là RSSI tuyệt đối -> residual = output - stage1.
+    api-service luôn cộng lại: final = stage1 + residual => fusion vật lý + ML.
+    """
+    if meta.get("target_kind") == "residual":
+        return model_output
+    return model_output - stage1_rssi_dbm
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = None
     app.state.is_model_active = False  # État stocké de manière thread-safe dans l'app
     app.state.holdout_mse_db2 = None
+    app.state.model_meta = dict(_DEFAULT_MODEL_META)
 
     if Path(settings.model_path).exists():
         try:
             app.state.model = joblib.load(settings.model_path)
             app.state.is_model_active = True
             app.state.holdout_mse_db2 = _load_holdout_mse_db2()
-            logger.info(f"Model loaded from {settings.model_path}")
+            app.state.model_meta = _load_model_meta()
+            logger.info(
+                f"Model loaded from {settings.model_path} "
+                f"(target_kind={app.state.model_meta['target_kind']})"
+            )
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             app.state.is_model_active = False
@@ -260,7 +310,11 @@ async def admin_reload(
         request.app.state.model = await asyncio.to_thread(joblib.load, path)
         request.app.state.is_model_active = True
         request.app.state.holdout_mse_db2 = _load_holdout_mse_db2()
-        logger.info(f"Model hot-reloaded from {settings.model_path}")
+        request.app.state.model_meta = _load_model_meta()
+        logger.info(
+            f"Model hot-reloaded from {settings.model_path} "
+            f"(target_kind={request.app.state.model_meta['target_kind']})"
+        )
         return {"status": "ok", "model_path": str(path), "model_version": settings.model_version}
     except Exception as e:
         request.app.state.is_model_active = False
@@ -292,10 +346,13 @@ async def predict_residual(
         )
         return PredictionResponse(residual_db=None, model_version=settings.model_version, ood=False)
 
-    features = pd.DataFrame([feats])[_ALL_FEATURES]
+    meta = getattr(request.app.state, "model_meta", _DEFAULT_MODEL_META)
+    if meta.get("with_stage1_feature"):
+        feats = {**feats, _STAGE1_COL: t.stage1_rssi_dbm}
+    features = pd.DataFrame([feats])[meta.get("all_features", _ALL_FEATURES)]
     try:
-        rssi_et = float(request.app.state.model.predict(features)[0])
-        residual = rssi_et - t.stage1_rssi_dbm
+        model_out = float(request.app.state.model.predict(features)[0])
+        residual = _model_output_to_residual(model_out, t.stage1_rssi_dbm, meta)
         return PredictionResponse(
             residual_db=residual,
             model_version=settings.model_version,
@@ -342,11 +399,15 @@ async def predict_residuals_batch(
         map_indices.append(idx)
 
     if rows_to_predict:
+        meta = getattr(request.app.state, "model_meta", _DEFAULT_MODEL_META)
+        if meta.get("with_stage1_feature"):
+            for row, s1 in zip(rows_to_predict, stage1_rssi_per_row, strict=True):
+                row[_STAGE1_COL] = s1
         try:
-            df_batch = pd.DataFrame(rows_to_predict)[_ALL_FEATURES]
+            df_batch = pd.DataFrame(rows_to_predict)[meta.get("all_features", _ALL_FEATURES)]
             preds = request.app.state.model.predict(df_batch)
-            for i, rssi_et in enumerate(preds):
-                residual = float(rssi_et) - stage1_rssi_per_row[i]
+            for i, model_out in enumerate(preds):
+                residual = _model_output_to_residual(float(model_out), stage1_rssi_per_row[i], meta)
                 results[map_indices[i]] = BatchResidualItem(residual_db=residual, ood=False)
         except Exception as e:
             logger.error(f"Batch inference error: {e}")

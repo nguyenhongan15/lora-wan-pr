@@ -70,7 +70,11 @@ def _engine() -> Engine:
 
 
 def gateway_directory() -> GatewayDirectory:
-    return PgGatewayDirectory(_engine())
+    # active_within_days: chỉ chọn serving gateway còn sống gần đây (tránh chọn
+    # gw đã tắt mà thiết bị không kết nối được). Configurable qua env.
+    return PgGatewayDirectory(
+        _engine(), active_within_days=get_settings().gateway_active_window_days
+    )
 
 
 def survey_repository() -> SurveyIngest:

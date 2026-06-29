@@ -44,6 +44,10 @@ log = logging.getLogger(__name__)
 # Path bên trong container — bind-mounted ở docker-compose.yml (Phase B2).
 SCRIPT_PATH = Path("/app/scripts/precompute_rssi_heatmap.py")
 SUBPROCESS_TIMEOUT_S = 5400  # 90 phút hard limit (grid 25m + radius 30km ~60-80 phút)
+# Mô hình ML (residual) để fusion vật lý + ML khi sinh bản đồ. Có model → bản đồ
+# kết hợp; thiếu → tự động lui về bản đồ thuần vật lý (không vỡ rebuild).
+ML_MODEL_PATH = Path("/app/services/ml-service/data/extra_trees_model.joblib")
+ML_META_PATH = Path("/app/services/ml-service/data/model_meta.json")
 
 
 def _engine() -> Engine:
@@ -134,15 +138,18 @@ def rebuild_coverage_map(self: Any, job_id: str) -> dict[str, Any]:
         len(needs_rebuild),
         total,
     )
-    # Config "Bản đồ ước lượng" (chốt 2026-06-09):
-    #   P.1812 + DTM (terrain only) + per-gw NF + survey overlay (per-gw).
-    #   - KHÔNG dùng DSM (surface model) — clear LORA_SURFACE_DEM_DIRECTORY.
-    #     Worker container có thể có env này từ Stage 1 ITU calibration,
-    #     KHÔNG được rò rỉ vào subprocess heatmap.
-    #   - Stage 2 ML đã bị drop hẳn cho heatmap (không còn flag CLI);
-    #     survey overlay giờ luôn bật theo default của script.
-    #   - --force: script skip nếu output file đã tồn tại; admin rebuild
-    #     PHẢI overwrite.
+    # Config "Bản đồ ước lượng" (cập nhật 2026-06-26 — chuyển DTM → DSM):
+    #   P.1812 + DSM (DTM + chiều cao nhà OSM) + per-gw NF + survey overlay (per-gw).
+    #   - DSM thắng DTM+P.2108 trên survey thật (RMSE 13.4 vs 23.6 dB, bias ~0 vs
+    #     −11) + đồng nhất với /predict (vốn đã dùng DSM). P.2108 TỰ TẮT khi có
+    #     surface (script: apply_p2108 = not surface_dem_dir) → không double-count.
+    #   - Khử đốm --smooth-sigma 2 --opening-size 3 cho DSM building-resolution.
+    #   - Stage 2 ML vẫn KHÔNG dùng cho heatmap (thuần vật lý); survey overlay
+    #     luôn bật theo default script.
+    #   - --force: overwrite output (admin rebuild phải ghi đè).
+    #   surface dir: LORA_HEATMAP_SURFACE_DEM_DIRECTORY (refresh_geo_data ghi
+    #   /geo/dem-surface) → fallback LORA_SURFACE_DEM_DIRECTORY (/data/dem-surface,
+    #   cùng /predict). Thiếu cả hai → fallback DTM + P.2108 (không vỡ rebuild).
     cmd = [
         sys.executable,
         str(SCRIPT_PATH),
@@ -154,7 +161,33 @@ def rebuild_coverage_map(self: Any, job_id: str) -> dict[str, Any]:
         "30",
     ]
     subproc_env = os.environ.copy()
-    subproc_env["LORA_SURFACE_DEM_DIRECTORY"] = ""
+    surface_dir = (
+        os.environ.get("LORA_HEATMAP_SURFACE_DEM_DIRECTORY")
+        or get_settings().lora_surface_dem_directory
+    )
+    if surface_dir and Path(surface_dir).is_dir():
+        cmd += ["--surface-dem-dir", surface_dir, "--smooth-sigma", "2", "--opening-size", "3"]
+        log.info(
+            "rebuild job %s: DSM mode (surface=%s, P.2108 off, de-speckle σ2/open3)",
+            job_id,
+            surface_dir,
+        )
+        # Fusion vật lý + ML: chỉ bật ở chế độ DSM (khớp cấu hình lúc huấn luyện
+        # residual) và khi có sẵn model. RSSI = P.1812 + hiệu chỉnh ML (bị chặn).
+        if ML_MODEL_PATH.exists() and ML_META_PATH.exists():
+            cmd += ["--ml-model", str(ML_MODEL_PATH), "--ml-workers", "4", "--ml-max-km", "12"]
+            log.info("rebuild job %s: ML fusion BẬT (residual, model=%s)", job_id, ML_MODEL_PATH)
+        else:
+            log.info(
+                "rebuild job %s: ML fusion TẮT (chưa có model residual) → bản đồ thuần vật lý",
+                job_id,
+            )
+    else:
+        # Không có DSM → fallback DTM + P.2108. Clear env để script chạy DTM-only.
+        subproc_env["LORA_SURFACE_DEM_DIRECTORY"] = ""
+        log.warning(
+            "rebuild job %s: DSM dir thiếu (%r) → fallback DTM + P.2108", job_id, surface_dir
+        )
     try:
         proc = subprocess.run(
             cmd,

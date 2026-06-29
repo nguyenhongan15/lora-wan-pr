@@ -1,0 +1,33 @@
+{
+  "h3_res": 8,
+  "session_window_s": 3600,
+  "test_quota": 1500,
+  "val_quota": 1500,
+  "buffer_ring": 0,
+  "test_cell_cap_ratio": 0.3,
+  "n_train": 11719,
+  "n_val": 1608,
+  "n_test": 1568,
+  "n_excluded_buffer": 0,
+  "n_cells_train": 102,
+  "n_cells_val": 19,
+  "n_cells_test": 5,
+  "n_sessions_train": 128,
+  "n_sessions_val": 42,
+  "n_sessions_test": 22,
+  "train_ts_range": {
+    "min": "2025-11-19T09:26:34.636567+00:00",
+    "max": "2026-06-19T15:16:24.501000+00:00",
+    "n": 11719
+  },
+  "val_ts_range": {
+    "min": "2025-11-24T12:03:32.968509+00:00",
+    "max": "2026-06-19T10:22:21.040000+00:00",
+    "n": 1608
+  },
+  "test_ts_range": {
+    "min": "2025-11-19T11:43:14.192013+00:00",
+    "max": "2026-06-19T15:14:07.093000+00:00",
+    "n": 1568
+  }
+}

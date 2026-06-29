@@ -241,7 +241,14 @@ function FeatureRow({ feature, index, reverse, onNavigate, isLoggedIn, onRequest
             ) : index === 1 ? (
               <FeatureSurveyMapPanel />
             ) : index === 2 ? (
-              <FeaturePredictMock id={`lp-feat-${index}`} />
+              <div className="mini-map">
+                <img
+                  className="feat-predict-img"
+                  src={`${import.meta.env.BASE_URL ?? "/"}f3_landingpage.svg`}
+                  alt="Minh hoạ kết quả dự đoán tín hiệu tại một vị trí trên bản đồ"
+                  loading="lazy"
+                />
+              </div>
             ) : index === 4 ? (
               <FeatureSourcesMock />
             ) : index === 5 ? (
@@ -707,48 +714,6 @@ function FeatureSurveyMap() {
   }, []);
 
   return <div ref={containerRef} className="map-canvas" />;
-}
-
-/**
- * F·03 preview — mockup card kết quả dự đoán tại điểm.
- *
- * Background: DaNangMapSvg (nhẹ, không cần MapLibre). Trên đó vẽ 1 pin tại
- * trung tâm + 1 floating card hiển thị toạ độ, RSSI/SNR/SF + sai số 95% CI —
- * khớp với output thật của tab "Dự đoán" (PredictionView).
- *
- * @param {{ id: string }} props
- */
-function FeaturePredictMock({ id }) {
-  return (
-    <div className="mini-map feat-predict-mock">
-      <DaNangMapSvg id={id} withGlow={false} />
-      <div className="feat-predict-pin" aria-hidden="true">
-        <span className="feat-predict-pin-pulse" />
-        <span className="feat-predict-pin-dot" />
-      </div>
-      <div className="feat-predict-card" role="img" aria-label="Kết quả dự đoán mẫu">
-        <div className="feat-predict-card-coords">
-          <span className="feat-predict-card-coord-icon">📍</span>
-          16.0668°N · 108.2208°E
-        </div>
-        <div className="feat-predict-card-metrics">
-          <div className="feat-predict-card-metric">
-            <span className="lbl">RSSI</span>
-            <span className="val">−98 dBm</span>
-          </div>
-          <div className="feat-predict-card-metric">
-            <span className="lbl">SNR</span>
-            <span className="val">+6 dB</span>
-          </div>
-          <div className="feat-predict-card-metric">
-            <span className="lbl">SF khuyến nghị</span>
-            <span className="val">SF7</span>
-          </div>
-        </div>
-        <div className="feat-predict-card-ci">Sai số 95% CI: ±5 dB</div>
-      </div>
-    </div>
-  );
 }
 
 /**

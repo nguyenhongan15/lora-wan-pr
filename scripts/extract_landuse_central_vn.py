@@ -33,7 +33,7 @@ PBF_PATH = Path(os.environ.get("LORA_OSM_PBF", "/data/osm/vietnam-260512.osm.pbf
 OUT_PATH = Path(
     os.environ.get(
         "LORA_LANDUSE_OUT",
-        "/app/services/ml-service/reference_wireless/data/terrain/landuse_central.geojson",
+        "/app/services/ml-service/data/training/terrain/landuse_central.geojson",
     )
 )
 

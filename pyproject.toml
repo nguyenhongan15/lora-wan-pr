@@ -48,7 +48,6 @@ extend-exclude = [
     "legacy",
     "migrations/versions",
     "archive",
-    "services/ml-service/reference_wireless",
 ]
 
 [tool.ruff.lint]
@@ -64,7 +63,7 @@ allowed-confusables = ["σ", "²", "·", "→", "×"]
 # Experiment scripts dùng ML convention: X/Y là feature matrix / label;
 # Xtr/Xte/Xv = train/test/val splits — uppercase chuẩn ngành, không snake_case.
 "scripts/experiments/*.py" = ["N803", "N806"]
-"scripts/train_extra_trees.py" = ["N803", "N806"]
+"services/ml-service/scripts/train_extra_trees.py" = ["N803", "N806"]
 "scripts/eval_extra_trees.py" = ["N803", "N806"]
 "scripts/eval_extra_trees_holdout.py" = ["N803", "N806"]
 "scripts/test_predictor.py" = ["N803", "N806"]

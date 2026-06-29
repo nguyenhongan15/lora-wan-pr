@@ -213,12 +213,19 @@ def _build_dsm_for_tile(
     pbf_path: Path,
     out_path: Path,
     pixel_size_m: float | None = None,
+    base_surface_path: Path | None = None,
 ) -> dict[str, float | int]:
     """Sinh 1 surface tile từ 1 terrain tile + buildings trong PBF.
 
     Nếu `pixel_size_m` set + khác native resolution, terrain được reproject
     sang grid mới (bilinear) trước khi rasterize buildings — giúp building
     polygon nhỏ < 30m hiện rõ ở DSM 10m / 5m.
+
+    Nếu `base_surface_path` set (vd Copernicus GLO-30 surface = canopy thật):
+    output = max(base_surface, DTM + chiều_cao_nhà_OSM). Giữ canopy clutter
+    validated (nền) + chèn nhà OSM nơi cao hơn. KHÔNG cộng dồn (max, không sum)
+    để tránh canopy + nhà double-count. Yêu cầu base cùng shape/grid với terrain
+    (chạy ở native resolution, KHÔNG dùng chung --pixel-size-m).
     """
     t0 = time.time()
     with rasterio.open(tile_path) as src:
@@ -313,13 +320,28 @@ def _build_dsm_for_tile(
         )
         log.info("[%s] rasterized in %.0fs", tile_path.name, time.time() - t2)
 
-    # Combine: surface = terrain + building_height. Nodata pixel giữ nguyên.
+    # Combine: building_surface = terrain (DTM) + building_height. Nodata giữ nguyên.
     surface = terrain.copy()
     if nodata is not None:
         mask = terrain != nodata
         surface[mask] = terrain[mask] + building_h[mask]
     else:
+        mask = np.ones_like(terrain, dtype=bool)
         surface = terrain + building_h
+
+    # Layer lên nền surface (Copernicus canopy thật) nếu có: lấy MAX để giữ
+    # canopy validated nơi không có nhà + dùng nhà OSM nơi cao hơn. Tránh
+    # double-count (max, không cộng dồn canopy + nhà).
+    if base_surface_path is not None:
+        with rasterio.open(base_surface_path) as base_ds:
+            base = base_ds.read(1).astype(np.float32)
+        if base.shape != surface.shape:
+            raise RuntimeError(
+                f"base-surface shape {base.shape} != terrain {surface.shape} "
+                f"(chạy native resolution, bỏ --pixel-size-m khi dùng --base-surface-dir)"
+            )
+        surface[mask] = np.maximum(surface[mask], base[mask])
+        log.info("[%s] layered lên base surface %s (max)", tile_path.name, base_surface_path.name)
 
     # Write output cùng profile như input (LZW compressed để giảm size).
     profile.update(
@@ -396,7 +418,24 @@ def main() -> int:
             "rasterize ở 10m grid."
         ),
     )
+    parser.add_argument(
+        "--base-surface-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Thư mục surface NỀN (vd Copernicus GLO-30 surface = canopy thật). Khi "
+            "set: output = max(base_surface, DTM + nhà OSM) — giữ canopy clutter "
+            "đã validated, chèn nhà OSM nơi cao hơn. KHÔNG dùng chung --pixel-size-m "
+            "(yêu cầu cùng grid native với --dem-dir)."
+        ),
+    )
     args = parser.parse_args()
+    if args.base_surface_dir is not None and not args.base_surface_dir.is_dir():
+        log.error("--base-surface-dir không tồn tại: %s", args.base_surface_dir)
+        return 2
+    if args.base_surface_dir is not None and args.pixel_size_m is not None:
+        log.error("--base-surface-dir không dùng chung --pixel-size-m (grid phải khớp native)")
+        return 2
 
     if not args.dem_dir.is_dir():
         log.error("--dem-dir không tồn tại: %s", args.dem_dir)
@@ -424,8 +463,24 @@ def main() -> int:
         if out_path.exists() and not args.force:
             log.info("[%s] skip (đã có %s, dùng --force để overwrite)", tile.name, out_path)
             continue
+        base_surface_path = (
+            args.base_surface_dir / tile.name if args.base_surface_dir is not None else None
+        )
+        if base_surface_path is not None and not base_surface_path.is_file():
+            log.warning(
+                "[%s] base-surface tile thiếu: %s — build không có nền",
+                tile.name,
+                base_surface_path,
+            )
+            base_surface_path = None
         summary.append(
-            _build_dsm_for_tile(tile, args.pbf, out_path, pixel_size_m=args.pixel_size_m)
+            _build_dsm_for_tile(
+                tile,
+                args.pbf,
+                out_path,
+                pixel_size_m=args.pixel_size_m,
+                base_surface_path=base_surface_path,
+            )
         )
 
     log.info("=" * 60)

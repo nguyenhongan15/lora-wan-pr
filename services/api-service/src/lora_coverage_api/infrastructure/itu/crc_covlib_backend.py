@@ -1,8 +1,11 @@
 """crc-covlib adapter implementing `Stage1PhysicsBackend`.
 
-Lib: crc-covlib (CRC Canada, MIT). Wraps ITU-R P.1812-7 (terrain diffraction)
-through C++ core, P.2108-1 clutter through Python helper. DEM = Copernicus
-GLO-30 GeoTIFF tiles under `dem_directory`.
+Lib: crc-covlib 4.6.2 (CRC Canada, MIT). Wraps ITU-R P.1812-**7** (terrain
+diffraction) through C++ core — XÁC MINH 2026-06-27: crc-covlib 4.6.2 implement
+edition -7 (digital maps P.453/P.1510/P.836 bundled trong wheel). Thư mục
+`core-logic/model/R-REC-P.1812-8-*` là tài liệu tham khảo rời, KHÔNG được lib
+dùng. P.2108-1 clutter qua Python helper. DEM = Copernicus GLO-30 GeoTIFF tiles
+under `dem_directory`. Cấu hình P.1812 + P.2108 → `p1812_config` (dùng chung heatmap).
 
 Clutter strategy:
   - Có DSM (`surface_dem_directory`): P.1812 đã model nhiễu xạ qua building/
@@ -42,10 +45,8 @@ from ...application.itu.backend import LinkGeometry
 # import được trên môi trường chưa cài lib (vd CI test collection chạy unit
 # tests không cần backend thật). Fail tại runtime, không tại module load.
 
-# DEM sampling resolution. 30 m khớp Copernicus GLO-30 cell size. Tăng (vd 100m)
-# nếu DEM thưa hơn để giảm số sample/link; giảm dưới 30m vô nghĩa vì DEM source
-# đã là 30m.
-_DEM_SAMPLING_RESOLUTION_M = 30
+# (DEM sampling resolution + cấu hình P.1812 + P.2108 → infrastructure/itu/p1812_config.py,
+#  dùng chung với heatmap để không drift.)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +91,8 @@ class CrcCovlibBackend:
 
     def basic_transmission_loss_db(self, link: LinkGeometry) -> float:
         from crc_covlib import simulation as covlib  # type: ignore[import-untyped]
-        from crc_covlib.helper import itur_p2108  # type: ignore[import-untyped]
+
+        from .p1812_config import configure_p1812_propagation, p2108_clutter_db
 
         # ITU digital maps (P.453 refractivity DN50/N050, P.1510 T_Annual, P.836
         # water vapor) được crc-covlib wheel ship sẵn trong
@@ -108,30 +110,15 @@ class CrcCovlibBackend:
         sim.SetTransmitterPower(0.025, covlib.PowerType.EIRP)
         sim.SetReceiverHeightAboveGround(link.rx_antenna_height_m)
 
-        sim.SetPropagationModel(covlib.PropagationModel.ITU_R_P_1812)
-        sim.SetITURP1812TimePercentage(self.percent_time)
-        sim.SetITURP1812LocationPercentage(self.percent_location)
-        sim.SetITURP1812SurfaceProfileMethod(
-            covlib.P1812SurfaceProfileMethod.P1812_USE_SURFACE_ELEV_DATA
+        # Cấu hình P.1812 + nguồn DEM/Surface DÙNG CHUNG với heatmap (p1812_config)
+        # → tránh drift tham số giữa /predict và "bản đồ ước lượng".
+        configure_p1812_propagation(
+            sim,
+            time_pct=self.percent_time,
+            loc_pct=self.percent_location,
+            dem_dir=str(self.dem_directory),
+            surface_dir=(str(self.surface_dem_directory) if self.surface_dem_directory else None),
         )
-
-        dem_str = str(self.dem_directory)
-        sim.SetPrimaryTerrainElevDataSource(covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF)
-        sim.SetTerrainElevDataSourceDirectory(
-            covlib.TerrainElevDataSource.TERR_ELEV_GEOTIFF, dem_str
-        )
-        # Surface dir riêng (DTM + building heights) khi có DSM; fallback về
-        # dem_directory để P.1812 vẫn có data nguồn — clutter sẽ bù qua P.2108.
-        surface_str = (
-            str(self.surface_dem_directory) if self.surface_dem_directory is not None else dem_str
-        )
-        sim.SetPrimarySurfaceElevDataSource(covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF)
-        sim.SetSurfaceElevDataSourceDirectory(
-            covlib.SurfaceElevDataSource.SURF_ELEV_GEOTIFF, surface_str
-        )
-
-        sim.SetResultType(covlib.ResultType.PATH_LOSS_DB)
-        sim.SetTerrainElevDataSamplingResolution(_DEM_SAMPLING_RESOLUTION_M)
 
         pl_p1812 = sim.GenerateReceptionPointResult(link.rx.latitude, link.rx.longitude)
 
@@ -143,26 +130,17 @@ class CrcCovlibBackend:
                 f"khả năng DEM không cover bbox."
             )
 
-        # P.2108 clutter chỉ áp khi KHÔNG có DSM. Có DSM → P.1812 đã model
-        # nhiễu xạ qua building/canopy bằng dữ liệu surface thật → cộng P.2108
-        # statistic = double-count (verify 2026-05-31 trên 500 row Đà Nẵng:
-        # WITH P.2108 bias +26.27 dB, WITHOUT +2.66 dB; P.2108 add ~24 dB sat
-        # ngay từ d≥2km). P.2108 vẫn dùng khi DTM-only (fallback path).
-        if self.surface_dem_directory is not None:
-            clutter_db = 0.0
-        else:
-            d_km = _haversine_km(
-                link.tx.latitude, link.tx.longitude, link.rx.latitude, link.rx.longitude
-            )
-            # P.2108-1 §3.2 valid cho 0.25 ≤ d ≤ 100 km. Dưới ngưỡng → log10(d)
-            # blow-up. < 250 m clutter loss không đáng kể so với free-space +
-            # diffraction P.1812 đã tính, set 0.
-            if d_km < 0.25:
-                clutter_db = 0.0
-            else:
-                clutter_db = itur_p2108.TerrestrialPathClutterLoss(
-                    link.freq_mhz / 1000.0, d_km, self.percent_location
-                )
+        # P.2108 clutter: tự tắt khi có DSM (tránh double-count), gate ≥0.25km —
+        # logic dùng chung p1812_config.p2108_clutter_db.
+        d_km = _haversine_km(
+            link.tx.latitude, link.tx.longitude, link.rx.latitude, link.rx.longitude
+        )
+        clutter_db = p2108_clutter_db(
+            link.freq_mhz,
+            d_km,
+            self.percent_location,
+            has_surface=self.surface_dem_directory is not None,
+        )
 
         return float(pl_p1812 + clutter_db)
 
@@ -174,7 +152,7 @@ class CrcCovlibBackend:
         phải thermally-efficient (kính low-E + insulation kiểu hiện đại châu Âu);
         nếu sau này expose tower-mounted IoT → cần extend.
         """
-        from crc_covlib.helper import itur_p2109
+        from crc_covlib.helper import itur_p2109  # type: ignore[import-untyped]
 
         if not 0.0 < probability_percent < 100.0:
             raise ValueError(f"probability_percent ngoài (0, 100): {probability_percent}")

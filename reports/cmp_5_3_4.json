@@ -1,0 +1,112 @@
+[
+ {
+  "diem": "A",
+  "lat": 16.070674,
+  "lon": 108.14409,
+  "addr": "Đường Âu Cơ, Phường Liên Chiểu, Thành phố Đà Nẵng",
+  "meas": -121,
+  "p1812": -117,
+  "comb": -123,
+  "sf": 7,
+  "dkm": 1.17
+ },
+ {
+  "diem": "B",
+  "lat": 16.075863,
+  "lon": 108.157503,
+  "addr": "Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -119,
+  "p1812": -118,
+  "comb": -112,
+  "sf": 12,
+  "dkm": 1.19
+ },
+ {
+  "diem": "C",
+  "lat": 16.065349,
+  "lon": 108.146104,
+  "addr": "Đường Khánh An 2, Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -118,
+  "p1812": -114,
+  "comb": -110,
+  "sf": 12,
+  "dkm": 1.36
+ },
+ {
+  "diem": "D",
+  "lat": 16.075753,
+  "lon": 108.156727,
+  "addr": "Đường Ngô Sĩ Liên, Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -116,
+  "p1812": -121,
+  "comb": -119,
+  "sf": 12,
+  "dkm": 0.49
+ },
+ {
+  "diem": "E",
+  "lat": 16.07608,
+  "lon": 108.157032,
+  "addr": "Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -114,
+  "p1812": -116,
+  "comb": -111,
+  "sf": 12,
+  "dkm": 1.19
+ },
+ {
+  "diem": "F",
+  "lat": 16.074818,
+  "lon": 108.149169,
+  "addr": "Đường Nguyễn Lương Bằng, Phường Liên Chiểu, Thành phố Đà Nẵng",
+  "meas": -113,
+  "p1812": -99,
+  "comb": -112,
+  "sf": 12,
+  "dkm": 0.37
+ },
+ {
+  "diem": "G",
+  "lat": 16.0758,
+  "lon": 108.156705,
+  "addr": "Đường Ngô Sĩ Liên, Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -112,
+  "p1812": -114,
+  "comb": -111,
+  "sf": 12,
+  "dkm": 1.15
+ },
+ {
+  "diem": "H",
+  "lat": 16.083931,
+  "lon": 108.145506,
+  "addr": "Đường Nguyễn Lương Bằng, Phường Liên Chiểu, Thành phố Đà Nẵng",
+  "meas": -110,
+  "p1812": -114,
+  "comb": -106,
+  "sf": 12,
+  "dkm": 1.37
+ },
+ {
+  "diem": "I",
+  "lat": 16.065164,
+  "lon": 108.147697,
+  "addr": "Đường Khánh Sơn, Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -108,
+  "p1812": -114,
+  "comb": -108,
+  "sf": 12,
+  "dkm": 1.28
+ },
+ {
+  "diem": "J",
+  "lat": 16.064621,
+  "lon": 108.146854,
+  "addr": "Đường Phạm Như Xương, Phường Hòa Khánh, Thành phố Đà Nẵng",
+  "meas": -101,
+  "p1812": -96,
+  "comb": -90,
+  "sf": 12,
+  "dkm": 1.38
+ }
+]

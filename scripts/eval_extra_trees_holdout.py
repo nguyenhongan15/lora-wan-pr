@@ -32,9 +32,7 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_PATH = (
-    REPO_ROOT / "services/ml-service/reference_wireless/data/processed/devices_history_full.csv"
-)
+DATA_PATH = REPO_ROOT / "services/ml-service/data/training/processed/devices_history_full.csv"
 MODEL_PATH = REPO_ROOT / "services" / "ml-service" / "data" / "extra_trees_model.joblib"
 DEFAULT_REPORT_DIR = REPO_ROOT / "reports" / "seven-train"
 

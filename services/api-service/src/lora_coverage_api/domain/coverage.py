@@ -236,6 +236,10 @@ class Gateway:
     rx_antenna_gain_dbi: float | None = None
     rx_sensitivity_dbm: float | None = None
     noise_floor_dbm: float | None = None
+    # Per-gateway physics RSSI bias (dB) — cộng vào RSSI dự đoán để hiệu chỉnh
+    # sai số hệ thống của Stage 1 cho gateway này (anten/vị trí/môi trường thực
+    # khác nominal). None = không hiệu chỉnh. Calibrate từ survey.
+    rssi_bias_db: float | None = None
     # is_public=False = admin đã ẩn khỏi bản đồ chung; user vẫn thấy ở map "Của tôi".
     is_public: bool = True
     # Admin "ghim" state thủ công, bỏ qua ChirpStack/DB derive. None = auto.
@@ -248,3 +252,5 @@ class Gateway:
             raise ValueError(f"rx_sensitivity_dbm out of range: {self.rx_sensitivity_dbm}")
         if self.noise_floor_dbm is not None and not -130.0 <= self.noise_floor_dbm <= -80.0:
             raise ValueError(f"noise_floor_dbm out of range: {self.noise_floor_dbm}")
+        if self.rssi_bias_db is not None and not -60.0 <= self.rssi_bias_db <= 60.0:
+            raise ValueError(f"rssi_bias_db out of range: {self.rssi_bias_db}")

@@ -11,6 +11,7 @@ Consumer (celery-worker): chạy `python -m celery -A lora_coverage_api.celery_a
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from .config import get_settings
 
@@ -24,6 +25,7 @@ def _build_app() -> Celery:
         include=[
             "lora_coverage_api.tasks.rebuild_coverage",
             "lora_coverage_api.tasks.retrain_ml",
+            "lora_coverage_api.tasks.refresh_geo_data",
         ],
     )
     app.conf.update(
@@ -40,6 +42,16 @@ def _build_app() -> Celery:
         # bên trong không bị nhân lên.
         task_acks_late=False,
         worker_prefetch_multiplier=1,
+        # ── Beat schedule (cần chạy worker với `-B`, xem docker-compose) ──
+        # Làm tươi địa hình/nhà HÀNG THÁNG: tải OSM mới → build DSM → rebuild
+        # heatmap. 03:00 UTC ngày 1 mỗi tháng (giờ thấp điểm). Footprint nhà đổi
+        # chậm nên hàng tháng là đủ; real-time không cần (rebuild ~20-30 phút).
+        beat_schedule={
+            "refresh-geo-data-monthly": {
+                "task": "refresh_geo_data",
+                "schedule": crontab(minute=0, hour=3, day_of_month="1"),
+            },
+        },
     )
     return app
 

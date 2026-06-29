@@ -1,0 +1,317 @@
+{
+  "generated_at": "2026-06-28T08:09:32Z",
+  "grid_m": 50.0,
+  "bbox": {
+    "lat_min": 15.8,
+    "lon_min": 107.9,
+    "lat_max": 16.3,
+    "lon_max": 108.5
+  },
+  "grid_size": {
+    "nx": 1285,
+    "ny": 1115
+  },
+  "model": "ITU-R P.1812 + DSM + per-gw NF + survey overlay (per-gw)",
+  "location_percent": 50.0,
+  "redundancy_threshold_dbm": -130.0,
+  "smooth_sigma_cell": 2.0,
+  "opening_size_cell": 3,
+  "max_radius_km": null,
+  "sea_mask": {
+    "method": "dem",
+    "dem_path": "/data/dem/copernicus_glo30_danang.tif",
+    "elev_threshold_m": 0.5,
+    "n_cells_masked": 510780
+  },
+  "survey_overlay": {
+    "enabled": true,
+    "scope": "per_gw",
+    "max_link_km": 50.0,
+    "n_points": 14895,
+    "n_points_in_grid": 14684,
+    "n_cells_overlaid": 2909,
+    "n_gw_with_data": 13,
+    "n_gw_overlaid": 13
+  },
+  "ml_fusion": {
+    "enabled": false
+  },
+  "rssi_bins": [
+    {
+      "bin": 1,
+      "rssi_low_dbm": -100.0,
+      "rssi_high_dbm": null,
+      "label": "> -100 dBm"
+    },
+    {
+      "bin": 2,
+      "rssi_low_dbm": -105.0,
+      "rssi_high_dbm": -100.0,
+      "label": "-105 .. -100 dBm"
+    },
+    {
+      "bin": 3,
+      "rssi_low_dbm": -110.0,
+      "rssi_high_dbm": -105.0,
+      "label": "-110 .. -105 dBm"
+    },
+    {
+      "bin": 4,
+      "rssi_low_dbm": -115.0,
+      "rssi_high_dbm": -110.0,
+      "label": "-115 .. -110 dBm"
+    },
+    {
+      "bin": 5,
+      "rssi_low_dbm": -120.0,
+      "rssi_high_dbm": -115.0,
+      "label": "-120 .. -115 dBm"
+    },
+    {
+      "bin": 6,
+      "rssi_low_dbm": -130.0,
+      "rssi_high_dbm": -120.0,
+      "label": "< -120 dBm"
+    }
+  ],
+  "gw_count_bins": [
+    {
+      "gw_count_min": 1,
+      "gw_count_max": 1,
+      "label": "1 gateway"
+    },
+    {
+      "gw_count_min": 2,
+      "gw_count_max": 2,
+      "label": "2 gateways"
+    },
+    {
+      "gw_count_min": 3,
+      "gw_count_max": 99,
+      "label": ">= 3 gateways"
+    }
+  ],
+  "gateways": [
+    {
+      "code": "7276ff000b031aec",
+      "name": "Kerlink iStation AEC",
+      "lat": 16.07484,
+      "lon": 108.15411,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 311,
+        "ix_start": 243,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 45.1,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/7276ff000b031aec.geojson"
+    },
+    {
+      "code": "7276ff002e0507da",
+      "name": "7276ff002e0507da",
+      "lat": 16.0740935,
+      "lon": 108.1524913,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 310,
+        "ix_start": 240,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 45.1,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/7276ff002e0507da.geojson"
+    },
+    {
+      "code": "7276ff002e06029f",
+      "name": "7276ff002e06029f",
+      "lat": 16.0659959,
+      "lon": 108.1532551,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 292,
+        "ix_start": 241,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 45.1,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/7276ff002e06029f.geojson"
+    },
+    {
+      "code": "7276ff002e061f5b",
+      "name": "7276ff002e061f5b",
+      "lat": 16.075590133666992,
+      "lon": 108.22207641601562,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 313,
+        "ix_start": 389,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 45.1,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/7276ff002e061f5b.geojson"
+    },
+    {
+      "code": "7276ff002e062cf2",
+      "name": "7276ff002e062cf2",
+      "lat": 16.11829376220703,
+      "lon": 108.27363586425781,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 408,
+        "ix_start": 499,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 46.8,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/7276ff002e062cf2.geojson"
+    },
+    {
+      "code": "a840411eebb44150",
+      "name": "Dragino C2.209",
+      "lat": 16.0740984,
+      "lon": 108.15253,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 310,
+        "ix_start": 240,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 46.5,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/a840411eebb44150.geojson"
+    },
+    {
+      "code": "a84041ffff1ec39f",
+      "name": "a84041ffff1ec39f",
+      "lat": 16.0741086,
+      "lon": 108.1525171,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 310,
+        "ix_start": 240,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 46.2,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/a84041ffff1ec39f.geojson"
+    },
+    {
+      "code": "ac1f09fffe00ab20",
+      "name": "ac1f09fffe00ab20",
+      "lat": 16.05469,
+      "lon": 108.22009,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 267,
+        "ix_start": 384,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 45.9,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/ac1f09fffe00ab20.geojson"
+    },
+    {
+      "code": "ac1f09fffe00ab25",
+      "name": "ac1f09fffe00ab25",
+      "lat": 16.11073,
+      "lon": 108.12857,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 391,
+        "ix_start": 188,
+        "sub_ny": 602,
+        "sub_nx": 603
+      },
+      "elapsed_s": 47.8,
+      "n_finite": 363006,
+      "n_total": 363006,
+      "per_gw_geojson": "per_gw/ac1f09fffe00ab25.geojson"
+    },
+    {
+      "code": "ac1f09fffe06fcf2",
+      "name": "ac1f09fffe06fcf2",
+      "lat": 16.054765682623003,
+      "lon": 108.21985626414313,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 267,
+        "ix_start": 384,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 47.4,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/ac1f09fffe06fcf2.geojson"
+    },
+    {
+      "code": "ac1f09fffe0fd629",
+      "name": "ac1f09fffe0fd629",
+      "lat": 16.06815,
+      "lon": 108.15448,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 297,
+        "ix_start": 244,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 47.8,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/ac1f09fffe0fd629.geojson"
+    },
+    {
+      "code": "ac1f09fffe0fd63b",
+      "name": "ac1f09fffe0fd63b",
+      "lat": 15.98571,
+      "lon": 108.23986,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 113,
+        "ix_start": 427,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 48.5,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/ac1f09fffe0fd63b.geojson"
+    },
+    {
+      "code": "ac1f09fffe168f85",
+      "name": "DF_ RAK7268V2",
+      "lat": 16.07557350137005,
+      "lon": 108.15326048782691,
+      "noise_floor_dbm": null,
+      "sub_grid": {
+        "iy_start": 313,
+        "ix_start": 241,
+        "sub_ny": 602,
+        "sub_nx": 602
+      },
+      "elapsed_s": 36.3,
+      "n_finite": 362404,
+      "n_total": 362404,
+      "per_gw_geojson": "per_gw/ac1f09fffe168f85.geojson"
+    }
+  ]
+}
