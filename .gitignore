@@ -79,6 +79,7 @@ logs/
 *.pid
 *.tmp
 *.bak
+tmp/
 
 # ── Personal / local config (không commit) ─────────────────
 .claude/
