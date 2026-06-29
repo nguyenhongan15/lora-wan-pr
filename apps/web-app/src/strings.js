@@ -341,7 +341,8 @@ export const strings = {
       
       options: [
         { value: "outdoor", label: "Ngoài trời", short: "Ngoài trời" },
-        { value: "indoor", label: "Trong nhà", short: "Trong nhà" },
+        // Đã ẩn lựa chọn "Trong nhà" khỏi giao diện (bỏ comment để bật lại).
+        // { value: "indoor", label: "Trong nhà", short: "Trong nhà" },
       ],
     },
     viewModePicker: {
@@ -1427,7 +1428,7 @@ export const strings = {
       "Danh sách file bạn đã tải lên hoặc các đợt đồng bộ từ nguồn liên kết. " +
       "Bấm \"Đóng góp\" để gửi 1 batch vào bản đồ chung.",
     loading: "Đang tải…",
-    empty: "Chưa có dữ liệu nào. Vào mục \"Tải lên CSV/JSON\" hoặc \"Nguồn đã liên kết\".",
+    empty: "Chưa có dữ liệu nào. Vào mục \"Nguồn đã liên kết\" để liên kết và đồng bộ dữ liệu.",
     errorLoad: "Không tải được danh sách dữ liệu.",
     headers: [
       "Thời điểm upload",

@@ -31,7 +31,8 @@ const SECTIONS = [
   { id: "overview", label: tSide.overview },
   { id: "add", label: tSide.addSource },
   { id: "linked", label: tSide.linkedSources },
-  { id: "upload", label: tSide.uploadFile },
+  // Đã ẩn tính năng "Tải lên CSV/JSON" khỏi giao diện (bỏ comment để bật lại).
+  // { id: "upload", label: tSide.uploadFile },
   { id: "manage", label: tSide.dataManagement },
   { id: "history", label: tSide.uploadHistory },
 ];
