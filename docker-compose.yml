@@ -263,6 +263,15 @@ services:
     container_name: lora-wan-celery
     restart: unless-stopped
     logging: *default-logging
+    # Worker dùng chung image lora-wan-api → kế thừa HEALTHCHECK của Dockerfile
+    # (curl http://127.0.0.1:8000/healthz). Nhưng celery worker KHÔNG chạy HTTP
+    # server → probe luôn fail → container báo "unhealthy" giả (nhiễu
+    # `docker compose ps` + rối playbook rollback). Worker không phục vụ HTTP
+    # nên disable healthcheck; liveness do `restart: unless-stopped` + celery
+    # broker reconnect lo. Cần probe thật thì thay bằng `celery -A
+    # lora_coverage_api.celery_app inspect ping`.
+    healthcheck:
+      disable: true
     depends_on:
       db:
         condition: service_healthy
