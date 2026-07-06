@@ -65,10 +65,24 @@ class AuthSession:
 
 
 _INSERT_USER = text("""
-    INSERT INTO auth.users (email, password_hash)
-    VALUES (:email, :password_hash)
+    INSERT INTO auth.users (email, password_hash, is_admin, email_verified)
+    VALUES (:email, :password_hash, :is_admin, :email_verified)
     RETURNING id, email, is_admin, disabled, email_verified, created_at
 """)
+
+# First-user-is-admin (fresh clone bootstrap): instance mới dựng chưa có ai
+# quản trị — không có admin thì không duyệt được gateway quarantine, không
+# xem admin queue. Tài khoản ĐẦU TIÊN đăng ký tự nhận is_admin=true.
+#
+# Advisory xact-lock serialize check-then-insert: 2 request register đồng
+# thời trên DB rỗng mà không lock → cả hai thấy "chưa có user" → 2 admin.
+# Lock tự nhả khi transaction kết thúc (commit/rollback). Key = hằng số
+# tuỳ chọn, chỉ cần duy nhất trong app cho mục đích này.
+_FIRST_ADMIN_LOCK_KEY = 74_0001
+
+_ACQUIRE_FIRST_ADMIN_LOCK = text("SELECT pg_advisory_xact_lock(:key)")
+
+_ANY_USER_EXISTS = text("SELECT EXISTS (SELECT 1 FROM auth.users)")
 
 _SELECT_USER_BY_EMAIL = text("""
     SELECT id, email, password_hash, is_admin, disabled, email_verified, created_at,
@@ -173,15 +187,26 @@ class IdentityService:
     def register(self, conn: Connection, email: str, password: str) -> User:
         """Tạo user mới với email + password.
 
+        Tài khoản đầu tiên của instance tự nhận `is_admin=true` +
+        `email_verified=true` (fresh clone chưa có SMTP để nhận mail verify;
+        admin bị chặn đóng góp community vì thiếu verify là vô lý).
+
         Raises:
             EmailAlreadyExistsError: email (case-insensitive) đã có trong DB.
         """
         canonical = _canonical_email(email)
         password_hash = _passwords.hash_password(password)
+        conn.execute(_ACQUIRE_FIRST_ADMIN_LOCK, {"key": _FIRST_ADMIN_LOCK_KEY})
+        first_user = not conn.execute(_ANY_USER_EXISTS).scalar_one()
         try:
             row = conn.execute(
                 _INSERT_USER,
-                {"email": canonical, "password_hash": password_hash},
+                {
+                    "email": canonical,
+                    "password_hash": password_hash,
+                    "is_admin": first_user,
+                    "email_verified": first_user,
+                },
             ).one()
         except Exception as exc:
             # psycopg unique violation → IntegrityError. Match qua tên
