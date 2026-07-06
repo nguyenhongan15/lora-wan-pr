@@ -1,6 +1,6 @@
 # LoRa Coverage Mapping Platform
 
-LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 + P.2108 (Stage 1 physics) + ExtraTrees end-to-end (Stage 2 ML) + React/MapLibre web UI.
+LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 (Stage 1 physics) + ExtraTrees end-to-end (Stage 2 ML) + React/MapLibre web UI.
 
 ## Quick start (dev)
 
@@ -23,7 +23,83 @@ Tail logs: `docker compose logs -f api-service ml-service`.
 - Docker Desktop (compose v2)
 - Node ≥ 22, npm ≥ 10 — npm workspaces cho `apps/*`, `packages/sdk-js`, `packages/api-types`
 - Python 3.12 + [uv](https://docs.astral.sh/uv/) — uv workspace cho `services/api-service`, `services/ml-service`, `services/worker-service`, `packages/sdk-python`
-- DEM/DSM dữ liệu địa hình tại `LORA_DATA_DIR` (mặc định `E:/DATN/lora-data`); xem `scripts/build_dsm.py`
+- DEM/DSM dữ liệu địa hình tại `LORA_DATA_DIR` (mặc định `E:/DATN/lora-data`); xem [§ Dữ liệu địa lý](#dữ-liệu-địa-lý-lora-data)
+
+## Dữ liệu địa lý (`lora-data`)
+
+Stage 1 (ITU-R P.1812) cần raster địa hình + landcover đặt tại `LORA_DATA_DIR` (mặc định cùng cấp với lora-coverage, mount read-only vào `api-service` + `ml-service`). **Không commit vào git** (nặng ~7 GB) — tải/​sinh theo bảng dưới. Layout:
+
+```
+lora-coverage/
+lora-data/
+  dem/                     ⬇  Copernicus GLO-30 DTM (mặt đất)      — BẮT BUỘC
+  landcover/esa-worldcover/⬇  ESA WorldCover 10m 2021 v200         — BẮT BUỘC
+  osm/vietnam-*.osm.pbf    ⬇  Geofabrik VN extract (building tags) — BẮT BUỘC (để build DSM)
+  dem-surface/             ⚙  DSM = DTM + nhà OSM (native 30m)      — sinh cục bộ
+  dem-surface-10m/         ⚙  DSM upsample 10m                      — sinh cục bộ (tùy chọn)
+  dem-surface-built-up-only/⚙ DSM chỉ giữ nhà ở pixel built-up      — sinh cục bộ (tùy chọn)
+  geo/                     ⚙  mount ghi-được cho Celery refresh_geo_data
+  osm/urbanization_vn.tif  ◦  raster built-up (LORA_URBANIZATION_PATH) — tùy chọn/legacy
+  climatic-zones/vn-zones.tif ◦ radio-climatic zone raster          — tùy chọn
+  buildings-msft/          ◦  Microsoft GlobalMLBuildingFootprints  — tùy chọn (R&D)
+  buildings-google/        ◦  Google Open Buildings v3              — tùy chọn (R&D)
+  canopy-height/           ◦  Meta Canopy Height Model 1m           — tùy chọn (R&D)
+  itu-digital-maps/        ◦  (rỗng) — bản đồ số P.453/P.836/P.1510 đã kèm trong crc-covlib
+```
+
+⬇ tải từ nguồn ngoài · ⚙ sinh cục bộ bằng script · ◦ tùy chọn, không cần để chạy demo.
+
+### 1. DEM Copernicus GLO-30 (BẮT BUỘC) → `dem/`
+
+DTM 30 m, WGS84 GeoTIFF. Nguồn: [OpenTopography](https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3) (chọn *Copernicus GLO-30*, vẽ bbox) hoặc AWS Open Data `s3://copernicus-dem-30m/`. Ba tile dự án dùng, đặt vào `lora-data/dem/`:
+
+- `copernicus_glo30_danang.tif` — Đà Nẵng (khu vực chính, bbox ~107.9–108.5°E, 15.8–16.3°N)
+- `copernicus_glo30_north_vn.tif` — Bắc Bộ (Hải Phòng / Hải Dương / Hà Nội — Stage 1 validation)
+- `copernicus_glo30_south_vn.tif` — Nam Bộ
+
+crc-covlib tự dò tile theo bbox của link nên filename tự do, miễn nằm trong `LORA_DEM_DIRECTORY`. `LORA_DEM_PATH` / `LORA_DEM_PATH_NORTH_VN` trong `.env` trỏ file cụ thể cho link-budget + validation.
+
+### 2. ESA WorldCover (BẮT BUỘC cho landcover clutter) → `landcover/esa-worldcover/`
+
+Landcover 10 m 2021 v200, tile 3°×3°. Nguồn: [esa-worldcover.org](https://esa-worldcover.org/en/data-access) hoặc AWS `s3://esa-worldcover/v200/2021/map/`. Central VN cần các tile `ESA_WorldCover_10m_2021_v200_N15E108_Map.tif` (Đà Nẵng) + `N18E105`, `N21E105`… (xem `landcover/esa-worldcover/` hiện có). Mapping WorldCover→P.1812 ở `infrastructure/itu/landcover_mapping.py`.
+
+```bash
+# ví dụ 1 tile qua AWS CLI (no-sign-request, bucket public)
+aws s3 cp --no-sign-request \
+  s3://esa-worldcover/v200/2021/map/ESA_WorldCover_10m_2021_v200_N15E108_Map.tif \
+  E:/DATN/lora-data/landcover/esa-worldcover/
+```
+
+### 3. OSM PBF Việt Nam (BẮT BUỘC để build DSM) → `osm/`
+
+Extract từ Geofabrik (cập nhật hằng ngày, có tag `building=*` để suy chiều cao). Dùng script có sẵn (stream + verify MD5 + atomic rename):
+
+```bash
+uv run --project services/api-service python scripts/fetch_osm_pbf.py \
+  --out E:/DATN/lora-data/osm/vietnam-latest.osm.pbf
+```
+
+### 4. Sinh DSM cục bộ → `dem-surface/` (⚙, không tải)
+
+DSM = DTM + chiều cao nhà OSM (P.1812 nhiễu xạ qua mái). Sinh từ dữ liệu bước 1 + 3:
+
+```bash
+# native 30m (mặc định — trỏ LORA_SURFACE_DEM_DIRECTORY vào đây)
+uv run --project services/api-service python scripts/build_dsm.py \
+  --dem-dir E:/DATN/lora-data/dem \
+  --pbf     E:/DATN/lora-data/osm/vietnam-latest.osm.pbf \
+  --out-dir E:/DATN/lora-data/dem-surface
+
+# biến thể 10m (tùy chọn): thêm --pixel-size-m 10 --out-dir …/dem-surface-10m
+# biến thể built-up-only: scripts/build_dsm_built_up_only.py (cần 1 tile ESA WorldCover)
+```
+
+Bỏ qua `dem-surface/` (để `LORA_SURFACE_DEM_DIRECTORY` rỗng) → P.1812 chạy DTM-only + P.2108 clutter thống kê, vẫn hoạt động nhưng kém chính xác ở đô thị đặc.
+
+### 5. Tùy chọn (R&D, không cần để chạy)
+
+- **buildings-msft/** — [Microsoft GlobalMLBuildingFootprints](https://github.com/microsoft/GlobalMLBuildingFootprints) (quadkey `*.geojsonl.gz`); **buildings-google/** — [Google Open Buildings v3](https://sites.research.google/open-buildings/); **canopy-height/** — [Meta Canopy Height Model 1m](https://registry.opendata.aws/dataforgood-fb-forests/). Dùng cho thí nghiệm nguồn surface thay thế, không nằm trong đường chạy production.
+- **osm/urbanization_vn.tif**, **climatic-zones/vn-zones.tif** — raster phụ; `itu-digital-maps/` để rỗng (bản đồ số ITU đã kèm trong crc-covlib).
 
 ## Repository layout
 
@@ -164,3 +240,6 @@ Ba job chạy trên push & PR vào `main`:
 3. **web-app** — npm install, ESLint, JSDoc check (`tsc --checkJs`), Vite build
 
 
+## NOTE
+Dự án còn chưa hoàn thiện và vẫn đang tiếp tục phát triển, các thuật toán, model,... dự án sử dụng có thể được viết lại toàn bộ hoặc một phần trong tương lai, do đó nếu muốn phát triển riêng có thể clone về và tạo repo mới của riêng bạn.
+Mọi thắc mắc xin liên hệ email: anngh2004@gmail.com
