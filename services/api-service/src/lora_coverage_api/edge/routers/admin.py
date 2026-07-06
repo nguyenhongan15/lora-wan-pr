@@ -814,14 +814,27 @@ _MARK_GATEWAY_REJECTED = text("""
 
 # Backfill measurement FK: rows ngoài ts.survey_quarantine có
 # serving_gateway_eui = code mới + serving_gateway_id NULL → set FK.
-# survey_training cũng update để các bản ghi đã promote trước được liên kết
-# về gateway mới (trường hợp hiếm: measurement promote trước khi gateway
-# duyệt; ngày nay validator yêu cầu serving_gateway_id non-null nên không
-# xảy ra, nhưng defensive).
 _BACKFILL_QUARANTINE_FK = text("""
     UPDATE ts.survey_quarantine
     SET serving_gateway_id = :gw_id
     WHERE serving_gateway_eui = :code AND serving_gateway_id IS NULL
+""")
+
+# ts.survey_training KHÔNG có cột serving_gateway_eui — rows sync được trust
+# pipeline auto-promote TRƯỚC khi admin duyệt gateway nên FK NULL vĩnh viễn
+# (đường sync: submit batch auto-approve điểm, gateway còn pending_review).
+# Join ngược về quarantine qua khoá tự nhiên (timestamp, source_type,
+# external_id) — trùng UNIQUE ux_survey_quarantine_external — để nhặt EUI.
+_BACKFILL_TRAINING_FK = text("""
+    UPDATE ts.survey_training t
+    SET serving_gateway_id = :gw_id
+    FROM ts.survey_quarantine q
+    WHERE t.serving_gateway_id IS NULL
+      AND q.serving_gateway_eui = :code
+      AND q.external_id IS NOT NULL
+      AND q.external_id = t.external_id
+      AND q.source_type = t.source_type
+      AND q.timestamp = t.timestamp
 """)
 
 
@@ -869,7 +882,8 @@ def _promote_one_gateway_quarantine(
     reviewer_id: UUID,
 ) -> tuple[UUID, int, int]:
     """Promote 1 row gateway_quarantine → geo.gateways + backfill FK survey
-    rows + auto-promote rows pending_gateway cùng EUI → training.
+    rows (cả quarantine lẫn training đã promote trước) + auto-promote rows
+    pending_gateway cùng EUI → training.
 
     Trả (gateway_id, measurements_backfilled, deferred_promoted). Caller wrap
     transaction. KHÔNG raise — assume caller đã verify status='pending_review'.
@@ -885,8 +899,14 @@ def _promote_one_gateway_quarantine(
         _MARK_GATEWAY_APPROVED,
         {"qid": quarantine_id, "reviewer_id": reviewer_id, "gw_id": gw_id},
     )
+    # Training TRƯỚC quarantine: join của _BACKFILL_TRAINING_FK cần đọc EUI từ
+    # quarantine rows — chạy sau vẫn đúng nhưng trước thì partial index
+    # ix_survey_quarantine_pending_gw_eui (WHERE FK IS NULL) còn dùng được.
+    training_backfilled = (
+        conn.execute(_BACKFILL_TRAINING_FK, {"gw_id": gw_id, "code": code}).rowcount or 0
+    )
     backfill = conn.execute(_BACKFILL_QUARANTINE_FK, {"gw_id": gw_id, "code": code})
-    backfilled = backfill.rowcount or 0
+    backfilled = (backfill.rowcount or 0) + training_backfilled
     deferred_promoted = promote_deferred_for_gateway(
         conn, trust, gateway_code=code, reviewer_id=reviewer_id
     )
