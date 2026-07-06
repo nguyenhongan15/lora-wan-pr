@@ -5,6 +5,7 @@
 #   ./setup.sh          (macOS / Linux / Git Bash — Windows: setup.bat)
 #
 # Tự động toàn bộ:
+#   0. Kiểm tra công cụ (Git / Docker / Node >= 22) — THIẾU THÌ TỰ CÀI
 #   1. Sinh .env từ .env.template (secrets ngẫu nhiên, LORA_DATA_DIR=../lora-data)
 #   2. Tạo ../lora-data + tải 4 tile DEM Copernicus GLO-30 (AWS public, ~100 MB)
 #   3. docker compose up -d --build  (db → migrate → api + ml + celery + cache)
@@ -12,7 +13,7 @@
 #   5. npm install + khởi động web dev server (nền)
 #
 # Idempotent: chạy lại an toàn — .env/DEM/model đã có thì giữ nguyên.
-# Yêu cầu cài sẵn: Docker (đang chạy) + compose v2, Node ≥ 22, curl, openssl.
+# Không cần cài sẵn gì ngoài trình terminal chạy được bash (Windows: Git Bash).
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 cd "$(dirname "$0")"

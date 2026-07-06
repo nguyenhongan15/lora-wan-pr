@@ -89,7 +89,7 @@ uv run --project services/api-service python scripts/build_dsm.py \
   --dem-dir <LORA_DATA_DIR>/dem \
   --pbf     <LORA_DATA_DIR>/osm/vietnam-latest.osm.pbf \
   --out-dir <LORA_DATA_DIR>/dem-surface
-
+```
 
 ## Repository layout
 
@@ -161,11 +161,9 @@ Tab "Bản đồ phủ sóng" có 3 chế độ:
 
 | Mode | Mô tả | Tin cậy | Máy mới |
 |---|---|---|---|
-| `points` | Survey điểm đo (raw walk-measure data) | Tuyệt đối — đo thực tế | Trống (DB survey rỗng, dump `r-dt/` không commit) |
+| `points` | Survey điểm đo (raw walk-measure data) | Tuyệt đối — đo thực tế  |
 | `heatmap` | Heat density survey points | Hiển thị mật độ | Trống (như trên) |
-| `estimate` | **Composite RSSI** max qua 13 gateway (Stage 1 + Stage 2) | Beta — RMSE ±10 dB (~1 bin) | ✅ chạy ngay (GeoJSON tĩnh đã commit) |
-
-GeoJSON tĩnh được pre-generate trong `apps/web-app/public/coverage/rssi/`. Rebuild qua admin (Celery `rebuild_coverage_map`) — cần DEM + landcover trong `lora-data`.
+| `estimate` | **Composite RSSI** max qua 13 gateway | Beta — RMSE ±10 dB (~1 bin) | 
 
 ## Architecture
 
@@ -212,14 +210,12 @@ scripts/                          # chỉ mục đầy đủ theo nhóm: scripts
   backfill_gateway_noise_floor.py # Per-gw noise floor migration helper
 
 services/ml-service/scripts/
-  train_extra_trees.py            # Train Stage 2 ExtraTrees (đã chuyển vào ml-service)
+  train_extra_trees.py            # Train Stage 2 ExtraTrees 
 ```
 
 Scripts chạy ngoài container cần Python workspace: `uv sync` 1 lần ở repo root.
 
 ## Test
-
-`.env.test` được commit có chủ ý: credential (`lora_test_user:test_only_no_secrets`) chỉ access DB test rỗng, tách khỏi dev.
 
 ```bash
 # Setup DB test (1 lần)
