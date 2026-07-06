@@ -101,7 +101,8 @@ if [ "$HAS_NODE" = 1 ]; then
   npm install
   if [ "${SETUP_SKIP_FE_START:-0}" != 1 ]; then
     nohup npm run dev:web > .vite-dev.log 2>&1 &
-    echo "  Vite dev server chạy nền (log: .vite-dev.log). Dừng: kill PID trong log hoặc đóng process node."
+    echo $! > .vite-dev.pid
+    echo "  Vite dev server chạy nền (log: .vite-dev.log). Dừng: kill \$(cat .vite-dev.pid)"
   fi
 else
   echo "  Bỏ qua (thiếu npm)."
