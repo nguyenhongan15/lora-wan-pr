@@ -1,10 +1,7 @@
 # LoRa Coverage Mapping Platform
+Xây dựng bản đồ và ước lượng vùng phủ mạng không dây LPWAN trên địa bàn thành phố Đà Nẵng
 
-LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 (Stage 1 physics) + ExtraTrees end-to-end (Stage 2 ML) + React/MapLibre web UI.
-
-## Quick start — máy mới (fresh clone): 1 lệnh
-
-Cài sẵn: **Git**, **Docker** (Desktop/Engine + compose v2, đang chạy), **Node ≥ 22 + npm ≥ 10**. Port trống: `5432`, `8000`, `8001`, `5173` (bind loopback).
+## Quick start
 
 ```bash
 git clone <repo-url> lora-coverage
@@ -12,36 +9,15 @@ cd lora-coverage
 ./setup.sh        # macOS / Linux / Git Bash — Windows: setup.bat
 ```
 
-Script tự làm toàn bộ (idempotent — chạy lại an toàn):
+Script tự kiểm tra và **cài công cụ thiếu** (Git, Docker, Node ≥ 22 — qua winget/Homebrew/apt tùy OS; Docker Desktop lần đầu cần bấm chấp nhận điều khoản, Linux cần sudo). Máy cần **~8 GB RAM**, port trống `5432`/`8000`/`8001`/`5173`.
 
-1. Sinh `.env` từ template (secrets ngẫu nhiên, `LORA_DATA_DIR=../lora-data`, Stage 2 bật sẵn)
-2. Tạo `../lora-data/` + tải 4 tile DEM Copernicus GLO-30 phủ Đà Nẵng (~100 MB, AWS public bucket)
-3. `docker compose up -d --build` — db → migrate → api + ml + celery + cache
-4. Train model Stage 2 ExtraTrees **trong container** từ CSV đã commit (joblib không nằm trong git)
-5. `npm install` + khởi động Vite dev server (nền)
-
-### Sau khi setup xong — nạp dữ liệu của bạn (trên web)
-
-Hệ **không seed dữ liệu sẵn**: gateway + điểm đo đến từ nguồn bạn liên kết.
+### Sau khi setup xong
 
 1. Mở `http://localhost:5173` → **Đăng ký** — tài khoản **đầu tiên** tự động là **admin** (kèm `email_verified=true`; các tài khoản sau là user thường, admin cấp quyền qua trang quản trị). Deploy public: đăng ký ngay sau khi dựng, trước khi mở cho người khác.
-2. Menu **Nguồn dữ liệu** → liên kết nguồn (`lpwanmapper` hoặc ChirpStack) → **Tải dữ liệu mới nhất** — gateway vào hàng chờ duyệt, điểm đo vào quarantine.
+2. Menu **Nguồn dữ liệu** → liên kết nguồn (`lpwanmapper`) → **Tải dữ liệu mới nhất** — gateway vào hàng chờ duyệt, điểm đo vào quarantine.
 3. Trang **Quản trị** → duyệt batch đóng góp (mode *Duyệt cả file*) → gateway kích hoạt + điểm đo lên bản đồ → `/predict` hoạt động.
 
 Kiểm tra nhanh: `GET http://localhost:8000/healthz` → ok; tab "Bản đồ phủ sóng" mode `estimate` (heatmap tĩnh đã commit) xem được ngay cả khi chưa link nguồn; mode `points`/`heatmap` + predict có dữ liệu sau bước 2-3.
-
-<details>
-<summary>Làm thủ công không dùng setup.sh (từng bước)</summary>
-
-1. Tạo `../lora-data/dem/` + `../lora-data/dem-surface/` (để trống cũng được nhưng **phải tồn tại**), tải DEM theo [§ Dữ liệu địa lý](#dữ-liệu-địa-lý-lora-data).
-2. `cp .env.template .env` rồi sửa: `LORA_DATA_DIR` (đường dẫn `lora-data`), `JWT_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), `LINKING_FERNET_KEYS` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`). Muốn bật Stage 2: `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` + `LORA_ML_MODEL_PATH=/app/data/extra_trees_model.joblib`.
-3. `docker compose up -d --build` — chờ healthy (`docker compose logs -f api-service`).
-4. Train model Stage 2 (tùy chọn): `docker compose run --rm --no-deps celery-worker python services/ml-service/scripts/train_extra_trees.py` rồi `docker compose restart ml-service`. Bỏ qua → hệ chạy Stage 1-only (ml-service trả 503, api tự fallback).
-5. `npm install && npm run dev:web`. FE mặc định gọi `http://localhost:8000`; đổi qua `apps/web-app/.env.local` (xem `.env.example`).
-
-Các biến `.env` trỏ `E:/DATN/...` (`LORA_DEM_DIRECTORY`, `LORA_DEM_PATH`…) chỉ dùng khi chạy scripts ngoài container — container luôn đọc `/data/...` qua mount `LORA_DATA_DIR`. Python 3.12 + [uv](https://docs.astral.sh/uv/) chỉ cần khi chạy scripts/test trên host.
-
-</details>
 
 ### Những gì KHÔNG có trong git (gitignore) — cần biết khi clone mới
 
@@ -80,8 +56,6 @@ lora-data/
 DTM 30 m, WGS84 GeoTIFF. Nguồn: [OpenTopography](https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3) (chọn *Copernicus GLO-30*, vẽ bbox) hoặc AWS Open Data `s3://copernicus-dem-30m/`. Tile dự án dùng, đặt vào `lora-data/dem/`:
 
 - `copernicus_glo30_danang.tif` — Đà Nẵng (khu vực chính, bbox ~107.9–108.5°E, 15.8–16.3°N) — **đủ để chạy demo**
-- `copernicus_glo30_north_vn.tif` — Bắc Bộ (Hải Phòng / Hải Dương / Hà Nội) — chỉ cần cho Stage 1 validation
-- `copernicus_glo30_south_vn.tif` — Nam Bộ — tùy chọn
 
 crc-covlib tự dò tile theo bbox của link nên filename tự do, miễn nằm trong `LORA_DEM_DIRECTORY`. `LORA_DEM_PATH` / `LORA_DEM_PATH_NORTH_VN` trong `.env` trỏ file cụ thể cho link-budget + validation (chỉ dùng bởi scripts ngoài container).
 
@@ -116,16 +90,6 @@ uv run --project services/api-service python scripts/build_dsm.py \
   --pbf     <LORA_DATA_DIR>/osm/vietnam-latest.osm.pbf \
   --out-dir <LORA_DATA_DIR>/dem-surface
 
-# biến thể 10m (tùy chọn): thêm --pixel-size-m 10 --out-dir …/dem-surface-10m
-# biến thể built-up-only: scripts/build_dsm_built_up_only.py (cần 1 tile ESA WorldCover)
-```
-
-Bỏ qua `dem-surface/` (chưa build) → P.1812 chạy DTM-only + P.2108 clutter thống kê, vẫn hoạt động nhưng kém chính xác ở đô thị đặc.
-
-### 5. Tùy chọn (R&D, không cần để chạy)
-
-- **buildings-msft/** — [Microsoft GlobalMLBuildingFootprints](https://github.com/microsoft/GlobalMLBuildingFootprints) (quadkey `*.geojsonl.gz`); **buildings-google/** — [Google Open Buildings v3](https://sites.research.google/open-buildings/); **canopy-height/** — [Meta Canopy Height Model 1m](https://registry.opendata.aws/dataforgood-fb-forests/). Dùng cho thí nghiệm nguồn surface thay thế, không nằm trong đường chạy production.
-- **osm/urbanization_vn.tif**, **climatic-zones/vn-zones.tif** — raster phụ; `itu-digital-maps/` để rỗng (bản đồ số ITU đã kèm trong crc-covlib).
 
 ## Repository layout
 
@@ -189,7 +153,7 @@ scripts/            Stage 1 fit/validate, precompute RSSI heatmap, DSM build, ML
 - **Spatial hold-out** (H3 res-8 + session split, không rò rỉ): **test RMSE 6.32 dB**, MAE 4.75, R² ≈ −0.08 — khái quát hoá không gian còn YẾU (dữ liệu hẹp 13 gw); chạy như lớp tinh chỉnh trên Stage 1, fail thì fallback Stage 1. Chi tiết: `services/ml-service/README.md` §2.
 - **Auth**: shared bearer token qua `LORA_STAGE2_AUTH_TOKEN` (`.env.template` có giá trị dev sẵn).
 - Chi tiết train + reproduce: `services/ml-service/README.md`, `scripts/build_training_csv.py` + `services/ml-service/scripts/train_extra_trees.py`.
-- **Legacy XGBoost residual** (`stage2-xgb-v0.6.0`, hold-out 10.59 dB) đã retire vào `archive/` (rollback, không deploy).
+
 
 ## Coverage map modes (web-app)
 
@@ -213,8 +177,6 @@ Client → edge            (FastAPI router/middleware/serialization)
        → domain          (pure types, no I/O)
        ↑ infrastructure  (concrete repos: PostGIS, R2, Valkey)
 ```
-
-`application/` **không bao giờ** import `infrastructure/`. `domain/` không import bất kỳ tầng nào khác. CI cũng grep storage-tier strings (`postgres`, `redis`, `valkey`, `s3`, `stage_4`, `GiST`, `BRIN`) bên trong `application/` và `domain/` — vi phạm fail build.
 
 ## Data stack
 
@@ -278,15 +240,6 @@ uv run lint-imports --config .importlinter   # 5-layer separation
 npm run lint                     # ESLint web-app
 npm run jsdoc-check              # JSDoc check qua tsc --noEmit
 ```
-
-## CI (.github/workflows/ci.yml)
-
-Ba job chạy trên push & PR vào `main`:
-
-1. **api-service** — ruff lint+format, mypy strict, import-linter, no-leaky-strings grep, alembic upgrade trên TimescaleDB service container, pytest
-2. **docker-build** — multi-stage Dockerfile build + container smoke-start
-3. **web-app** — npm install, ESLint, JSDoc check (`tsc --checkJs`), Vite build
-
 
 ## NOTE
 Dự án còn chưa hoàn thiện và vẫn đang tiếp tục phát triển, các thuật toán, model,... dự án sử dụng có thể được viết lại toàn bộ hoặc một phần trong tương lai, do đó nếu muốn phát triển riêng có thể clone về và tạo repo mới của riêng bạn.

@@ -20,15 +20,154 @@ cd "$(dirname "$0")"
 say()  { printf '\n\033[1;36m[setup]\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[1;31m[setup] LỖI:\033[0m %s\n' "$*" >&2; exit 1; }
 
-# ── 0. Preflight ──────────────────────────────────────────────────────
-say "Bước 0/6 — kiểm tra công cụ"
-command -v docker  >/dev/null || die "Chưa cài Docker. Cài Docker Desktop (Win/mac) hoặc Docker Engine (Linux)."
-docker info        >/dev/null 2>&1 || die "Docker daemon chưa chạy. Mở Docker Desktop rồi chạy lại."
-docker compose version >/dev/null 2>&1 || die "Cần Docker Compose v2 (lệnh 'docker compose')."
-command -v curl    >/dev/null || die "Thiếu curl."
-command -v openssl >/dev/null || die "Thiếu openssl (Git Bash/macOS/Linux có sẵn)."
+# ── 0. Công cụ — kiểm tra, THIẾU THÌ TỰ CÀI ───────────────────────────
+# Windows: winget (App Installer, có sẵn Win 10/11) · macOS: Homebrew
+# (tự cài nếu thiếu) · Linux: apt/dnf/yum/pacman/zypper + get.docker.com.
+# Docker Desktop lần đầu vẫn cần bạn bấm chấp nhận điều khoản trong cửa
+# sổ hiện ra — script tự mở và chờ daemon lên.
+say "Bước 0/6 — kiểm tra công cụ (thiếu sẽ tự cài)"
+
+OS=linux
+case "$(uname -s)" in
+  Darwin) OS=mac ;;
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+esac
+
+SUDO=""
+if [ "$OS" = linux ] && [ "$(id -u)" != 0 ]; then
+  command -v sudo >/dev/null || die "Cần root hoặc sudo để tự cài công cụ trên Linux."
+  SUDO="sudo"
+fi
+
+pkg_install() {  # Linux: cài gói qua package manager phát hiện được
+  if   command -v apt-get >/dev/null; then $SUDO apt-get update -qq && $SUDO apt-get install -y "$@"
+  elif command -v dnf     >/dev/null; then $SUDO dnf install -y "$@"
+  elif command -v yum     >/dev/null; then $SUDO yum install -y "$@"
+  elif command -v pacman  >/dev/null; then $SUDO pacman -Sy --noconfirm "$@"
+  elif command -v zypper  >/dev/null; then $SUDO zypper install -y "$@"
+  else die "Không nhận diện được package manager — cài thủ công: $*"
+  fi
+}
+
+winget_install() {
+  WINGET=$(command -v winget || command -v winget.exe || true)
+  [ -n "$WINGET" ] || die "Thiếu winget (App Installer — cập nhật Windows 10/11 từ Microsoft Store) — hoặc cài thủ công: $1"
+  "$WINGET" install --id "$1" -e --silent \
+    --accept-package-agreements --accept-source-agreements \
+    || die "winget cài $1 thất bại — cài thủ công rồi chạy lại ./setup.sh"
+}
+
+brew_ensure() {
+  command -v brew >/dev/null && return 0
+  say "Cài Homebrew (có thể hỏi mật khẩu máy)..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+    || die "Cài Homebrew thất bại — xem https://brew.sh rồi chạy lại."
+  eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
+}
+
+refresh_windows_path() {
+  # App vừa cài bằng winget chưa có trong PATH của shell đang chạy.
+  local p
+  for p in "/c/Program Files/Git/bin" "/c/Program Files/nodejs" \
+           "/c/Program Files/Docker/Docker/resources/bin"; do
+    [ -d "$p" ] && PATH="$PATH:$p"
+  done
+  export PATH
+}
+
+ensure_basics() {
+  command -v curl >/dev/null || { [ "$OS" = linux ] && pkg_install curl || die "Thiếu curl."; }
+  command -v openssl >/dev/null || { [ "$OS" = linux ] && pkg_install openssl || die "Thiếu openssl."; }
+}
+
+ensure_git() {
+  command -v git >/dev/null && return 0
+  say "Thiếu Git — đang cài..."
+  case "$OS" in
+    windows) winget_install Git.Git; refresh_windows_path ;;
+    mac)     brew_ensure; brew install git ;;
+    linux)   pkg_install git ;;
+  esac
+  command -v git >/dev/null || die "Git chưa sẵn sàng sau khi cài — mở terminal mới rồi chạy lại ./setup.sh"
+}
+
+node_major() { node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/'; }
+node_ok() { command -v node >/dev/null && [ "$(node_major)" -ge 22 ] 2>/dev/null; }
+
+ensure_node() {
+  node_ok && return 0
+  if command -v node >/dev/null; then
+    say "Node $(node -v) < 22 — cài bản 22 LTS..."
+  else
+    say "Thiếu Node.js — đang cài bản 22 LTS..."
+  fi
+  case "$OS" in
+    windows) winget_install OpenJS.NodeJS.LTS; refresh_windows_path ;;
+    mac)     brew_ensure; brew install node ;;
+    linux)
+      if command -v apt-get >/dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - \
+          && $SUDO apt-get install -y nodejs
+      elif command -v dnf >/dev/null || command -v yum >/dev/null; then
+        curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash - \
+          && pkg_install nodejs
+      else
+        pkg_install nodejs npm
+      fi ;;
+  esac
+  node_ok || die "Node >= 22 chưa sẵn sàng sau khi cài — mở terminal MỚI rồi chạy lại ./setup.sh"
+}
+
+docker_daemon_wait() {
+  local i
+  for i in $(seq 1 60); do
+    docker info >/dev/null 2>&1 && return 0
+    sleep 5
+  done
+  return 1
+}
+
+ensure_docker() {
+  if ! command -v docker >/dev/null; then
+    say "Thiếu Docker — đang cài..."
+    case "$OS" in
+      windows) winget_install Docker.DockerDesktop; refresh_windows_path ;;
+      mac)     brew_ensure; brew install --cask docker ;;
+      linux)
+        curl -fsSL https://get.docker.com | $SUDO sh || die "Cài Docker Engine thất bại — xem https://docs.docker.com/engine/install/"
+        $SUDO systemctl enable --now docker 2>/dev/null || true
+        if [ -n "$SUDO" ] && ! docker info >/dev/null 2>&1; then
+          $SUDO usermod -aG docker "$USER" 2>/dev/null || true
+          say "Đã thêm '$USER' vào nhóm docker — ĐĂNG XUẤT rồi đăng nhập lại (hoặc chạy 'newgrp docker'), sau đó chạy ./setup.sh lần nữa để tiếp tục."
+          exit 0
+        fi ;;
+    esac
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    case "$OS" in
+      windows)
+        say "Khởi động Docker Desktop (lần đầu: bấm chấp nhận điều khoản trong cửa sổ hiện ra)..."
+        [ -f "/c/Program Files/Docker/Docker/Docker Desktop.exe" ] \
+          && "/c/Program Files/Docker/Docker/Docker Desktop.exe" >/dev/null 2>&1 &
+        ;;
+      mac)
+        say "Khởi động Docker Desktop (lần đầu: bấm chấp nhận điều khoản)..."
+        open -a Docker 2>/dev/null || true ;;
+      linux)
+        $SUDO systemctl start docker 2>/dev/null || true ;;
+    esac
+    echo "  Chờ Docker daemon (tối đa 5 phút)..."
+    docker_daemon_wait || die "Docker daemon không lên — mở Docker Desktop thủ công, chờ chạy xong rồi chạy lại ./setup.sh"
+  fi
+  docker compose version >/dev/null 2>&1 || die "Docker có nhưng thiếu Compose v2 — cập nhật Docker Desktop / cài docker-compose-plugin."
+}
+
+ensure_basics
+ensure_git
+ensure_docker
+ensure_node
 HAS_NODE=1
-command -v npm >/dev/null || { HAS_NODE=0; echo "  ⚠ Không thấy npm — sẽ bỏ qua frontend (cài Node >= 22 rồi chạy lại)."; }
+echo "  Đủ công cụ: git $(git --version | awk '{print $3}') · docker $(docker --version | awk '{gsub(",","");print $3}') · node $(node -v)"
 
 # ── 1. .env ───────────────────────────────────────────────────────────
 say "Bước 1/6 — cấu hình .env"
