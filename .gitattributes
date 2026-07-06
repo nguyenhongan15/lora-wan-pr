@@ -1,4 +1,4 @@
-﻿# .gitattributes - enforce consistent line endings cross-platform
+# .gitattributes - enforce consistent line endings cross-platform
 # Repo always stores LF; working dir converts per-OS.
 
 # Auto-detect text files, normalize to LF in repo

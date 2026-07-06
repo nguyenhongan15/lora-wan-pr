@@ -2,78 +2,52 @@
 
 LoRaWAN coverage prediction cho khu vực Đà Nẵng (AS923-2, Vietnam). Stack: ITU-R P.1812-7 (Stage 1 physics) + ExtraTrees end-to-end (Stage 2 ML) + React/MapLibre web UI.
 
-## Quick start — máy mới (fresh clone)
+## Quick start — máy mới (fresh clone): 1 lệnh
 
-### 0. Yêu cầu cài đặt
-
-- Git
-- Docker Desktop (compose v2) — Linux: Docker Engine + compose plugin
-- Node ≥ 22, npm ≥ 10 — npm workspaces cho `apps/*`, `packages/sdk-js`, `packages/api-types`
-- Python 3.12 + [uv](https://docs.astral.sh/uv/) — chỉ cần khi chạy scripts/test **ngoài** container (uv workspace cho `services/api-service`, `services/ml-service`, `services/worker-service`, `packages/sdk-python`)
-- Port trống trên loopback: `5432` (db), `8000` (api), `8001` (ml), `5173` (web dev)
-
-### 1. Clone + chuẩn bị dữ liệu địa hình
+Cài sẵn: **Git**, **Docker** (Desktop/Engine + compose v2, đang chạy), **Node ≥ 22 + npm ≥ 10**. Port trống: `5432`, `8000`, `8001`, `5173` (bind loopback).
 
 ```bash
 git clone <repo-url> lora-coverage
 cd lora-coverage
+./setup.sh        # macOS / Linux / Git Bash — Windows: setup.bat
 ```
 
-Tạo thư mục `lora-data` (khuyến nghị cùng cấp với repo — **không có trong git**, ~7 GB đầy đủ) và tải **tối thiểu** 1 tile DEM Đà Nẵng để `/predict` chạy được:
+Script tự làm toàn bộ (idempotent — chạy lại an toàn):
 
-```
-lora-data/
-  dem/copernicus_glo30_danang.tif    ← BẮT BUỘC (xem § Dữ liệu địa lý, mục 1)
-```
+1. Sinh `.env` từ template (secrets ngẫu nhiên, `LORA_DATA_DIR=../lora-data`, Stage 2 bật sẵn)
+2. Tạo `../lora-data/` + tải 4 tile DEM Copernicus GLO-30 phủ Đà Nẵng (~100 MB, AWS public bucket)
+3. `docker compose up -d --build` — db → migrate → api + ml + celery + cache
+4. Train model Stage 2 ExtraTrees **trong container** từ CSV đã commit (joblib không nằm trong git)
+5. `npm install` + khởi động Vite dev server (nền)
 
-Landcover / OSM PBF / DSM chỉ cần khi rebuild heatmap hoặc build DSM — tải sau theo [§ Dữ liệu địa lý](#dữ-liệu-địa-lý-lora-data).
+### Sau khi setup xong — nạp dữ liệu của bạn (trên web)
 
-### 2. Cấu hình `.env`
+Hệ **không seed dữ liệu sẵn**: gateway + điểm đo đến từ nguồn bạn liên kết.
 
-```bash
-cp .env.template .env
-```
+1. Mở `http://localhost:5173` → **Đăng ký** — tài khoản **đầu tiên** tự động là **admin** (kèm `email_verified=true`; các tài khoản sau là user thường, admin cấp quyền qua trang quản trị). Deploy public: đăng ký ngay sau khi dựng, trước khi mở cho người khác.
+2. Menu **Nguồn dữ liệu** → liên kết nguồn (`lpwanmapper` hoặc ChirpStack) → **Tải dữ liệu mới nhất** — gateway vào hàng chờ duyệt, điểm đo vào quarantine.
+3. Trang **Quản trị** → duyệt batch đóng góp (mode *Duyệt cả file*) → gateway kích hoạt + điểm đo lên bản đồ → `/predict` hoạt động.
 
-Sửa trong `.env` (bắt buộc trước lần `docker compose up` đầu tiên):
+Kiểm tra nhanh: `GET http://localhost:8000/healthz` → ok; tab "Bản đồ phủ sóng" mode `estimate` (heatmap tĩnh đã commit) xem được ngay cả khi chưa link nguồn; mode `points`/`heatmap` + predict có dữ liệu sau bước 2-3.
 
-| Biến | Giá trị |
-|---|---|
-| `LORA_DATA_DIR` | Đường dẫn tuyệt đối tới `lora-data` trên máy bạn (vd Windows `D:/work/lora-data`, Linux `/home/you/lora-data`) |
-| `JWT_SECRET` | Sinh mới: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `LINKING_FERNET_KEYS` | Sinh mới: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+<details>
+<summary>Làm thủ công không dùng setup.sh (từng bước)</summary>
 
-Các biến đường dẫn còn lại đang trỏ `E:/DATN/...` (`LORA_DEM_DIRECTORY`, `LORA_DEM_PATH`, `LORA_URBANIZATION_PATH`…) chỉ dùng khi chạy scripts **ngoài** container — đổi theo máy bạn khi cần. Container không đọc chúng: mọi service trong compose đọc `/data/...` qua volume mount `LORA_DATA_DIR`.
+1. Tạo `../lora-data/dem/` + `../lora-data/dem-surface/` (để trống cũng được nhưng **phải tồn tại**), tải DEM theo [§ Dữ liệu địa lý](#dữ-liệu-địa-lý-lora-data).
+2. `cp .env.template .env` rồi sửa: `LORA_DATA_DIR` (đường dẫn `lora-data`), `JWT_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), `LINKING_FERNET_KEYS` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`). Muốn bật Stage 2: `STAGE2_PREDICT_BASE_URL=http://ml-service:8001` + `LORA_ML_MODEL_PATH=/app/data/extra_trees_model.joblib`.
+3. `docker compose up -d --build` — chờ healthy (`docker compose logs -f api-service`).
+4. Train model Stage 2 (tùy chọn): `docker compose run --rm --no-deps celery-worker python services/ml-service/scripts/train_extra_trees.py` rồi `docker compose restart ml-service`. Bỏ qua → hệ chạy Stage 1-only (ml-service trả 503, api tự fallback).
+5. `npm install && npm run dev:web`. FE mặc định gọi `http://localhost:8000`; đổi qua `apps/web-app/.env.local` (xem `.env.example`).
 
-### 3. Backend (Docker)
+Các biến `.env` trỏ `E:/DATN/...` (`LORA_DEM_DIRECTORY`, `LORA_DEM_PATH`…) chỉ dùng khi chạy scripts ngoài container — container luôn đọc `/data/...` qua mount `LORA_DATA_DIR`. Python 3.12 + [uv](https://docs.astral.sh/uv/) chỉ cần khi chạy scripts/test trên host.
 
-```bash
-docker compose up -d --build
-# tự chạy theo thứ tự: db → migrate (alembic one-shot) → api-service + ml-service + celery-worker + cache
-docker compose logs -f api-service ml-service   # chờ healthy
-```
-
-### 4. Frontend
-
-```bash
-npm install
-npm run dev:web
-```
-
-FE mặc định gọi `http://localhost:8000` — không cần cấu hình gì thêm. Muốn đổi API URL: `cp apps/web-app/.env.example apps/web-app/.env.local` rồi sửa `VITE_API_BASE_URL`.
-
-### 5. Kiểm tra
-
-- **Tài khoản admin**: tài khoản **đầu tiên** đăng ký trên instance mới tự động là admin (kèm `email_verified=true` — instance mới chưa có SMTP). Các tài khoản sau là user thường, được admin cấp quyền qua trang quản trị. Lưu ý khi deploy public: đăng ký tài khoản của bạn ngay sau khi dựng xong, trước khi mở cho người khác.
-- API: `http://localhost:8000/docs` — thử `GET /healthz`, `GET /api/v1/gateways` (phải trả 13 gateway)
-- Web: `http://localhost:5173` — tab "Bản đồ phủ sóng":
-  - mode `estimate` chạy ngay (GeoJSON tĩnh đã commit trong `apps/web-app/public/coverage/rssi/`)
-  - mode `points` / `heatmap` sẽ **trống** trên máy mới — DB survey rỗng vì dump gốc (`r-dt/`) không commit
-- ml-service: `http://localhost:8001` — mặc định trả 503 (model joblib không có trong git) → api-service tự fallback Stage 1, hệ vẫn hoạt động. Bật Stage 2: xem [§ Stage 2 ML](#stage-2-ml-extratrees-end-to-end).
+</details>
 
 ### Những gì KHÔNG có trong git (gitignore) — cần biết khi clone mới
 
-- `lora-data/` — raster địa hình ~7 GB; tải/sinh theo § Dữ liệu địa lý
-- `*.joblib` — model Stage 2; train lại từ CSV đã commit (§ Stage 2 ML), thiếu thì hệ tự chạy Stage 1-only
+- `lora-data/` — raster địa hình (~7 GB đầy đủ; setup.sh chỉ tải phần DEM tối thiểu ~100 MB); phần còn lại theo § Dữ liệu địa lý
+- `*.joblib` — model Stage 2; setup.sh train lại từ CSV đã commit, thiếu thì hệ tự chạy Stage 1-only
+- Dữ liệu database (gateway, điểm đo, tài khoản) — nằm trong Docker volume của từng máy, nạp qua liên kết nguồn dữ liệu
 
 ## Dữ liệu địa lý (`lora-data`)
 
@@ -181,8 +155,8 @@ archive/            (gitignore, local-only — frozen references, không deploy)
 
 migrations/         ✅ Alembic — 35 revisions (PostGIS + TimescaleDB hypertable + auth + ML registry
                        + gateway quarantine/state override)
-                       Latest: 0035_gateway_rssi_bias.
-                       Seed gateway: THỦ CÔNG qua migrations/seeds/seed_gateways.sql (11 gw DNIIT + 2 HP)
+                       Latest: 0035_gateway_rssi_bias. Schema-only, KHÔNG seed dữ liệu —
+                       gateway/điểm đo nạp qua liên kết nguồn (lpwanmapper/ChirpStack) + admin duyệt
 ops/                Nginx reverse-proxy template
 docs/               (gitignore, local-only) Báo cáo tiến độ + ADR
 core-logic/         (gitignore, local-only) Design playbook + skill rules
@@ -271,8 +245,8 @@ scripts/                          # chỉ mục đầy đủ theo nhóm: scripts
   eval_extra_trees_holdout.py     # Eval H3 spatial hold-out (Celery retrain)
   build_dsm.py                    # Build DSM raster (Copernicus + OSM buildings)
   validate_stage1_itu.py          # Stage 1 hold-out validation
-  seed_gateways.py                # Seed gw từ ChirpStack JSON (cần r-dt/ — máy gốc only;
-                                  #   máy mới dùng migrations/seeds/seed_gateways.sql)
+  seed_gateways.py                # (legacy, máy gốc only — cần r-dt/; flow hiện tại
+                                  #   nạp gateway qua liên kết nguồn + admin duyệt)
   backfill_gateway_noise_floor.py # Per-gw noise floor migration helper
 
 services/ml-service/scripts/
