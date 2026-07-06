@@ -59,7 +59,9 @@ services:
     # gọi qua docker network từ api-service). Cú pháp "5432:5432" cũ =
     # bind 0.0.0.0 → bot scan port 5432 brute-force pwd → mất DB.
     ports:
-      - "127.0.0.1:5432:5432"
+      # Host port đổi được qua .env (DB_PORT_HOST) — setup.sh tự chọn port
+      # trống khi 5432 bị PostgreSQL cài sẵn chiếm. Container port giữ 5432.
+      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
     volumes:
       - lora-wan-db-data:/home/postgres/pgdata/data
     healthcheck:
@@ -192,7 +194,7 @@ services:
     # /metrics + bypass CORS/X-Forwarded-For của nginx → rate-limit per-IP
     # đếm sai (mọi request thấy IP docker network).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_PORT_HOST:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)\""]
       interval: 30s
@@ -241,7 +243,7 @@ services:
       # OSM landuse polygons (GeoJSON) cho ET feature extraction.
       - ./data/osm:/app/osm:ro
     ports:
-      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:${ML_PORT_HOST:-8001}:8001"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)\""]
       interval: 30s

@@ -194,16 +194,21 @@ if [ -n "${DISK_GB:-}" ] && [ "$DISK_GB" -lt 15 ] 2>/dev/null; then
   echo "  ⚠ Ổ đĩa còn ${DISK_GB}GB trống — cần ~15GB (Docker images + DEM + PBF + node_modules)."
 fi
 
-# Port bận bởi tiến trình NGOÀI stack này (vd PostgreSQL cài sẵn chiếm 5432)
-# → chặn sớm với thông báo rõ thay vì để docker compose fail khó hiểu.
+# Port helpers — máy đã dùng port mặc định (PostgreSQL sẵn chiếm 5432, app
+# khác chiếm 8000...) thì bước 1 TỰ CHỌN port trống kế tiếp thay vì fail.
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3>&- && return 0 || return 1; }
-if [ -z "$(docker ps -q --filter name=lora-wan- 2>/dev/null)" ]; then
-  for p in 5432 8000 8001; do
-    if port_busy "$p"; then
-      die "Port $p đang bị tiến trình khác chiếm (stack lora-wan chưa chạy). Tắt tiến trình đó (vd PostgreSQL cài sẵn với 5432) rồi chạy lại ./setup.sh"
-    fi
+_picked_ports=" "
+pick_port() {  # $1 = port mặc định, $2 = TÊN biến nhận kết quả.
+  # Ghi qua printf -v (không dùng $(...) — subshell sẽ làm mất _picked_ports
+  # → 2 lần pick có thể trả trùng port).
+  local p="$1" limit=$(( $1 + 50 ))
+  while port_busy "$p" || [[ "$_picked_ports" == *" $p "* ]]; do
+    p=$((p+1))
+    [ "$p" -gt "$limit" ] && return 1
   done
-fi
+  _picked_ports="${_picked_ports}${p} "
+  printf -v "$2" '%s' "$p"
+}
 
 # ── 1. .env ───────────────────────────────────────────────────────────
 say "Bước 1/7 — cấu hình .env"
@@ -214,17 +219,48 @@ else
   PGPW=$(openssl rand -hex 16)
   JWT=$(openssl rand -base64 48 | tr -d '\n=' | tr '+/' '-_')
   FERNET=$(openssl rand -base64 32 | tr -d '\n' | tr '+/' '-_')
+  # Port host: default bận (máy có sẵn PostgreSQL/app khác) → chọn port
+  # trống kế tiếp; ghi vào .env để docker-compose + các bước sau cùng dùng.
+  pick_port 5432 DBP  || die "Không tìm được port trống cho database (5432+)."
+  pick_port 8000 APIP || die "Không tìm được port trống cho api (8000+)."
+  pick_port 8001 MLP  || die "Không tìm được port trống cho ml-service (8001+)."
+  pick_port 5173 FEP  || die "Không tìm được port trống cho web (5173+)."
   sed -i.bak \
     -e "s|change_me_in_production|${PGPW}|g" \
     -e "s|^JWT_SECRET=.*|JWT_SECRET=${JWT}|" \
     -e "s|^LINKING_FERNET_KEYS=.*|LINKING_FERNET_KEYS=${FERNET}|" \
     -e "s|^LORA_DATA_DIR=.*|LORA_DATA_DIR=../lora-data|" \
     -e "s|^STAGE2_PREDICT_BASE_URL=.*|STAGE2_PREDICT_BASE_URL=http://ml-service:8001|" \
+    -e "s|http://localhost:8000|http://localhost:${APIP}|g" \
+    -e "s|http://localhost:5173|http://localhost:${FEP}|g" \
     .env
   rm -f .env.bak
-  # Đường dẫn model Stage 2 trong container ml-service (template không có sẵn).
-  printf '\n# Model Stage 2 (setup.sh train trong container, xem README)\nLORA_ML_MODEL_PATH=/app/data/extra_trees_model.joblib\n' >> .env
+  {
+    printf '\n# Model Stage 2 (setup.sh train trong container, xem README)\n'
+    printf 'LORA_ML_MODEL_PATH=/app/data/extra_trees_model.joblib\n'
+    printf '\n# Host ports (setup.sh chọn tự động khi default bận — docker-compose đọc)\n'
+    printf 'DB_PORT_HOST=%s\nAPI_PORT_HOST=%s\nML_PORT_HOST=%s\nFE_PORT_HOST=%s\n' \
+      "$DBP" "$APIP" "$MLP" "$FEP"
+  } >> .env
+  # FE dev server đọc VITE_API_BASE_URL từ .env.local (fallback code là :8000).
+  if [ "$APIP" != 8000 ] && [ ! -f apps/web-app/.env.local ]; then
+    printf 'VITE_API_BASE_URL=http://localhost:%s\n' "$APIP" > apps/web-app/.env.local
+  fi
   echo "  Đã sinh .env (secrets ngẫu nhiên, Stage 2 bật sẵn)."
+  [ "$DBP$APIP$MLP$FEP" != "5432800080015173" ] \
+    && echo "  Port default bận → dùng: db=$DBP api=$APIP ml=$MLP web=$FEP (xem *_PORT_HOST trong .env)."
+fi
+
+# Đọc port từ .env (kể cả lần chạy lại) cho các bước sau.
+_env_port() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2; }
+API_PORT=$(_env_port API_PORT_HOST); API_PORT=${API_PORT:-8000}
+FE_PORT=$(_env_port FE_PORT_HOST);  FE_PORT=${FE_PORT:-5173}
+DB_PORT=$(_env_port DB_PORT_HOST);  DB_PORT=${DB_PORT:-5432}
+# Stack chưa chạy mà port trong .env lại bị app khác chiếm → báo rõ.
+if [ -z "$(docker ps -q --filter name=lora-wan- 2>/dev/null)" ]; then
+  for p in "$DB_PORT" "$API_PORT"; do
+    port_busy "$p" && die "Port $p đang bị tiến trình khác chiếm (stack lora-wan chưa chạy). Đổi *_PORT_HOST trong .env hoặc tắt app đó rồi chạy lại."
+  done
 fi
 
 # ── 2. lora-data + DEM ───────────────────────────────────────────────
@@ -262,11 +298,11 @@ docker compose up -d --build
 echo "  Chờ api-service healthy..."
 ok=0
 for _ in $(seq 1 100); do
-  if curl -sf http://localhost:8000/healthz >/dev/null 2>&1; then ok=1; break; fi
+  if curl -sf "http://localhost:${API_PORT}/healthz" >/dev/null 2>&1; then ok=1; break; fi
   sleep 3
 done
 [ "$ok" = 1 ] || { docker compose logs --tail 30 api-service; die "api-service không lên được — xem log phía trên."; }
-echo "  api-service OK (http://localhost:8000)."
+echo "  api-service OK (http://localhost:${API_PORT})."
 
 # ── 4. Train model Stage 2 ───────────────────────────────────────────
 say "Bước 4/7 — model ML Stage 2 (ExtraTrees)"
@@ -353,10 +389,10 @@ if [ "$HAS_NODE" = 1 ]; then
   npm install
   if [ "${SETUP_SKIP_FE_START:-0}" = 1 ]; then
     :
-  elif port_busy 5173; then
-    echo "  Port 5173 đã có server (Vite từ lần chạy trước?) — bỏ qua khởi động."
+  elif port_busy "$FE_PORT"; then
+    echo "  Port $FE_PORT đã có server (Vite từ lần chạy trước?) — bỏ qua khởi động."
   else
-    nohup npm run dev:web > .vite-dev.log 2>&1 &
+    nohup npm --workspace apps/web-app run dev -- --port "$FE_PORT" --strictPort > .vite-dev.log 2>&1 &
     echo $! > .vite-dev.pid
     echo "  Vite dev server chạy nền (log: .vite-dev.log). Dừng: kill \$(cat .vite-dev.pid)"
   fi
@@ -366,9 +402,9 @@ fi
 
 # ── 6. Xong ──────────────────────────────────────────────────────────
 say "Bước 7/7 — HOÀN TẤT ✅"
-cat <<'EOF'
+cat <<EOF
 
-  Web:  http://localhost:5173        API: http://localhost:8000/docs
+  Web:  http://localhost:${FE_PORT}        API: http://localhost:${API_PORT}/docs
 
   Các bước tiếp theo (trên web):
   1. Đăng ký tài khoản — tài khoản ĐẦU TIÊN tự động là ADMIN.
