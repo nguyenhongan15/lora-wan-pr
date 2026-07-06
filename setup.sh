@@ -10,9 +10,11 @@
 #   2. Tạo ../lora-data + tải 4 tile DEM Copernicus GLO-30 (AWS public, ~100 MB)
 #   3. docker compose up -d --build  (db → migrate → api + ml + celery + cache)
 #   4. Train model Stage 2 ExtraTrees trong container (từ CSV đã commit)
-#   5. npm install + khởi động web dev server (nền)
+#   5. Tải OSM PBF (~350 MB) + build DSM trong container — dữ liệu cho
+#      rebuild heatmap + surface mode /predict. Bỏ qua: SETUP_SKIP_DSM=1
+#   6. npm install + khởi động web dev server (nền)
 #
-# Idempotent: chạy lại an toàn — .env/DEM/model đã có thì giữ nguyên.
+# Idempotent: chạy lại an toàn — .env/DEM/PBF/DSM/model đã có thì giữ nguyên.
 # Không cần cài sẵn gì ngoài trình terminal chạy được bash (Windows: Git Bash).
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -26,7 +28,7 @@ die()  { printf '\n\033[1;31m[setup] LỖI:\033[0m %s\n' "$*" >&2; exit 1; }
 # (tự cài nếu thiếu) · Linux: apt/dnf/yum/pacman/zypper + get.docker.com.
 # Docker Desktop lần đầu vẫn cần bạn bấm chấp nhận điều khoản trong cửa
 # sổ hiện ra — script tự mở và chờ daemon lên.
-say "Bước 0/6 — kiểm tra công cụ (thiếu sẽ tự cài)"
+say "Bước 0/7 — kiểm tra công cụ (thiếu sẽ tự cài)"
 
 OS=linux
 case "$(uname -s)" in
@@ -171,7 +173,7 @@ HAS_NODE=1
 echo "  Đủ công cụ: git $(git --version | awk '{print $3}') · docker $(docker --version | awk '{gsub(",","");print $3}') · node $(node -v)"
 
 # ── 1. .env ───────────────────────────────────────────────────────────
-say "Bước 1/6 — cấu hình .env"
+say "Bước 1/7 — cấu hình .env"
 if [ -f .env ]; then
   echo "  .env đã tồn tại — giữ nguyên (xoá file nếu muốn sinh lại)."
 else
@@ -193,7 +195,7 @@ else
 fi
 
 # ── 2. lora-data + DEM ───────────────────────────────────────────────
-say "Bước 2/6 — dữ liệu địa hình (../lora-data)"
+say "Bước 2/7 — dữ liệu địa hình (../lora-data)"
 mkdir -p ../lora-data/dem ../lora-data/dem-surface
 # 4 tile Copernicus GLO-30 phủ Đà Nẵng + phụ cận (bucket AWS public, không cần key).
 # crc-covlib tự dò tile theo bbox nên chỉ cần nằm trong thư mục dem/.
@@ -211,7 +213,7 @@ for t in N15_00_E107_00 N15_00_E108_00 N16_00_E107_00 N16_00_E108_00; do
 done
 
 # ── 3. Docker stack ──────────────────────────────────────────────────
-say "Bước 3/6 — build + khởi động backend (lần đầu có thể mất vài phút)"
+say "Bước 3/7 — build + khởi động backend (lần đầu có thể mất vài phút)"
 docker compose up -d --build
 echo "  Chờ api-service healthy..."
 ok=0
@@ -223,7 +225,7 @@ done
 echo "  api-service OK (http://localhost:8000)."
 
 # ── 4. Train model Stage 2 ───────────────────────────────────────────
-say "Bước 4/6 — model ML Stage 2 (ExtraTrees)"
+say "Bước 4/7 — model ML Stage 2 (ExtraTrees)"
 if [ -s services/ml-service/data/extra_trees_model.joblib ]; then
   echo "  Model đã có — bỏ qua train."
 else
@@ -235,8 +237,48 @@ else
   echo "  Model sẵn sàng — predict sẽ trả stage1+stage2."
 fi
 
-# ── 5. Frontend ──────────────────────────────────────────────────────
-say "Bước 5/6 — frontend"
+# ── 5. Dữ liệu rebuild heatmap: OSM PBF + DSM ────────────────────────
+# "Bản đồ ước lượng" (admin Rebuild + /predict surface mode) dùng DSM =
+# DEM + chiều cao nhà OSM. Thiếu DSM hệ vẫn chạy (fallback DTM + P.2108,
+# kém chính xác đô thị) — nên bước này fail-soft, không chặn setup.
+# Chạy script của dự án TRONG container worker (image có sẵn geo deps);
+# mount thêm ../lora-data ghi-được vì mount /data mặc định là read-only.
+say "Bước 5/7 — dữ liệu rebuild heatmap (OSM PBF + DSM, bỏ qua: SETUP_SKIP_DSM=1)"
+if [ "${SETUP_SKIP_DSM:-0}" = 1 ]; then
+  echo "  Bỏ qua theo SETUP_SKIP_DSM=1 — heatmap rebuild sẽ fallback DTM + P.2108."
+elif ls ../lora-data/dem-surface/*.tif >/dev/null 2>&1; then
+  echo "  DSM đã có trong ../lora-data/dem-surface — bỏ qua."
+else
+  mkdir -p ../lora-data/osm
+  # Đường dẫn host TUYỆT ĐỐI cho docker -v. Git Bash: pwd -W trả E:/...;
+  # MSYS_NO_PATHCONV=1 để msys không phá chuỗi "host:container".
+  LORA_DATA_ABS=$(cd ../lora-data && (pwd -W 2>/dev/null || pwd))
+  drun() {
+    MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps \
+      -v "${LORA_DATA_ABS}:/data-rw" celery-worker "$@"
+  }
+  PBF=../lora-data/osm/vietnam-latest.osm.pbf
+  if [ -s "$PBF" ]; then
+    echo "  OSM PBF đã có — bỏ qua tải."
+  else
+    echo "  Tải OSM PBF Việt Nam (~350 MB, Geofabrik — vài phút)..."
+    drun python scripts/fetch_osm_pbf.py --out /data-rw/osm/vietnam-latest.osm.pbf \
+      || die "Tải OSM PBF thất bại — kiểm tra mạng rồi chạy lại ./setup.sh (các bước xong rồi sẽ tự bỏ qua)."
+  fi
+  echo "  Build DSM từ DEM + nhà OSM (10-30 phút tùy máy)..."
+  if drun python scripts/build_dsm.py \
+       --dem-dir /data/dem \
+       --pbf /data-rw/osm/vietnam-latest.osm.pbf \
+       --out-dir /data-rw/dem-surface; then
+    docker compose restart api-service ml-service >/dev/null
+    echo "  DSM sẵn sàng — /predict + rebuild heatmap chạy surface mode."
+  else
+    echo "  ⚠ Build DSM thất bại — hệ vẫn chạy (DTM + P.2108); chạy lại ./setup.sh để thử lại."
+  fi
+fi
+
+# ── 6. Frontend ──────────────────────────────────────────────────────
+say "Bước 6/7 — frontend"
 if [ "$HAS_NODE" = 1 ]; then
   npm install
   if [ "${SETUP_SKIP_FE_START:-0}" != 1 ]; then
@@ -249,7 +291,7 @@ else
 fi
 
 # ── 6. Xong ──────────────────────────────────────────────────────────
-say "Bước 6/6 — HOÀN TẤT ✅"
+say "Bước 7/7 — HOÀN TẤT ✅"
 cat <<'EOF'
 
   Web:  http://localhost:5173        API: http://localhost:8000/docs

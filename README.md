@@ -21,7 +21,7 @@ Kiểm tra nhanh: `GET http://localhost:8000/healthz` → ok; tab "Bản đồ p
 
 ### Những gì KHÔNG có trong git (gitignore) — cần biết khi clone mới
 
-- `lora-data/` — raster địa hình (~7 GB đầy đủ; setup.sh chỉ tải phần DEM tối thiểu ~100 MB); phần còn lại theo § Dữ liệu địa lý
+- `lora-data/` — raster địa hình (~7 GB đầy đủ; setup.sh tự tải DEM ~100 MB + OSM PBF ~350 MB rồi build DSM cho rebuild heatmap); phần tùy chọn còn lại theo § Dữ liệu địa lý
 - `*.joblib` — model Stage 2; setup.sh train lại từ CSV đã commit, thiếu thì hệ tự chạy Stage 1-only
 - Dữ liệu database (gateway, điểm đo, tài khoản) — nằm trong Docker volume của từng máy, nạp qua liên kết nguồn dữ liệu
 
@@ -33,9 +33,9 @@ Stage 1 (ITU-R P.1812) cần raster địa hình đặt tại `LORA_DATA_DIR` (s
 lora-coverage/
 lora-data/
   dem/                     ⬇  Copernicus GLO-30 DTM (mặt đất)      — BẮT BUỘC (runtime /predict)
-  landcover/esa-worldcover/⬇  ESA WorldCover 10m 2021 v200         — cần khi rebuild heatmap
-  osm/vietnam-*.osm.pbf    ⬇  Geofabrik VN extract (building tags) — cần để build DSM
-  dem-surface/             ⚙  DSM = DTM + nhà OSM (native 30m)      — sinh cục bộ (khuyến nghị)
+  landcover/esa-worldcover/⬇  ESA WorldCover 10m 2021 v200         — tùy chọn (P.1812 clutter thủ công)
+  osm/vietnam-*.osm.pbf    ⬇  Geofabrik VN extract (building tags) — setup.sh tự tải (để build DSM)
+  dem-surface/             ⚙  DSM = DTM + nhà OSM (native 30m)      — setup.sh tự build (rebuild heatmap dùng)
   dem-surface-10m/         ⚙  DSM upsample 10m                      — sinh cục bộ (tùy chọn)
   dem-surface-built-up-only/⚙ DSM chỉ giữ nhà ở pixel built-up      — sinh cục bộ (tùy chọn)
   geo/                     ⚙  mount ghi-được cho Celery refresh_geo_data
@@ -49,7 +49,7 @@ lora-data/
 
 ⬇ tải từ nguồn ngoài · ⚙ sinh cục bộ bằng script · ◦ tùy chọn, không cần để chạy demo.
 
-**Tối thiểu để chạy demo**: chỉ cần `dem/` (tile Đà Nẵng). Landcover dùng bởi `precompute_rssi_heatmap.py` (rebuild heatmap qua admin/Celery); OSM PBF + DSM nâng độ chính xác đô thị nhưng không bắt buộc.
+**Tối thiểu để chạy demo**: chỉ cần `dem/` (tile Đà Nẵng). Rebuild heatmap (admin/Celery) dùng **DSM** — thiếu thì fallback DTM + P.2108, kém chính xác đô thị; `setup.sh` tự lo cả hai (tải PBF + build DSM, bỏ qua bằng `SETUP_SKIP_DSM=1`). Landcover ESA hiện KHÔNG nằm trong đường rebuild (chỉ dùng cho thí nghiệm P.1812 clutter thủ công).
 
 ### 1. DEM Copernicus GLO-30 (BẮT BUỘC) → `dem/`
 
@@ -59,7 +59,7 @@ DTM 30 m, WGS84 GeoTIFF. Nguồn: [OpenTopography](https://portal.opentopography
 
 crc-covlib tự dò tile theo bbox của link nên filename tự do, miễn nằm trong `LORA_DEM_DIRECTORY`. `LORA_DEM_PATH` / `LORA_DEM_PATH_NORTH_VN` trong `.env` trỏ file cụ thể cho link-budget + validation (chỉ dùng bởi scripts ngoài container).
 
-### 2. ESA WorldCover (cần khi rebuild heatmap) → `landcover/esa-worldcover/`
+### 2. ESA WorldCover (tùy chọn — clutter thủ công, KHÔNG cần cho rebuild heatmap) → `landcover/esa-worldcover/`
 
 Landcover 10 m 2021 v200, tile 3°×3°. Nguồn: [esa-worldcover.org](https://esa-worldcover.org/en/data-access) hoặc AWS `s3://esa-worldcover/v200/2021/map/`. Đà Nẵng cần tile `ESA_WorldCover_10m_2021_v200_N15E108_Map.tif`; Bắc Bộ thêm `N18E105`, `N21E105`… Mapping WorldCover→P.1812 ở `infrastructure/itu/landcover_mapping.py`.
 
