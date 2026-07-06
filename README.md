@@ -9,8 +9,6 @@ cd lora-coverage
 ./setup.sh        # macOS / Linux / Git Bash — Windows: setup.bat
 ```
 
-Script tự kiểm tra và **cài công cụ thiếu** (Git, Docker, Node ≥ 22 — qua winget/Homebrew/apt tùy OS; Docker Desktop lần đầu cần bấm chấp nhận điều khoản, Linux cần sudo). Máy cần **~8 GB RAM**, port trống `5432`/`8000`/`8001`/`5173`.
-
 ### Sau khi setup xong
 
 1. Mở `http://localhost:5173` → **Đăng ký** — tài khoản **đầu tiên** tự động là **admin** (kèm `email_verified=true`; các tài khoản sau là user thường, admin cấp quyền qua trang quản trị). Deploy public: đăng ký ngay sau khi dựng, trước khi mở cho người khác.
@@ -45,25 +43,15 @@ lora-data/
   itu-digital-maps/        ◦  (rỗng) — bản đồ số P.453/P.836/P.1510 đã kèm trong crc-covlib
 ```
 
-⬇ tải từ nguồn ngoài · ⚙ sinh cục bộ bằng script · ◦ tùy chọn, không cần để chạy demo.
-
 **Dữ liệu địa hình** — `setup.sh` tự lo toàn bộ mục 1, 3, 4 (bỏ qua 3+4 bằng `SETUP_SKIP_DSM=1`):
 
 ### 1. DEM Copernicus GLO-30m → `dem/`
 
-setup.sh tải 4 tile thô từ AWS public bucket (`s3://copernicus-dem-30m/`) rồi merge trong container thành `copernicus_glo30_danang.tif` (bbox 107.9–108.5°E, 15.8–16.3°N — **đúng tên file pipeline retrain ML cần**). Tải tay: [OpenTopography](https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3).
+### 2. ESA WorldCover → `landcover/esa-worldcover/` 
 
-### 2. ESA WorldCover → `landcover/esa-worldcover/` (tùy chọn)
-
-KHÔNG cần cho rebuild heatmap/retrain — chỉ dùng cho thí nghiệm P.1812 clutter thủ công. Nguồn: AWS `s3://esa-worldcover/v200/2021/map/`, tile Đà Nẵng `ESA_WorldCover_10m_2021_v200_N15E108_Map.tif`.
-
-### 3. OSM PBF Việt Nam → `osm/` (setup.sh tự tải)
-
-Geofabrik VN extract (~350 MB, tag `building=*`) — input build DSM. Script: `scripts/fetch_osm_pbf.py` (verify MD5 + atomic rename), chạy trong container.
+### 3. OSM PBF Việt Nam → `osm/` 
 
 ### 4. DSM → `dem-surface/` (setup.sh tự build)
-
-DSM = DTM + chiều cao nhà OSM (`scripts/build_dsm.py`, chạy trong container) — rebuild heatmap + /predict surface mode dùng; thiếu thì fallback DTM + P.2108 (kém chính xác đô thị).
 
 ## Repository layout
 
@@ -87,49 +75,16 @@ packages/
   sdk-js/           ⏳ JS client SDK (planned)
   sdk-go/           ⏳ Go client SDK (planned)
 
-archive/            (gitignore, local-only — frozen references, không deploy)
-  stage2-lightgbm/  📦 Stage 2 LightGBM cũ (RMSE 6.41 dB hold-out)
-  (XGBoost residual cũ: train_residual_model.py, retrain_stage2.sh, stage2_xgb.joblib + thí nghiệm R&D)
-
 migrations/         ✅ Alembic — 35 revisions (PostGIS + TimescaleDB hypertable + auth + ML registry
                        + gateway quarantine/state override)
                        Latest: 0035_gateway_rssi_bias. Schema-only, KHÔNG seed dữ liệu —
                        gateway/điểm đo nạp qua liên kết nguồn (lpwanmapper/ChirpStack) + admin duyệt
 ops/                Nginx reverse-proxy template
 docs/               (gitignore, local-only) Báo cáo tiến độ + ADR
-core-logic/         (gitignore, local-only) Design playbook + skill rules
 vendor/             ✅ crc_covlib wheel (đã commit — không cần build lại)
 scripts/            Stage 1 fit/validate, precompute RSSI heatmap, DSM build, ML train, seed
 .github/workflows/  CI: api-service (lint+mypy+import-linter+pytest), docker-build smoke, web-app
 ```
-
-## Coverage map modes (web-app)
-
-Tab "Bản đồ phủ sóng" có 3 chế độ:
-
-| Mode | Mô tả | Tin cậy | Máy mới |
-|---|---|---|---|
-| `points` | Survey điểm đo (raw walk-measure data) | Tuyệt đối — đo thực tế  |
-| `heatmap` | Heat density survey points | Hiển thị mật độ | Trống (như trên) |
-| `estimate` | **Composite RSSI** max qua 13 gateway | Beta — RMSE ±10 dB (~1 bin) | 
-
-## Architecture
-
-5-layer split, enforced by `import-linter` (`.importlinter`):
-
-```
-Client → edge            (FastAPI router/middleware/serialization)
-       → application     (use cases, repository Protocols)
-       → domain          (pure types, no I/O)
-       ↑ infrastructure  (concrete repos: PostGIS, R2, Valkey)
-```
-
-## Data stack
-
-- PostgreSQL 17 + PostGIS 3.5 + TimescaleDB 2.17 trong 1 image (`timescale/timescaledb-ha:pg17-ts2.17-all`)
-- Survey data → hypertable `ts.survey_quarantine`; row được promote → `ts.survey_training`
-- Object storage: Cloudflare R2 (S3-compatible); `model_version` là phần key prefix
-- Cache: Valkey 8 (active — rate-limit + session)
 
 ## API
 
