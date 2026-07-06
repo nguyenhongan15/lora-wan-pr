@@ -10,8 +10,9 @@
 #   2. Tạo ../lora-data + tải 4 tile DEM Copernicus GLO-30 (AWS public, ~100 MB)
 #   3. docker compose up -d --build  (db → migrate → api + ml + celery + cache)
 #   4. Train model Stage 2 ExtraTrees trong container (từ CSV đã commit)
-#   5. Tải OSM PBF (~350 MB) + build DSM trong container — dữ liệu cho
-#      rebuild heatmap + surface mode /predict. Bỏ qua: SETUP_SKIP_DSM=1
+#   5. Dữ liệu địa lý đầy đủ trong container: merge DEM thành
+#      copernicus_glo30_danang.tif (đúng tên retrain ML cần) + tải OSM PBF
+#      (~350 MB) + build DSM (rebuild heatmap). Bỏ qua: SETUP_SKIP_DSM=1
 #   6. npm install + khởi động web dev server (nền)
 #
 # Idempotent: chạy lại an toàn — .env/DEM/PBF/DSM/model đã có thì giữ nguyên.
@@ -197,20 +198,31 @@ fi
 # ── 2. lora-data + DEM ───────────────────────────────────────────────
 say "Bước 2/7 — dữ liệu địa hình (../lora-data)"
 mkdir -p ../lora-data/dem ../lora-data/dem-surface
-# 4 tile Copernicus GLO-30 phủ Đà Nẵng + phụ cận (bucket AWS public, không cần key).
-# crc-covlib tự dò tile theo bbox nên chỉ cần nằm trong thư mục dem/.
-DEM_BASE="https://copernicus-dem-30m.s3.amazonaws.com"
-for t in N15_00_E107_00 N15_00_E108_00 N16_00_E107_00 N16_00_E108_00; do
-  name="Copernicus_DSM_COG_10_${t}_DEM"
-  out="../lora-data/dem/${name}.tif"
-  if [ -s "$out" ]; then
-    echo "  ${name}.tif — đã có, bỏ qua."
-  else
-    echo "  Tải ${name}.tif ..."
-    curl -fL --retry 3 -o "$out" "${DEM_BASE}/${name}/${name}.tif" \
-      || die "Tải DEM thất bại (${name}). Kiểm tra mạng rồi chạy lại."
-  fi
-done
+# Đích cuối là 1 file merge ĐÚNG TÊN copernicus_glo30_danang.tif (pipeline
+# retrain build_training_csv.py kỳ vọng tên này) — bước 5 merge trong
+# container. Ở đây chỉ tải 4 tile thô Copernicus GLO-30 (AWS public) vào
+# dem-raw/; đã có file merge thì bỏ qua toàn bộ.
+DEM_MERGED=../lora-data/dem/copernicus_glo30_danang.tif
+if [ -s "$DEM_MERGED" ]; then
+  echo "  copernicus_glo30_danang.tif — đã có, bỏ qua tải tile thô."
+else
+  mkdir -p ../lora-data/dem-raw
+  # Dọn tile thô từ phiên bản setup cũ từng đặt thẳng trong dem/.
+  mv ../lora-data/dem/Copernicus_DSM_COG_10_*_DEM.tif ../lora-data/dem-raw/ 2>/dev/null || true
+  DEM_BASE="https://copernicus-dem-30m.s3.amazonaws.com"
+  for t in N15_00_E106_00 N15_00_E107_00 N15_00_E108_00 \
+           N16_00_E106_00 N16_00_E107_00 N16_00_E108_00; do
+    name="Copernicus_DSM_COG_10_${t}_DEM"
+    out="../lora-data/dem-raw/${name}.tif"
+    if [ -s "$out" ]; then
+      echo "  ${name}.tif — đã có, bỏ qua."
+    else
+      echo "  Tải ${name}.tif ..."
+      curl -fL --retry 3 -o "$out" "${DEM_BASE}/${name}/${name}.tif" \
+        || die "Tải DEM thất bại (${name}). Kiểm tra mạng rồi chạy lại."
+    fi
+  done
+fi
 
 # ── 3. Docker stack ──────────────────────────────────────────────────
 say "Bước 3/7 — build + khởi động backend (lần đầu có thể mất vài phút)"
@@ -237,17 +249,17 @@ else
   echo "  Model sẵn sàng — predict sẽ trả stage1+stage2."
 fi
 
-# ── 5. Dữ liệu rebuild heatmap: OSM PBF + DSM ────────────────────────
-# "Bản đồ ước lượng" (admin Rebuild + /predict surface mode) dùng DSM =
-# DEM + chiều cao nhà OSM. Thiếu DSM hệ vẫn chạy (fallback DTM + P.2108,
-# kém chính xác đô thị) — nên bước này fail-soft, không chặn setup.
-# Chạy script của dự án TRONG container worker (image có sẵn geo deps);
-# mount thêm ../lora-data ghi-được vì mount /data mặc định là read-only.
-say "Bước 5/7 — dữ liệu rebuild heatmap (OSM PBF + DSM, bỏ qua: SETUP_SKIP_DSM=1)"
+# ── 5. Dữ liệu địa lý hoàn chỉnh: DEM chuẩn tên + OSM PBF + DSM ──────
+# Phục vụ 2 luồng nâng cao:
+#   * Rebuild "bản đồ ước lượng" (admin/Celery) — cần DSM; thiếu thì
+#     fallback DTM + P.2108 (kém chính xác đô thị).
+#   * Retrain ML qua admin — build_training_csv.py kỳ vọng ĐÚNG file
+#     /data/dem/copernicus_glo30_danang.tif (landuse terrain đã có trong git).
+# Tất cả chạy TRONG container worker (image có sẵn geo deps); mount thêm
+# ../lora-data ghi-được vì mount /data mặc định read-only. Fail-soft.
+say "Bước 5/7 — dữ liệu địa lý cho rebuild heatmap + retrain ML (bỏ qua: SETUP_SKIP_DSM=1)"
 if [ "${SETUP_SKIP_DSM:-0}" = 1 ]; then
   echo "  Bỏ qua theo SETUP_SKIP_DSM=1 — heatmap rebuild sẽ fallback DTM + P.2108."
-elif ls ../lora-data/dem-surface/*.tif >/dev/null 2>&1; then
-  echo "  DSM đã có trong ../lora-data/dem-surface — bỏ qua."
 else
   mkdir -p ../lora-data/osm
   # Đường dẫn host TUYỆT ĐỐI cho docker -v. Git Bash: pwd -W trả E:/...;
@@ -257,24 +269,50 @@ else
     MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps \
       -v "${LORA_DATA_ABS}:/data-rw" celery-worker "$@"
   }
-  PBF=../lora-data/osm/vietnam-latest.osm.pbf
-  if [ -s "$PBF" ]; then
-    echo "  OSM PBF đã có — bỏ qua tải."
+
+  # 5a. Merge 6 tile thô → copernicus_glo30_danang.tif. Bounds = ĐO TỪ file
+  # gốc trên máy dev (rasterio bounds) — khớp từng pixel để retrain/heatmap
+  # cho kết quả như máy gốc.
+  if [ -s "$DEM_MERGED" ]; then
+    echo "  DEM merge đã có — bỏ qua."
   else
-    echo "  Tải OSM PBF Việt Nam (~350 MB, Geofabrik — vài phút)..."
-    drun python scripts/fetch_osm_pbf.py --out /data-rw/osm/vietnam-latest.osm.pbf \
-      || die "Tải OSM PBF thất bại — kiểm tra mạng rồi chạy lại ./setup.sh (các bước xong rồi sẽ tự bỏ qua)."
+    echo "  Merge tile DEM → copernicus_glo30_danang.tif ..."
+    if drun python scripts/merge_dem_tiles.py \
+         --src-dir /data-rw/dem-raw \
+         --out /data-rw/dem/copernicus_glo30_danang.tif \
+         --bounds 106.9465 15.3699 108.7571 16.6288; then
+      rm -rf ../lora-data/dem-raw
+      echo "  DEM chuẩn sẵn sàng (retrain ML đọc được đúng tên file)."
+    else
+      echo "  ⚠ Merge DEM thất bại — /predict vẫn chạy bằng tile thô; chạy lại ./setup.sh để thử lại."
+      # Giữ tile thô trong dem/ để crc-covlib còn dò được (di chuyển ngược).
+      mv ../lora-data/dem-raw/*.tif ../lora-data/dem/ 2>/dev/null || true
+    fi
   fi
-  echo "  Build DSM từ DEM + nhà OSM (10-30 phút tùy máy)..."
-  if drun python scripts/build_dsm.py \
-       --dem-dir /data/dem \
-       --pbf /data-rw/osm/vietnam-latest.osm.pbf \
-       --out-dir /data-rw/dem-surface; then
-    docker compose restart api-service ml-service >/dev/null
-    echo "  DSM sẵn sàng — /predict + rebuild heatmap chạy surface mode."
+
+  # 5b + 5c. OSM PBF + DSM.
+  if ls ../lora-data/dem-surface/*.tif >/dev/null 2>&1; then
+    echo "  DSM đã có trong ../lora-data/dem-surface — bỏ qua."
   else
-    echo "  ⚠ Build DSM thất bại — hệ vẫn chạy (DTM + P.2108); chạy lại ./setup.sh để thử lại."
+    PBF=../lora-data/osm/vietnam-latest.osm.pbf
+    if [ -s "$PBF" ]; then
+      echo "  OSM PBF đã có — bỏ qua tải."
+    else
+      echo "  Tải OSM PBF Việt Nam (~350 MB, Geofabrik — vài phút)..."
+      drun python scripts/fetch_osm_pbf.py --out /data-rw/osm/vietnam-latest.osm.pbf \
+        || die "Tải OSM PBF thất bại — kiểm tra mạng rồi chạy lại ./setup.sh (các bước xong rồi sẽ tự bỏ qua)."
+    fi
+    echo "  Build DSM từ DEM + nhà OSM (vài phút tới ~30 phút tùy máy)..."
+    if drun python scripts/build_dsm.py \
+         --dem-dir /data-rw/dem \
+         --pbf /data-rw/osm/vietnam-latest.osm.pbf \
+         --out-dir /data-rw/dem-surface; then
+      echo "  DSM sẵn sàng — /predict + rebuild heatmap chạy surface mode."
+    else
+      echo "  ⚠ Build DSM thất bại — hệ vẫn chạy (DTM + P.2108); chạy lại ./setup.sh để thử lại."
+    fi
   fi
+  docker compose restart api-service ml-service >/dev/null
 fi
 
 # ── 6. Frontend ──────────────────────────────────────────────────────
