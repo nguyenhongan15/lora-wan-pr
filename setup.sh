@@ -173,6 +173,38 @@ ensure_node
 HAS_NODE=1
 echo "  Đủ công cụ: git $(git --version | awk '{print $3}') · docker $(docker --version | awk '{gsub(",","");print $3}') · node $(node -v)"
 
+# Tài nguyên máy — chỉ CẢNH BÁO, không chặn (db tune shared_buffers=2GB
+# theo VPS 8GB; thiếu RAM thì Postgres có thể không lên).
+total_ram_gb() {
+  case "$OS" in
+    linux)   awk '/MemTotal/{printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null ;;
+    mac)     sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d", $1/1073741824}' ;;
+    windows) powershell.exe -NoProfile -Command \
+               "[math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)" \
+               2>/dev/null | tr -d '\r' ;;
+  esac
+}
+RAM_GB=$(total_ram_gb || true)
+if [ -n "${RAM_GB:-}" ] && [ "$RAM_GB" -lt 7 ] 2>/dev/null; then
+  echo "  ⚠ RAM ${RAM_GB}GB < 8GB khuyến nghị — nếu database không khởi động được,"
+  echo "    giảm shared_buffers/effective_cache_size trong docker-compose.yml (service db)."
+fi
+DISK_GB=$(df -Pk . 2>/dev/null | awk 'NR==2{printf "%d", $4/1048576}')
+if [ -n "${DISK_GB:-}" ] && [ "$DISK_GB" -lt 15 ] 2>/dev/null; then
+  echo "  ⚠ Ổ đĩa còn ${DISK_GB}GB trống — cần ~15GB (Docker images + DEM + PBF + node_modules)."
+fi
+
+# Port bận bởi tiến trình NGOÀI stack này (vd PostgreSQL cài sẵn chiếm 5432)
+# → chặn sớm với thông báo rõ thay vì để docker compose fail khó hiểu.
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3>&- && return 0 || return 1; }
+if [ -z "$(docker ps -q --filter name=lora-wan- 2>/dev/null)" ]; then
+  for p in 5432 8000 8001; do
+    if port_busy "$p"; then
+      die "Port $p đang bị tiến trình khác chiếm (stack lora-wan chưa chạy). Tắt tiến trình đó (vd PostgreSQL cài sẵn với 5432) rồi chạy lại ./setup.sh"
+    fi
+  done
+fi
+
 # ── 1. .env ───────────────────────────────────────────────────────────
 say "Bước 1/7 — cấu hình .env"
 if [ -f .env ]; then
@@ -319,7 +351,11 @@ fi
 say "Bước 6/7 — frontend"
 if [ "$HAS_NODE" = 1 ]; then
   npm install
-  if [ "${SETUP_SKIP_FE_START:-0}" != 1 ]; then
+  if [ "${SETUP_SKIP_FE_START:-0}" = 1 ]; then
+    :
+  elif port_busy 5173; then
+    echo "  Port 5173 đã có server (Vite từ lần chạy trước?) — bỏ qua khởi động."
+  else
     nohup npm run dev:web > .vite-dev.log 2>&1 &
     echo $! > .vite-dev.pid
     echo "  Vite dev server chạy nền (log: .vite-dev.log). Dừng: kill \$(cat .vite-dev.pid)"
