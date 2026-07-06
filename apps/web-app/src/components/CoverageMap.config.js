@@ -59,27 +59,20 @@ export const STATUS_COLOR_FALLBACK = "#7c3aed";
 export const MARGIN_BAR_RANGE = { min: -10, max: 20 };
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Basemap raster tiles. CARTO Voyager dùng chung cho mọi tab.
+ * Basemap — hướng VECTOR (CARTO Voyager GL style).
+ *
+ * Dùng vector style (style.json, kèm glyphs/sprite/sources) thay cho raster tile
+ * để XẾP LỚP được: lớp phủ RSSI (GeoJSON) được chèn DƯỚI các lớp đường + nhãn
+ * của basemap (xem firstRoadOrLabelLayerId trong CoverageMap.jsx) → CẢ đường
+ * lẫn chữ nằm TRÊN màu phủ mà màu vẫn hiện rõ (raster không làm được vì tile
+ * nền là ảnh đặc, đặt lên trên sẽ che hết màu).
+ *
+ * Public, không cần API key. Biến thể: positron-gl-style / dark-matter-gl-style.
+ * Revert về cách B (raster nhãn-trên-cùng): CoverageMap.config.js.bak-before-vector.
  * ─────────────────────────────────────────────────────────────────────── */
 
-export const BASEMAP_STYLE = {
-  version: 8,
-  sources: {
-    basemap: {
-      type: "raster",
-      tiles: [
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-      ],
-      tileSize: 256,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      maxzoom: 19,
-    },
-  },
-  layers: [{ id: "basemap", type: "raster", source: "basemap" }],
-};
+export const BASEMAP_STYLE =
+  "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Survey circle paint — palette + step expression lấy từ ./legend.js
@@ -114,4 +107,8 @@ export const PREDICT_MARKER_STYLE = {
  * trong EstimatePanel.jsx.
  * ─────────────────────────────────────────────────────────────────────── */
 
-export const RSSI_FILL_OPACITY = 0.55;
+// Độ đậm lớp phủ RSSI trên bản đồ. Trước đây 0.55 → màu bị pha nhiều với nền,
+// lệch rõ với chip legend (vẽ màu đặc). Nâng lên 0.85 để màu bản đồ sát legend
+// (đỏ ra đỏ) mà vẫn còn thấy lờ mờ đường phố nền. 1.0 = đặc hẳn (che nền);
+// hạ về ~0.7 nếu muốn thấy nền rõ hơn.
+export const RSSI_FILL_OPACITY = 0.65;

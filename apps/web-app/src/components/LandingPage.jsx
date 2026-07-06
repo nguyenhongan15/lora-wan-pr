@@ -234,8 +234,8 @@ function FeatureRow({ feature, index, reverse, onNavigate, isLoggedIn, onRequest
           <div className="mockwin-body">
             {/* index 0 (heatmap) = real coverage preview; index 1 (survey) = real
                 survey-points preview; index 2 (predict) = pin + result card mock;
-                index 4 (sources) = source-cards mock; index 5 (contribute) =
-                pipeline mock; index 3 (F·04 tra cứu) còn dùng SVG mini-map. */}
+                index 3 (F·04 theo dõi trực tiếp) = ảnh minh hoạ; index 4 (sources)
+                = source-cards mock; index 5 (contribute) = pipeline mock. */}
             {index === 0 ? (
               <LiveMapPanel />
             ) : index === 1 ? (
@@ -246,6 +246,15 @@ function FeatureRow({ feature, index, reverse, onNavigate, isLoggedIn, onRequest
                   className="feat-predict-img"
                   src={`${import.meta.env.BASE_URL ?? "/"}f3_landingpage.svg`}
                   alt="Minh hoạ kết quả dự đoán tín hiệu tại một vị trí trên bản đồ"
+                  loading="lazy"
+                />
+              </div>
+            ) : index === 3 ? (
+              <div className="mini-map">
+                <img
+                  className="feat-predict-img"
+                  src={`${import.meta.env.BASE_URL ?? "/"}f4_landingpage.png`}
+                  alt="Minh hoạ theo dõi trực tiếp chuyến đi khảo sát trên bản đồ"
                   loading="lazy"
                 />
               </div>

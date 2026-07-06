@@ -395,6 +395,32 @@ const PREDICT_LINES_LAYER_ID = "predict-lines";
 const RSSI_COMPOSITE_SOURCE_ID = "rssi-composite-src";
 const RSSI_COMPOSITE_FILL_LAYER_ID = "rssi-composite-fill";
 
+/**
+ * Tìm beforeId để chèn lớp phủ RSSI DƯỚI các lớp đường + nhãn của basemap
+ * vector → cả đường lẫn chữ nằm TRÊN màu phủ mà màu vẫn hiện. Ưu tiên lớp
+ * đường đầu tiên; nếu không thấy thì lùi về lớp nhãn (symbol) đầu tiên.
+ * undefined = chèn trên cùng (fallback, không lỗi).
+ * @param {any} map
+ * @returns {string | undefined}
+ */
+function firstRoadOrLabelLayerId(map) {
+  const layers = map.getStyle()?.layers ?? [];
+  for (const ly of layers) {
+    const id = ly.id ?? "";
+    const sl = ly["source-layer"] ?? "";
+    if (
+      /road|street|bridge|tunnel|transportation|highway/i.test(id) ||
+      /transportation/i.test(sl)
+    ) {
+      return ly.id;
+    }
+  }
+  for (const ly of layers) {
+    if (ly.type === "symbol") return ly.id;
+  }
+  return undefined;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
  * Popup vanilla-DOM helpers (predict marker)
  *
@@ -490,6 +516,9 @@ function appendCopyLinkButton(parent, lat, lng) {
 // Realtime "Theo dõi trực tiếp" — chu kỳ polling backend khi bật mode.
 // Tham chiếu duy nhất trong file để tránh magic number rải rác.
 const REALTIME_POLL_MS = 3000;
+// Cờ ẩn tính năng "Theo dõi trực tiếp" khỏi giao diện (backend KHÔNG đổi).
+// Đổi thành true để hiện lại toàn bộ panel + polling realtime.
+const SHOW_REALTIME = true;
 // Live-pull lpwanmapper: chu kỳ user nhập (giây) — thiết bị phát ~15s/gói nên
 // default 15s. View-only KHÔNG ghi DB; mỗi request connect upstream API
 // (login + GET /data 10k limit) nên clamp min 5s tránh saturate.
@@ -667,7 +696,7 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
   const persistedRealtimeRef = useRef(loadRealtimeSession());
   const persistedRealtime = persistedRealtimeRef.current;
   const [realtimePanelOpen, setRealtimePanelOpen] = useState(
-    persistedRealtime?.realtimePanelOpen === true,
+    SHOW_REALTIME && persistedRealtime?.realtimePanelOpen === true,
   );
   // Sub-tab trong Predict panel: "single" (click 1 điểm) hoặc "address" (nhập địa chỉ → geocode).
   // Cả 2 sub-tab cho mọi user (kể cả admin) — chỉ khác cách lấy lat/lng,
@@ -754,13 +783,13 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
   // Refactor 2026-06-15: chỉ XEM live, không tạo batch — ingest qua nút
   // "Tải dữ liệu mới nhất" ở tab Nguồn.
   const [realtimeEnabled, setRealtimeEnabled] = useState(
-    persistedRealtime?.realtimeEnabled === true,
+    SHOW_REALTIME && persistedRealtime?.realtimeEnabled === true,
   );
   // realtimeStarted tách khỏi realtimeEnabled: master toggle mở panel + picker;
   // realtimeStarted = đã bấm "Xem" → mới bắt đầu poll. Cho phép user chọn nguồn
   // trước khi commit, và đổi nguồn giữa chừng mà không tắt panel.
   const [realtimeStarted, setRealtimeStarted] = useState(
-    persistedRealtime?.realtimeStarted === true,
+    SHOW_REALTIME && persistedRealtime?.realtimeStarted === true,
   );
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(
     persistedRealtime ? persistedRealtime.autoFollowEnabled !== false : true,
@@ -1549,7 +1578,9 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
             ],
             "fill-opacity": RSSI_FILL_OPACITY,
           }),
-        });
+          // Vector: chèn lớp phủ RSSI DƯỚI lớp đường + nhãn của basemap →
+          // cả đường lẫn chữ vẽ đè lên trên màu phủ mà màu vẫn hiện rõ.
+        }, firstRoadOrLabelLayerId(map));
       }
 
       // Survey layer chỉ add cho "points" mode. "heatmap" sẽ add raster
@@ -2984,14 +3015,16 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
                     tra login trước khi cho tick "Bật theo dõi trực tiếp".
                     Mở panel này thì đóng panel filter để chỉ 1 panel mở 1 lúc
                     (panels-column hẹp, mở cả 2 sẽ chồng). */}
-                <RealtimeToggleBtn
-                  open={realtimePanelOpen}
-                  onToggle={() => {
-                    setRealtimePanelOpen((v) => !v);
-                    setPointsFilterOpen(false);
-                  }}
-                  realtimeEnabled={realtimeStarted}
-                />
+                {SHOW_REALTIME && (
+                  <RealtimeToggleBtn
+                    open={realtimePanelOpen}
+                    onToggle={() => {
+                      setRealtimePanelOpen((v) => !v);
+                      setPointsFilterOpen(false);
+                    }}
+                    realtimeEnabled={realtimeStarted}
+                  />
+                )}
               </div>
               {(pointsFilterOpen || realtimePanelOpen) && (
                 <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col gap-2 md:w-64 md:flex-initial">
@@ -3022,7 +3055,7 @@ export function CoverageMap({ mode = "points", onRequestLogin, authBootstrapped 
                       onShowAllGatewaysEnabledChange={setShowAllGateways}
                     />
                   )}
-                  {realtimePanelOpen && (
+                  {SHOW_REALTIME && realtimePanelOpen && (
                     <RealtimeBody
                       user={user}
                       onRequestLogin={onRequestLogin}

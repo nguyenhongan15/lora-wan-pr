@@ -706,7 +706,7 @@ wheels = [
 
 [[package]]
 name = "lora-coverage"
-version = "0.1.0"
+version = "1.0.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -739,7 +739,7 @@ dev = [
 
 [[package]]
 name = "lora-coverage-api"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "services/api-service" }
 dependencies = [
     { name = "alembic", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
@@ -828,7 +828,7 @@ source = { editable = "services/worker-service" }
 
 [[package]]
 name = "lora-ml-predict"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "services/ml-service" }
 dependencies = [
     { name = "fastapi", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },

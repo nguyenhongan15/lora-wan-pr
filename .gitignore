@@ -96,3 +96,16 @@ r-dt/
 
 # ── Docs (local-only, không version) ────────
 docs/
+
+# ── Training reports & heatmap backups (local-only, không version) ──
+reports/
+
+# ── Large geo datasets (tải lại được, KHÔNG version — GitHub chặn >100MB) ──
+data/geo/dem-surface/
+data/geo/osm/
+
+# ── Celery Beat runtime schedule (binary, tự đổi mỗi lần chạy) ──
+data/geo/celerybeat-schedule
+
+# ── Backup snapshots thủ công (giữ local, không version) ──
+*.bak-*
